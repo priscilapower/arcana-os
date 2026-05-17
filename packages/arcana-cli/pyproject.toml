@@ -1,0 +1,24 @@
+[project]
+name = "arcana-cli"
+version = "0.1.0"
+description = "The OS that gives your agents a soul — CLI"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+keywords = ["ai", "agents", "llm", "tarot", "cli"]
+
+dependencies = [
+    "arcana-core>=0.1.0",
+    "typer>=0.12.0",
+    "rich>=13.7.0",
+]
+
+[project.scripts]
+arcana = "arcana_cli.main:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["arcana_cli"]
