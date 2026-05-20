@@ -109,7 +109,3 @@ class ToolSubscription(BaseModel):
 
     def __str__(self) -> str:
         return self.qualified_name
-
-
-# Legacy alias — kept for backward compat during transition
-MCPConnection = MCPServerConfig

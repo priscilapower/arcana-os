@@ -62,6 +62,9 @@ class Automation(BaseModel):
     last_run_status: str | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+    # Cloud — workspace scoping (always "local" in Phase 1/2)
+    workspace_id: str = "local"
+
 
 class AutomationRun(BaseModel):
     """A single execution of an Automation."""

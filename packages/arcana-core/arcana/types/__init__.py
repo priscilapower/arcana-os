@@ -48,6 +48,8 @@ from arcana.types.tool import (
     ToolSubscription,
     ToolType,
 )
+from arcana.types.world import RoutingRule, Spread, SpreadLayout
+from arcana.memory.adapters.base import WriteDurability
 
 __all__ = [
     # Agent
@@ -58,6 +60,7 @@ __all__ = [
     # Memory
     "MemoryEntry", "MemoryQuery", "MemoryType", "MemoryScope",
     "AdapterCapabilities", "AdapterHealth",
+    "WriteDurability",
     # Model
     "ModelConnection", "ModelProvider", "ModelTransport", "ModelCapabilities",
     # Session
@@ -69,4 +72,6 @@ __all__ = [
     # Automation
     "Automation", "AutomationRun", "AutomationStatus",
     "Trigger", "TriggerType", "PipelineStep",
+    # World
+    "RoutingRule", "Spread", "SpreadLayout",
 ]

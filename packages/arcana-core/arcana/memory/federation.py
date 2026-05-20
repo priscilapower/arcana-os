@@ -61,9 +61,15 @@ class SharedMemoryPool:
         writer     = Agent(..., shared_pool_names=["project-arcana"])
     """
 
-    def __init__(self, name: str, adapter: MemoryAdapter) -> None:
+    def __init__(
+        self,
+        name: str,
+        adapter: MemoryAdapter,
+        workspace_id: str = "local",
+    ) -> None:
         self.name = name
         self.adapter = adapter
+        self.workspace_id = workspace_id  # always "local" in Phase 1/2
         self._conflicts: list[MemoryConflict] = []   # in-memory until Epic 7 persists
 
     async def connect(self) -> None:

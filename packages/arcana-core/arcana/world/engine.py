@@ -32,7 +32,8 @@ class World:
     The only entity that never forgets (DecayStrategy.NONE on all types).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, workspace_id: str = "local") -> None:
+        self.workspace_id = workspace_id  # always "local" in Phase 1/2
         self._agents: list = []
         self._automations: list = []
         self._whiteboards: dict[UUID, MemoryWhiteboard] = {}

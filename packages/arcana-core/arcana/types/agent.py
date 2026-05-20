@@ -62,3 +62,6 @@ class Agent(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     tags: list[str] = []
     is_archived: bool = False
+
+    # Cloud — workspace scoping (always "local" in Phase 1/2)
+    workspace_id: str = "local"
