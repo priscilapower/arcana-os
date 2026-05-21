@@ -7,7 +7,6 @@ from uuid import UUID
 
 from arcana.cards.engine import CardEngine
 from arcana.cards.registry import get_registry
-from arcana.memory.federation import MemoryFederation
 from arcana.models.adapters.base import CompletionRequest, ModelAdapter
 from arcana.types.card import Card
 from arcana.types.memory import MemoryEntry, MemoryType
@@ -34,7 +33,7 @@ class Agent:
         model: ModelAdapter,
         description: str = "",
         modifier_cards: list[Card] | None = None,
-        memory: MemoryFederation | None = None,
+        memory: object | None = None,
         system_prompt_override: str | None = None,
     ) -> None:
         self.name = name

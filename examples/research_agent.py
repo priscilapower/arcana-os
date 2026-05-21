@@ -10,28 +10,17 @@ Requirements:
 """
 
 import asyncio
-from pathlib import Path
 
 from arcana import Agent, Card
-from arcana.memory import MemoryFederation, SQLiteAdapter
 from arcana.models import OllamaAdapter
 
 
 async def main() -> None:
-    # Memory: SQLite backed, persists to ~/.arcana/examples/
-    memory_path = Path.home() / ".arcana" / "examples" / "research_agent.db"
-    federation = MemoryFederation(
-        adapters=[SQLiteAdapter(db_path=memory_path)],
-        agent_card=Card.HERMIT,
-    )
-    await federation.connect()
-
-    # Agent: The Hermit — deep researcher, temp 0.35, semantic-heavy memory
+    # Agent: The Hermit — deep researcher, temp 0.35, semantic-heavy memory weights
     agent = Agent(
         name="researcher",
         card=Card.HERMIT,
         model=OllamaAdapter(model="hermes-3"),
-        memory=federation,
     )
 
     print(f"Agent: {agent.name}")
@@ -53,9 +42,6 @@ async def main() -> None:
         async for chunk in agent.stream(prompt):
             print(chunk, end="", flush=True)
         print()
-
-    await federation.close()
-
 
 if __name__ == "__main__":
     asyncio.run(main())
