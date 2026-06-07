@@ -16,8 +16,8 @@ dependencies = [
 [project.scripts]
 arcana = "arcana_cli.main:app"
 
-[tool.uv]
-dependencies-group.dev = [
+[dependency-groups]
+dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
 ]
