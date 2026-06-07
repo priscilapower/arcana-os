@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -12,7 +12,7 @@ from arcana.types._utils import now_utc
 from arcana.types.card import Card
 
 
-class AgentStatus(str, Enum):
+class AgentStatus(StrEnum):
     ACTIVE = "active"
     IDLE = "idle"
     ERROR = "error"

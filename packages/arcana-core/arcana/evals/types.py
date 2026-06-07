@@ -11,7 +11,7 @@ RegressionReport — comparison between two eval runs
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -105,7 +105,7 @@ class EvalCase(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class JudgeType(str, Enum):
+class JudgeType(StrEnum):
     LLM = "llm"
     RULE = "rule"
     COMPOSITE = "composite"

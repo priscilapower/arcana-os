@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
 
-class ModelProvider(str, Enum):
+class ModelProvider(StrEnum):
     OLLAMA = "ollama"
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
@@ -16,7 +16,7 @@ class ModelProvider(str, Enum):
     CUSTOM = "custom"
 
 
-class ModelTransport(str, Enum):
+class ModelTransport(StrEnum):
     SDK = "sdk"
     API = "api"
     LOCAL_SOCKET = "local_socket"

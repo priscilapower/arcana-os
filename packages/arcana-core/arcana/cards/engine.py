@@ -10,6 +10,7 @@ Produces: system_prompt, temperature, memory_weights, decay_config, suggested_sk
 
 from __future__ import annotations
 
+from arcana.cards.registry import CardRegistry
 from arcana.types.card import (
     AgentConfig,
     Card,
@@ -24,7 +25,7 @@ class CardEngine:
     PRIMARY_WEIGHT = 0.7
     MODIFIER_TOTAL_WEIGHT = 0.3
 
-    def __init__(self, registry: "CardRegistry") -> None:  # noqa: F821
+    def __init__(self, registry: CardRegistry) -> None:
         self._registry = registry
 
     def resolve(
@@ -47,9 +48,7 @@ class CardEngine:
 
     # ------------------------------------------------------------------
 
-    def _build_system_prompt(
-        self, primary: TarotCard, modifiers: list[TarotCard]
-    ) -> str:
+    def _build_system_prompt(self, primary: TarotCard, modifiers: list[TarotCard]) -> str:
         pi = primary.archetype.prompt_ingredients
         lines = [
             f"You are {primary.archetype.role}.",
@@ -70,9 +69,7 @@ class CardEngine:
                 lines.append(f"- From {mod.name}: {mpi.tone}. {mpi.approach}")
         return "\n".join(lines)
 
-    def _blend_temperature(
-        self, primary: TarotCard, modifiers: list[TarotCard]
-    ) -> float:
+    def _blend_temperature(self, primary: TarotCard, modifiers: list[TarotCard]) -> float:
         if not modifiers:
             return primary.archetype.default_temperature
         mod_weight = self.MODIFIER_TOTAL_WEIGHT / len(modifiers)
@@ -81,9 +78,7 @@ class CardEngine:
             result += mod.archetype.default_temperature * mod_weight
         return result
 
-    def _blend_memory_weights(
-        self, primary: TarotCard, modifiers: list[TarotCard]
-    ) -> MemoryWeights:
+    def _blend_memory_weights(self, primary: TarotCard, modifiers: list[TarotCard]) -> MemoryWeights:
         if not modifiers:
             return primary.archetype.memory_weights.model_copy()
         mod_weight = self.MODIFIER_TOTAL_WEIGHT / len(modifiers)
@@ -102,9 +97,7 @@ class CardEngine:
             result["preference"] += mw.preference * mod_weight
         return MemoryWeights(**{k: round(v, 2) for k, v in result.items()})
 
-    def _blend_decay_config(
-        self, primary: TarotCard, modifiers: list[TarotCard]
-    ) -> CardDecayConfig:
+    def _blend_decay_config(self, primary: TarotCard, modifiers: list[TarotCard]) -> CardDecayConfig:
         """Blend half-life values using the same primary/modifier weighting."""
         if not modifiers:
             return primary.archetype.decay_config.model_copy()
@@ -137,9 +130,7 @@ class CardEngine:
             ),
         )
 
-    def _describe_blend(
-        self, primary: TarotCard, modifiers: list[TarotCard]
-    ) -> str:
+    def _describe_blend(self, primary: TarotCard, modifiers: list[TarotCard]) -> str:
         if not modifiers:
             return f"{primary.name}: {primary.archetype.role}"
         names = " + ".join([primary.name, *[m.name for m in modifiers]])

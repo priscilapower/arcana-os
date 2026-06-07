@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from arcana.types._utils import now_utc
 
 
-class MessageRole(str, Enum):
+class MessageRole(StrEnum):
     USER = "user"
     ASSISTANT = "assistant"
     TOOL = "tool"
@@ -35,14 +35,14 @@ class ToolCall(BaseModel):
     duration_ms: int = 0
 
 
-class SessionStatus(str, Enum):
+class SessionStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
     INTERRUPTED = "interrupted"
 
 
-class SessionTrigger(str, Enum):
+class SessionTrigger(StrEnum):
     USER = "user"
     WORLD = "world"
     AGENT = "agent"

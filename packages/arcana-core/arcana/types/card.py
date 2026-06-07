@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel
 
 
-class Card(str, Enum):
+class Card(StrEnum):
     """The 22 Major Arcana. Assign one to any agent."""
 
     FOOL = "the-fool"

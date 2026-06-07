@@ -1,8 +1,12 @@
 """0 · The Fool — Explorer / Autonomous Agent"""
 
 from arcana.types.card import (
-    Card, CardArchetype, CardDecayConfig, MemoryWeights,
-    PromptIngredients, TarotCard,
+    Card,
+    CardArchetype,
+    CardDecayConfig,
+    MemoryWeights,
+    PromptIngredients,
+    TarotCard,
 )
 
 FOOL = TarotCard(
@@ -29,7 +33,10 @@ FOOL = TarotCard(
         ),
         default_temperature=0.95,
         memory_weights=MemoryWeights(
-            episodic=0.6, semantic=0.2, procedural=0.1, preference=0.1,
+            episodic=0.6,
+            semantic=0.2,
+            procedural=0.1,
+            preference=0.1,
         ),
         # The Fool lives in the present — memories fade fast
         decay_config=CardDecayConfig(

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel
 
 
-class ToolType(str, Enum):
+class ToolType(StrEnum):
     BUILTIN = "builtin"
     MCP = "mcp"
     CUSTOM = "custom"
@@ -55,7 +55,7 @@ class Skill(BaseModel):
     affinity_cards: list[str] = []  # card ids that naturally fit this skill
 
 
-class MCPTransport(str, Enum):
+class MCPTransport(StrEnum):
     SSE = "sse"
     STDIO = "stdio"
     WEBSOCKET = "websocket"

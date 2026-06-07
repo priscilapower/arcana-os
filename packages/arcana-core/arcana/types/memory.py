@@ -13,7 +13,7 @@ Architecture summary:
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -25,26 +25,26 @@ from arcana.types._utils import now_utc
 # ---------------------------------------------------------------------------
 
 
-class MemoryType(str, Enum):
+class MemoryType(StrEnum):
     EPISODIC = "episodic"  # what happened — decays fast
     SEMANTIC = "semantic"  # domain knowledge — decays slow
     PROCEDURAL = "procedural"  # how-to patterns — decays very slow
     PREFERENCE = "preference"  # user likes/dislikes — medium decay + reinforcement
 
 
-class MemoryScope(str, Enum):
+class MemoryScope(StrEnum):
     PRIVATE = "private"  # this agent only
     SHARED = "shared"  # named pool, multiple agents opt-in
     GLOBAL = "global"  # The World + all agents (read); World writes
 
 
-class DecayStrategy(str, Enum):
+class DecayStrategy(StrEnum):
     EXPONENTIAL = "exponential"  # natural decay — recommended default
     LINEAR = "linear"  # steady reduction over time
     NONE = "none"  # no decay — The World, pinned entries
 
 
-class ConfidenceSource(str, Enum):
+class ConfidenceSource(StrEnum):
     AGENT = "agent"  # agent wrote this from its own output
     USER_CONFIRMED = "user_confirmed"  # user explicitly confirmed this fact
     INFERRED = "inferred"  # The World inferred this from patterns
@@ -165,7 +165,7 @@ class MemoryEntry(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class ConflictStatus(str, Enum):
+class ConflictStatus(StrEnum):
     OPEN = "open"  # detected, not yet resolved
     RESOLVED = "resolved"  # The World chose a winner
     DISMISSED = "dismissed"  # user or World decided both are valid / irrelevant
@@ -201,7 +201,7 @@ class MemoryConflict(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class WhiteboardStatus(str, Enum):
+class WhiteboardStatus(StrEnum):
     ACTIVE = "active"  # automation run / spread in progress
     PROMOTING = "promoting"  # World is deciding what to keep
     ARCHIVED = "archived"  # run ended, entries archived or promoted
