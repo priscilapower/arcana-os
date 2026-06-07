@@ -36,7 +36,7 @@ class EmbeddingAdapter(ABC):
     """
 
     model_id: str = "unknown"
-    dimensions: int = 768           # override per adapter
+    dimensions: int = 768  # override per adapter
 
     @abstractmethod
     async def embed(self, text: str) -> EmbeddingResult:
@@ -48,7 +48,7 @@ class EmbeddingAdapter(ABC):
         Embed multiple strings. Default implementation calls embed() serially.
         Override for providers that support native batch endpoints (OpenAI, Cohere).
         """
-        results = []
+        results: list[EmbeddingResult] = []
         for text in texts:
             results.append(await self.embed(text))
         return results

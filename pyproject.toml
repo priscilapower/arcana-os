@@ -12,10 +12,11 @@ members = ["packages/*"]
 # Workspace-level dev tools — available when running from the repo root.
 # Per-package test deps (pytest, pytest-asyncio, pytest-cov) live in each
 # package's own pyproject.toml so they install correctly in isolation too.
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "ruff>=0.4.0",
     "pyright>=1.1.0",
+    "pre-commit>=4.6.0",
 ]
 
 # ---------------------------------------------------------------------------
@@ -23,7 +24,7 @@ dev-dependencies = [
 # ---------------------------------------------------------------------------
 
 [tool.ruff]
-line-length = 88
+line-length = 119
 target-version = "py311"
 
 [tool.ruff.lint]

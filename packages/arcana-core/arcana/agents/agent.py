@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from typing import Any
 from uuid import UUID
 
 from arcana.cards.engine import CardEngine
@@ -10,7 +11,7 @@ from arcana.cards.registry import get_registry
 from arcana.models.adapters.base import CompletionRequest, ModelAdapter
 from arcana.types.card import Card
 from arcana.types.memory import MemoryEntry, MemoryType
-from arcana.types.session import Message, MessageRole, Session, SessionStatus
+from arcana.types.session import MessageRole, Session, SessionStatus
 
 
 class Agent:
@@ -33,7 +34,7 @@ class Agent:
         model: ModelAdapter,
         description: str = "",
         modifier_cards: list[Card] | None = None,
-        memory: object | None = None,
+        memory: Any = None,
         system_prompt_override: str | None = None,
     ) -> None:
         self.name = name
@@ -128,15 +129,14 @@ class Agent:
         if not self.memory:
             return ""
         from arcana.types.memory import MemoryQuery
+
         query = MemoryQuery(text=prompt, limit=5)
         entries = await self.memory.search(query)
         if not entries:
             return ""
         return "\n".join(f"- {e.content}" for e in entries)
 
-    async def _extract_memory(
-        self, prompt: str, response: str, session: Session
-    ) -> None:
+    async def _extract_memory(self, prompt: str, response: str, session: Session) -> None:
         """Persist a basic episodic memory of this exchange."""
         if not self.memory:
             return
@@ -152,16 +152,5 @@ class Agent:
     def _dummy_id(self) -> UUID:
         """Placeholder until AgentRegistry assigns a real UUID."""
         import uuid
-        return uuid.UUID("00000000-0000-0000-0000-000000000001")
 
-# NOTE: Agent.__init__ signature will be updated in Epic 5 to include:
-#   shared_memory: list[SharedMemoryPool] | None = None
-#   knowledge: list[KnowledgeConnector] | None = None
-#
-# Knowledge connectors enrich context at query time:
-#   1. Search Arcana's own memory (private + shared + global)
-#   2. Search connected knowledge sources (Obsidian, Notion, files)
-#   3. Combine — memory ranked higher, knowledge fills domain context
-#
-# External sources are NEVER written into Arcana's memory.
-# Source of truth always stays in the external system.
+        return uuid.UUID("00000000-0000-0000-0000-000000000001")

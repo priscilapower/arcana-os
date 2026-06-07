@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
+from typing import Any
 
 from arcana.evals.types import (
     DimensionScore,
@@ -24,20 +25,20 @@ from arcana.evals.types import (
     JudgeVerdict,
 )
 
-
 # ---------------------------------------------------------------------------
 # Base
 # ---------------------------------------------------------------------------
 
+
 class BaseJudge(ABC):
     @abstractmethod
-    async def score(self, case: EvalCase, result: EvalResult) -> JudgeVerdict:
-        ...
+    async def score(self, case: EvalCase, result: EvalResult) -> JudgeVerdict: ...
 
 
 # ---------------------------------------------------------------------------
 # Rule judge — deterministic, no LLM
 # ---------------------------------------------------------------------------
+
 
 class RuleJudge(BaseJudge):
     """
@@ -63,22 +64,26 @@ class RuleJudge(BaseJudge):
             present = element.lower() in response_lower
             key = f"required:{element}"
             rule_scores[key] = present
-            dimension_scores.append(DimensionScore(
-                dimension=key,
-                score=1.0 if present else 0.0,
-                reasoning=f"'{element}' {'found' if present else 'NOT FOUND'} in response",
-            ))
+            dimension_scores.append(
+                DimensionScore(
+                    dimension=key,
+                    score=1.0 if present else 0.0,
+                    reasoning=f"'{element}' {'found' if present else 'NOT FOUND'} in response",
+                )
+            )
 
         # Forbidden elements
         for element in case.rubric.forbidden_elements:
             absent = element.lower() not in response_lower
             key = f"forbidden:{element}"
             rule_scores[key] = absent
-            dimension_scores.append(DimensionScore(
-                dimension=key,
-                score=1.0 if absent else 0.0,
-                reasoning=f"'{element}' {'correctly absent' if absent else 'FOUND — should not be present'}",
-            ))
+            dimension_scores.append(
+                DimensionScore(
+                    dimension=key,
+                    score=1.0 if absent else 0.0,
+                    reasoning=f"'{element}' {'correctly absent' if absent else 'FOUND — should not be present'}",
+                )
+            )
 
         total = len(dimension_scores)
         overall = sum(d.score for d in dimension_scores) / total if total > 0 else 1.0
@@ -106,6 +111,7 @@ class RuleJudge(BaseJudge):
 # ---------------------------------------------------------------------------
 # LLM judge — qualitative scoring
 # ---------------------------------------------------------------------------
+
 
 class LLMJudge(BaseJudge):
     """
@@ -169,18 +175,10 @@ Respond ONLY with valid JSON matching the specified schema. No preamble.
         overall = self._weighted_average(dimension_scores, case)
 
         # Hard floor check
-        any_failed_floor = any(
-            d.passed_min is False for d in dimension_scores
-        )
-        passed = (
-            overall >= case.rubric.pass_threshold
-            and not any_failed_floor
-        )
+        any_failed_floor = any(d.passed_min is False for d in dimension_scores)
+        passed = overall >= case.rubric.pass_threshold and not any_failed_floor
 
-        reasoning_parts = [
-            f"{d.dimension}: {d.score:.2f} — {d.reasoning}"
-            for d in dimension_scores
-        ]
+        reasoning_parts = [f"{d.dimension}: {d.score:.2f} — {d.reasoning}" for d in dimension_scores]
 
         return JudgeVerdict(
             judge_type=JudgeType.LLM,
@@ -192,23 +190,18 @@ Respond ONLY with valid JSON matching the specified schema. No preamble.
             latency_ms=latency_ms,
         )
 
-    async def _call_judge(
-        self, case: EvalCase, result: EvalResult
-    ) -> dict:
+    async def _call_judge(self, case: EvalCase, result: EvalResult) -> dict[str, Any]:
         """Call the judge model. Returns raw parsed JSON."""
         import json
+
         import anthropic
 
-        dimensions_spec = "\n".join(
-            f'  - "{d.name}": {d.description}'
-            for d in case.rubric.dimensions
-        )
+        dimensions_spec = "\n".join(f'  - "{d.name}": {d.description}' for d in case.rubric.dimensions)
         schema = {
             "scores": {
-                d.name: {"score": "float 0.0-1.0", "reasoning": "one sentence"}
-                for d in case.rubric.dimensions
+                d.name: {"score": "float 0.0-1.0", "reasoning": "one sentence"} for d in case.rubric.dimensions
             },
-            "overall_reasoning": "one paragraph summary"
+            "overall_reasoning": "one paragraph summary",
         }
 
         user_message = f"""Evaluate this AI agent response.
@@ -235,7 +228,10 @@ Score each dimension from 0.0 to 1.0 with one-sentence reasoning."""
             messages=[{"role": "user", "content": user_message}],
         )
 
-        raw = response.content[0].text.strip()
+        from anthropic.types import TextBlock
+
+        first_block = response.content[0]
+        raw = first_block.text.strip() if isinstance(first_block, TextBlock) else ""
         # Strip markdown code fences if present
         if raw.startswith("```"):
             raw = raw.split("```")[1]
@@ -243,11 +239,9 @@ Score each dimension from 0.0 to 1.0 with one-sentence reasoning."""
                 raw = raw[4:]
         return json.loads(raw.strip())
 
-    def _parse_scores(
-        self, raw: dict, case: EvalCase
-    ) -> list[DimensionScore]:
+    def _parse_scores(self, raw: dict[str, Any], case: EvalCase) -> list[DimensionScore]:
         scores_data = raw.get("scores", {})
-        result = []
+        result: list[DimensionScore] = []
         for dim in case.rubric.dimensions:
             raw_dim = scores_data.get(dim.name, {})
             score = float(raw_dim.get("score", 0.5))
@@ -255,36 +249,29 @@ Score each dimension from 0.0 to 1.0 with one-sentence reasoning."""
             passed_min = True
             if dim.min_score is not None and score < dim.min_score:
                 passed_min = False
-            result.append(DimensionScore(
-                dimension=dim.name,
-                score=round(score, 3),
-                reasoning=reasoning,
-                passed_min=passed_min,
-            ))
+            result.append(
+                DimensionScore(
+                    dimension=dim.name,
+                    score=round(score, 3),
+                    reasoning=reasoning,
+                    passed_min=passed_min,
+                )
+            )
         return result
 
-    def _weighted_average(
-        self, scores: list[DimensionScore], case: EvalCase
-    ) -> float:
+    def _weighted_average(self, scores: list[DimensionScore], case: EvalCase) -> float:
         dim_map = {d.name: d for d in case.rubric.dimensions}
-        total_weight = sum(
-            dim_map[s.dimension].weight
-            for s in scores
-            if s.dimension in dim_map
-        )
+        total_weight = sum(dim_map[s.dimension].weight for s in scores if s.dimension in dim_map)
         if total_weight == 0:
             return 0.0
-        weighted_sum = sum(
-            s.score * dim_map[s.dimension].weight
-            for s in scores
-            if s.dimension in dim_map
-        )
+        weighted_sum = sum(s.score * dim_map[s.dimension].weight for s in scores if s.dimension in dim_map)
         return weighted_sum / total_weight
 
 
 # ---------------------------------------------------------------------------
 # Composite judge — rules always run; LLM optional
 # ---------------------------------------------------------------------------
+
 
 class CompositeJudge(BaseJudge):
     """
@@ -319,10 +306,7 @@ class CompositeJudge(BaseJudge):
 
         # Combine scores
         rule_w = 1.0 - self._llm_weight
-        overall = (
-            self._llm_weight * llm_verdict.overall_score
-            + rule_w * rule_verdict.overall_score
-        )
+        overall = self._llm_weight * llm_verdict.overall_score + rule_w * rule_verdict.overall_score
 
         # Merge dimension scores
         all_dimensions = llm_verdict.dimension_scores + rule_verdict.dimension_scores

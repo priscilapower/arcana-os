@@ -11,7 +11,6 @@ from arcana.evals.types import EvalCase, EvalDimension, EvalRubric
 from arcana.types.card import Card
 
 BLENDING_CASES: list[EvalCase] = [
-
     EvalCase(
         id="blend-hermit-empress-balance",
         description="Hermit + Empress blend: deeper than Empress alone, warmer than Hermit alone",
@@ -41,7 +40,6 @@ BLENDING_CASES: list[EvalCase] = [
         ),
         tags=["blending", "hermit", "empress"],
     ),
-
     EvalCase(
         id="blend-fool-justice-creative-rigour",
         description="Fool + Justice: creative ideas with explicit criteria for evaluating them",

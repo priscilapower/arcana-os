@@ -59,12 +59,7 @@ class MCPRegistry:
     def save(self) -> None:
         """Persist server configs to disk (no secrets — those live in keyring)."""
         self.CONNECTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        data = {
-            "servers": [
-                s.model_dump(exclude={"status"})
-                for s in self._servers.values()
-            ]
-        }
+        data = {"servers": [s.model_dump(exclude={"status"}) for s in self._servers.values()]}
         self.CONNECTIONS_FILE.write_text(json.dumps(data, indent=2))
 
     # ------------------------------------------------------------------

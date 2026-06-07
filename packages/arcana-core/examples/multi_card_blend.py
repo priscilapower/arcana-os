@@ -10,7 +10,7 @@ Run with:
 
 import asyncio
 
-from arcana import Agent, Card
+from arcana import Card
 from arcana.cards.engine import CardEngine
 from arcana.cards.registry import get_registry
 
@@ -24,7 +24,7 @@ async def main() -> None:
     print("=== Card Blend ===")
     print(f"Blend:       {config.blend_note}")
     print(f"Temperature: {config.temperature}")
-    print(f"Memory weights:")
+    print("Memory weights:")
     print(f"  episodic:   {config.memory_weights.episodic}")
     print(f"  semantic:   {config.memory_weights.semantic}")
     print(f"  procedural: {config.memory_weights.procedural}")

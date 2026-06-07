@@ -17,11 +17,9 @@ from arcana.evals.types import EvalCase, EvalDimension, EvalRubric
 from arcana.types.card import Card
 
 CARD_CASES: list[EvalCase] = [
-
     # ------------------------------------------------------------------
     # The Hermit vs The Fool — depth vs novelty
     # ------------------------------------------------------------------
-
     EvalCase(
         id="cards-hermit-research-depth",
         description="The Hermit should produce deeper, more nuanced research than The Fool",
@@ -33,13 +31,19 @@ CARD_CASES: list[EvalCase] = [
             dimensions=[
                 EvalDimension(
                     name="depth",
-                    description="Explores tradeoffs with specifics, not generalities. Mentions cost, latency, data requirements.",
+                    description=(
+                        "Explores tradeoffs with specifics, not generalities. "
+                        "Mentions cost, latency, data requirements."
+                    ),
                     weight=2.0,
                     min_score=0.6,
                 ),
                 EvalDimension(
                     name="uncertainty",
-                    description="Acknowledges that the right choice depends on context; doesn't claim one is universally better.",
+                    description=(
+                        "Acknowledges that the right choice depends on context; "
+                        "doesn't claim one is universally better."
+                    ),
                     weight=1.0,
                 ),
                 EvalDimension(
@@ -53,7 +57,6 @@ CARD_CASES: list[EvalCase] = [
         ),
         tags=["hermit", "research", "depth"],
     ),
-
     EvalCase(
         id="cards-fool-novelty",
         description="The Fool should propose more unconventional ideas than The Hermit",
@@ -65,7 +68,9 @@ CARD_CASES: list[EvalCase] = [
             dimensions=[
                 EvalDimension(
                     name="novelty",
-                    description="Proposes something unexpected or non-standard. Not just RAG, RLHF, or constitutional AI.",
+                    description=(
+                        "Proposes something unexpected or non-standard. Not just RAG, RLHF, or constitutional AI."
+                    ),
                     weight=2.0,
                     min_score=0.5,
                 ),
@@ -85,11 +90,9 @@ CARD_CASES: list[EvalCase] = [
         ),
         tags=["fool", "creativity", "novelty"],
     ),
-
     # ------------------------------------------------------------------
     # The Magician — tool bias
     # ------------------------------------------------------------------
-
     EvalCase(
         id="cards-magician-tool-bias",
         description="The Magician should express preference for using tools over reasoning",
@@ -115,11 +118,9 @@ CARD_CASES: list[EvalCase] = [
         ),
         tags=["magician", "tools", "directness"],
     ),
-
     # ------------------------------------------------------------------
     # The Empress — richness and warmth
     # ------------------------------------------------------------------
-
     EvalCase(
         id="cards-empress-creative-richness",
         description="The Empress should produce richer, warmer content than The Justice",
@@ -149,11 +150,9 @@ CARD_CASES: list[EvalCase] = [
         ),
         tags=["empress", "creativity", "tone"],
     ),
-
     # ------------------------------------------------------------------
     # The Devil — hard truths
     # ------------------------------------------------------------------
-
     EvalCase(
         id="cards-devil-hard-truth",
         description="The Devil should name uncomfortable truths that other cards might soften",
@@ -181,11 +180,9 @@ CARD_CASES: list[EvalCase] = [
         ),
         tags=["devil", "honesty", "hard-truth"],
     ),
-
     # ------------------------------------------------------------------
     # The High Priestess — economy of speech
     # ------------------------------------------------------------------
-
     EvalCase(
         id="cards-high-priestess-economy",
         description="The High Priestess should only speak when it adds something — no filler",
@@ -207,8 +204,11 @@ CARD_CASES: list[EvalCase] = [
                 ),
             ],
             forbidden_elements=[
-                "certainly", "of course", "absolutely",
-                "I'd be happy to", "great question",
+                "certainly",
+                "of course",
+                "absolutely",
+                "I'd be happy to",
+                "great question",
             ],
             pass_threshold=0.65,
         ),

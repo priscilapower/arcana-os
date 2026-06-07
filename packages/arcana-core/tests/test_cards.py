@@ -1,6 +1,7 @@
 """Tests for the Card Engine — the soul of the system."""
 
 import pytest
+
 from arcana.cards.engine import CardEngine
 from arcana.cards.registry import CardRegistry
 from arcana.types.card import Card

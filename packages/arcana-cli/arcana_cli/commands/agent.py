@@ -14,7 +14,12 @@ console = Console()
 CARD_TABLE = {
     Card.FOOL: ("0", "The Fool", "Explorer / Autonomous Agent", "0.95"),
     Card.MAGICIAN: ("I", "The Magician", "Executor / Tool Master", "0.50"),
-    Card.HIGH_PRIESTESS: ("II", "The High Priestess", "Archivist / Pattern Reader", "0.40"),
+    Card.HIGH_PRIESTESS: (
+        "II",
+        "The High Priestess",
+        "Archivist / Pattern Reader",
+        "0.40",
+    ),
     Card.EMPRESS: ("III", "The Empress", "Creator / Generative Agent", "0.85"),
     Card.EMPEROR: ("IV", "The Emperor", "Orchestrator / System Agent", "0.30"),
     Card.HIEROPHANT: ("V", "The Hierophant", "Advisor / Domain Expert", "0.30"),
@@ -22,7 +27,12 @@ CARD_TABLE = {
     Card.CHARIOT: ("VII", "The Chariot", "Driver / Goal Agent", "0.40"),
     Card.STRENGTH: ("VIII", "Strength", "Coach / Long-Game Agent", "0.60"),
     Card.HERMIT: ("IX", "The Hermit", "Researcher / Deep Analyst", "0.35"),
-    Card.WHEEL_OF_FORTUNE: ("X", "Wheel of Fortune", "Scheduler / Probabilistic", "0.65"),
+    Card.WHEEL_OF_FORTUNE: (
+        "X",
+        "Wheel of Fortune",
+        "Scheduler / Probabilistic",
+        "0.65",
+    ),
     Card.JUSTICE: ("XI", "Justice", "Auditor / Evaluation Agent", "0.20"),
     Card.HANGED_MAN: ("XII", "The Hanged Man", "Reframer / Perspective", "0.80"),
     Card.DEATH: ("XIII", "Death", "Transformer / Refactor Agent", "0.40"),
@@ -69,14 +79,14 @@ def create(
     # Validate card
     try:
         card_enum = Card(card) if "-" in card else Card(f"the-{card}")
-    except ValueError:
+    except ValueError as exception:
         # Try partial match
         matches = [c for c in Card if card.lower() in c.value]
         if len(matches) == 1:
             card_enum = matches[0]
         else:
             console.print(f"[red]Unknown card: {card}[/red]")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from exception
 
     if not model:
         model = typer.prompt("Model", default="ollama/hermes-3")
@@ -96,6 +106,7 @@ def create(
 def list_agents() -> None:
     """List all agents."""
     from pathlib import Path
+
     agents_dir = Path.home() / ".arcana" / "agents"
     if not agents_dir.exists() or not list(agents_dir.iterdir()):
         console.print("[dim]No agents yet. Run: arcana agent create[/dim]")

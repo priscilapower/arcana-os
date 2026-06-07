@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from arcana.evals.judge import CompositeJudge, LLMJudge, RuleJudge
+from arcana.evals.judge import CompositeJudge, RuleJudge
 from arcana.evals.types import (
     EvalCase,
     EvalDimension,
@@ -21,12 +21,11 @@ from arcana.evals.types import (
     RegressionReport,
 )
 from arcana.types.card import Card
-from arcana.types.session import ToolCall
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 def make_case(
     card: Card = Card.HERMIT,
@@ -73,6 +72,7 @@ def make_result(
 # Types
 # ---------------------------------------------------------------------------
 
+
 def test_eval_case_defaults():
     case = make_case()
     assert case.id == "test-case-001"
@@ -112,6 +112,7 @@ def test_eval_dimension_min_score():
 
 def test_regression_report_has_regressions():
     from arcana.evals.types import RegressionDetail
+
     report = RegressionReport(
         run_id="run-new",
         baseline_run_id="run-old",
@@ -138,6 +139,7 @@ def test_regression_report_has_regressions():
 # ---------------------------------------------------------------------------
 # RuleJudge
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_rule_judge_required_element_present():
@@ -190,9 +192,7 @@ async def test_rule_judge_all_pass():
         forbidden=["it depends"],
         pass_threshold=0.8,
     )
-    result = make_result(
-        response="RAG retrieves context at runtime. Fine-tuning bakes it into weights."
-    )
+    result = make_result(response="RAG retrieves context at runtime. Fine-tuning bakes it into weights.")
     judge = RuleJudge()
     verdict = await judge.score(case, result)
 
@@ -237,6 +237,7 @@ async def test_rule_judge_case_insensitive():
 # CompositeJudge (rules-only mode)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_composite_judge_rules_only_mode():
     """In fast mode (use_llm=False), composite behaves like rule judge."""
@@ -263,6 +264,7 @@ async def test_composite_judge_no_dimensions_passes():
 # EvalRunSummary
 # ---------------------------------------------------------------------------
 
+
 def test_run_summary_pass_rate():
     summary = EvalRunSummary(
         run_id="test",
@@ -284,8 +286,10 @@ def test_run_summary_pass_rate():
 # Suite definitions
 # ---------------------------------------------------------------------------
 
+
 def test_card_suite_cases_are_valid():
     from arcana.evals.suites.cards import CARD_CASES
+
     assert len(CARD_CASES) > 0
     for case in CARD_CASES:
         assert case.suite == "cards"
@@ -296,6 +300,7 @@ def test_card_suite_cases_are_valid():
 
 def test_blending_suite_cases_have_modifiers():
     from arcana.evals.suites.blending import BLENDING_CASES
+
     assert len(BLENDING_CASES) > 0
     for case in BLENDING_CASES:
         assert case.suite == "blending"
@@ -303,8 +308,8 @@ def test_blending_suite_cases_have_modifiers():
 
 
 def test_all_case_ids_are_unique():
-    from arcana.evals.suites.cards import CARD_CASES
     from arcana.evals.suites.blending import BLENDING_CASES
+    from arcana.evals.suites.cards import CARD_CASES
 
     all_cases = [*CARD_CASES, *BLENDING_CASES]
     ids = [c.id for c in all_cases]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -14,21 +15,14 @@ console = Console()
 
 @app.command("run")
 def run(
-    suite: str | None = typer.Option(
-        None, "--suite", "-s",
-        help="Suite to run: cards | blending | all"
-    ),
-    fast: bool = typer.Option(
-        False, "--fast",
-        help="Rules-only mode — no LLM judge. Fast, free, good for CI."
-    ),
-    baseline: str | None = typer.Option(
-        None, "--baseline", "-b",
-        help="Baseline run ID for regression comparison"
-    ),
+    suite: str | None = typer.Option(None, "--suite", "-s", help="Suite to run: cards | blending | all"),
+    fast: bool = typer.Option(False, "--fast", help="Rules-only mode — no LLM judge. Fast, free, good for CI."),
+    baseline: str | None = typer.Option(None, "--baseline", "-b", help="Baseline run ID for regression comparison"),
     model: str = typer.Option(
-        "ollama/hermes-3", "--model", "-m",
-        help="Model to use for agents under evaluation"
+        "ollama/hermes-3",
+        "--model",
+        "-m",
+        help="Model to use for agents under evaluation",
     ),
 ) -> None:
     """Run evaluation suites against live agents."""
@@ -48,9 +42,7 @@ def run(
             console.print("\n[red]🔴 Regressions detected:[/red]")
             for reg in summary.regression_report.regressions:
                 console.print(
-                    f"  {reg.case_id}: "
-                    f"{reg.baseline_score:.3f} → {reg.current_score:.3f} "
-                    f"({reg.delta:+.3f})"
+                    f"  {reg.case_id}: {reg.baseline_score:.3f} → {reg.current_score:.3f} ({reg.delta:+.3f})"
                 )
             raise typer.Exit(1)
 
@@ -62,8 +54,8 @@ def list_cases(
     suite: str | None = typer.Option(None, "--suite", "-s"),
 ) -> None:
     """List all available eval cases."""
-    from arcana.evals.suites.cards import CARD_CASES
     from arcana.evals.suites.blending import BLENDING_CASES
+    from arcana.evals.suites.cards import CARD_CASES
 
     all_cases = [*CARD_CASES, *BLENDING_CASES]
     if suite:
@@ -100,7 +92,7 @@ def show_results(
         console.print(f"[red]No results found for run: {run_id}[/red]")
         raise typer.Exit(1)
 
-    data = json.loads(results_path.read_text())
+    data: list[dict[str, Any]] = json.loads(results_path.read_text())
     table = Table(title=f"Results — {run_id}")
     table.add_column("Case ID", style="cyan")
     table.add_column("Card")
@@ -109,9 +101,9 @@ def show_results(
     table.add_column("Latency")
 
     for r in data:
-        verdict = r.get("verdict") or {}
-        score = verdict.get("overall_score", 0)
-        passed = verdict.get("passed", False)
+        verdict: dict[str, Any] = r.get("verdict") or {}
+        score: float = verdict.get("overall_score", 0)
+        passed: bool = verdict.get("passed", False)
         table.add_row(
             r["case_id"],
             r["card"],

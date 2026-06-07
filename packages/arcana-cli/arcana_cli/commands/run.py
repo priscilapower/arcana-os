@@ -29,22 +29,23 @@ def init_cmd() -> None:
         (ARCANA_HOME / "vector").mkdir()
 
         import json
+
         config = {
             "version": "0.1.0",
             "default_model": None,
             "briefing_time": "08:00",
         }
         (ARCANA_HOME / "config.json").write_text(json.dumps(config, indent=2))
-        (ARCANA_HOME / "world.json").write_text(
-            json.dumps({"active_spread": None, "routing_rules": []}, indent=2)
-        )
+        (ARCANA_HOME / "world.json").write_text(json.dumps({"active_spread": None, "routing_rules": []}, indent=2))
 
-    console.print(Panel.fit(
-        "[bold green]✨ Arcana OS initialised![/bold green]\n\n"
-        f"Home: [cyan]{ARCANA_HOME}[/cyan]\n\n"
-        "Next step: [bold]arcana agent create[/bold]",
-        title="🌌 Arcana OS",
-    ))
+    console.print(
+        Panel.fit(
+            "[bold green]✨ Arcana OS initialised![/bold green]\n\n"
+            f"Home: [cyan]{ARCANA_HOME}[/cyan]\n\n"
+            "Next step: [bold]arcana agent create[/bold]",
+            title="🌌 Arcana OS",
+        )
+    )
 
 
 def status_cmd() -> None:
@@ -79,13 +80,10 @@ def run_cmd(
             console.print(f"[dim]Running with agent: {agent}[/dim]")
             # TODO: load agent from registry and run
             console.print(
-                "[yellow]Agent registry is implemented in Epic 5. "
-                "Use the Python API directly for now.[/yellow]"
+                "[yellow]Agent registry is implemented in Epic 5. Use the Python API directly for now.[/yellow]"
             )
         else:
             console.print("[dim]Routing via The World...[/dim]")
-            console.print(
-                "[yellow]World routing is implemented in Epic 7.[/yellow]"
-            )
+            console.print("[yellow]World routing is implemented in Epic 7.[/yellow]")
 
     asyncio.run(_run())

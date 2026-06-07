@@ -27,11 +27,10 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
-from arcana.evals.judge import CompositeJudge, LLMJudge, RuleJudge
+from arcana.evals.judge import CompositeJudge, LLMJudge
 from arcana.evals.types import (
     EvalCase,
     EvalResult,
@@ -82,10 +81,10 @@ class EvalHarness:
         baseline_run_id: str | None = None,
     ) -> EvalRunSummary:
         """Run all (or a subset of) eval cases."""
-        run_id = f"run-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
+        run_id = f"run-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}"
         cases = self._load_cases(suite)
 
-        print(f"\n🌌 Arcana Eval Harness")
+        print("\n🌌 Arcana Eval Harness")
         print(f"   Run ID:  {run_id}")
         print(f"   Cases:   {len(cases)}")
         print(f"   Judge:   {'LLM + Rules' if self._use_llm else 'Rules only'}")
@@ -96,9 +95,7 @@ class EvalHarness:
 
         regression = None
         if baseline_run_id:
-            regression = self._compare_to_baseline(
-                run_id, baseline_run_id, results
-            )
+            regression = self._compare_to_baseline(run_id, baseline_run_id, results)
 
         summary = self._build_summary(run_id, suite, cases, results, regression)
         self._print_summary(summary)
@@ -109,8 +106,8 @@ class EvalHarness:
     # ------------------------------------------------------------------
 
     def _load_cases(self, suite: str | None = None) -> list[EvalCase]:
-        from arcana.evals.suites.cards import CARD_CASES
         from arcana.evals.suites.blending import BLENDING_CASES
+        from arcana.evals.suites.cards import CARD_CASES
 
         all_cases = [*CARD_CASES, *BLENDING_CASES]
         if suite:
@@ -121,9 +118,7 @@ class EvalHarness:
     # Running
     # ------------------------------------------------------------------
 
-    async def _run_cases(
-        self, cases: list[EvalCase], run_id: str
-    ) -> list[EvalResult]:
+    async def _run_cases(self, cases: list[EvalCase], run_id: str) -> list[EvalResult]:
         sem = asyncio.Semaphore(self._concurrency)
         tasks = [self._run_one(case, run_id, sem) for case in cases]
         return await asyncio.gather(*tasks)
@@ -170,16 +165,10 @@ class EvalHarness:
             # Score
             result.verdict = await self._judge.score(case, result)
             status = "✅" if result.passed else "❌"
-            print(
-                f"  {status} [{case.id}] "
-                f"score={result.overall_score:.3f} "
-                f"({result.latency_ms}ms)"
-            )
+            print(f"  {status} [{case.id}] score={result.overall_score:.3f} ({result.latency_ms}ms)")
             return result
 
-    async def _execute_case(
-        self, case: EvalCase, run_id: str
-    ) -> EvalResult:
+    async def _execute_case(self, case: EvalCase, run_id: str) -> EvalResult:
         """
         Run the agent for this eval case and collect outputs.
 
@@ -187,9 +176,8 @@ class EvalHarness:
         Currently uses Agent directly with the card config.
         """
         from arcana.agents.agent import Agent
-        from arcana.cards.registry import get_registry
-        from arcana.models.adapters.ollama import OllamaAdapter
         from arcana.models.adapters.anthropic import AnthropicAdapter
+        from arcana.models.adapters.ollama import OllamaAdapter
 
         start = time.monotonic()
 
@@ -270,8 +258,8 @@ class EvalHarness:
             )
 
         baseline_map = {r.case_id: r for r in baseline_results}
-        regressions = []
-        improvements = []
+        regressions: list[RegressionDetail] = []
+        improvements: list[RegressionDetail] = []
 
         for result in current_results:
             baseline = baseline_map.get(result.case_id)
@@ -344,7 +332,7 @@ class EvalHarness:
         )
 
     def _print_summary(self, summary: EvalRunSummary) -> None:
-        print(f"\n{'='*50}")
+        print(f"\n{'=' * 50}")
         print(f"  Run: {summary.run_id}")
         print(f"  Pass rate:  {summary.pass_rate:.1%} ({summary.cases_passed}/{summary.cases_run})")
         print(f"  Avg score:  {summary.avg_score:.3f}")
@@ -354,4 +342,4 @@ class EvalHarness:
         if summary.regression_report and summary.regression_report.has_regressions:
             n = summary.regression_report.cases_regressed
             print(f"  🔴 Regressions: {n}")
-        print(f"{'='*50}\n")
+        print(f"{'=' * 50}\n")

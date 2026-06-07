@@ -12,6 +12,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
+from arcana.types._utils import now_utc
+
 
 class RoutingRule(BaseModel):
     """
@@ -22,11 +24,11 @@ class RoutingRule(BaseModel):
     """
 
     id: UUID = Field(default_factory=uuid4)
-    trigger: str                    # "when user asks about code"
+    trigger: str  # "when user asks about code"
     target_agent_id: UUID
-    priority: int = 0               # higher = evaluated first
+    priority: int = 0  # higher = evaluated first
     description: str = ""
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=now_utc)
 
     # Cloud — workspace scoping (always "local" in Phase 1/2)
     workspace_id: str = "local"
@@ -35,7 +37,7 @@ class RoutingRule(BaseModel):
 class SpreadLayout(BaseModel):
     """Maps named roles to agent UUIDs within a Spread."""
 
-    positions: dict[str, UUID] = {}     # role_name → agent_id
+    positions: dict[str, UUID] = {}  # role_name → agent_id
     # e.g. {"researcher": <uuid>, "writer": <uuid>, "critic": <uuid>}
 
 
@@ -53,7 +55,7 @@ class Spread(BaseModel):
     description: str = ""
     layout: SpreadLayout = Field(default_factory=SpreadLayout)
     is_active: bool = False
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=now_utc)
 
     # Cloud — workspace scoping (always "local" in Phase 1/2)
     workspace_id: str = "local"

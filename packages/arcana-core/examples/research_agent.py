@@ -43,5 +43,6 @@ async def main() -> None:
             print(chunk, end="", flush=True)
         print()
 
+
 if __name__ == "__main__":
     asyncio.run(main())

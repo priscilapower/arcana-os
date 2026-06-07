@@ -36,8 +36,8 @@ class ModelConnection(BaseModel):
     name: str
     provider: ModelProvider
     transport: ModelTransport = ModelTransport.API
-    model_id: str                      # "hermes-3", "claude-sonnet-4-6"
-    endpoint: str = ""                 # base URL; empty = use provider default
+    model_id: str  # "hermes-3", "claude-sonnet-4-6"
+    endpoint: str = ""  # base URL; empty = use provider default
     capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
 
     # Cost (None for local models)
@@ -45,7 +45,7 @@ class ModelConnection(BaseModel):
     cost_per_1k_output_tokens: float | None = None
 
     # Runtime state (not persisted)
-    status: str = "unknown"            # connected | unreachable | authenticating
+    status: str = "unknown"  # connected | unreachable | authenticating
 
     @property
     def is_local(self) -> bool:

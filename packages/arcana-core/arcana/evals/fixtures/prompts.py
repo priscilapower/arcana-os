@@ -30,28 +30,17 @@ CREATIVE_PROMPTS = {
         "persistent memory. Target audience: technical founders."
     ),
     "unconventional_approach": (
-        "Propose an unconventional approach to reducing LLM hallucinations "
-        "that hasn't been widely explored yet."
+        "Propose an unconventional approach to reducing LLM hallucinations that hasn't been widely explored yet."
     ),
     "product_description": (
-        "Write a product description for an AI agent OS where each agent "
-        "is configured with a tarot card archetype."
+        "Write a product description for an AI agent OS where each agent is configured with a tarot card archetype."
     ),
 }
 
 # Behavioural — tests card-specific traits
 BEHAVIOURAL_PROMPTS = {
-    "ask_before_acting": (
-        "I need help with my project. Can you help me?"
-    ),
-    "tool_vs_reason": (
-        "What is the current price of AAPL stock?"
-    ),
-    "hard_truth": (
-        "My startup idea is to build yet another to-do app with AI. "
-        "What do you think?"
-    ),
-    "ambiguous_brief": (
-        "Make it better."
-    ),
+    "ask_before_acting": ("I need help with my project. Can you help me?"),
+    "tool_vs_reason": ("What is the current price of AAPL stock?"),
+    "hard_truth": ("My startup idea is to build yet another to-do app with AI. What do you think?"),
+    "ambiguous_brief": ("Make it better."),
 }
