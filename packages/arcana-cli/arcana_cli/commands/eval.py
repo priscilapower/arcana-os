@@ -16,7 +16,7 @@ console = Console()
 def run(
     suite: str | None = typer.Option(
         None, "--suite", "-s",
-        help="Suite to run: cards | memory | decay | blending | all"
+        help="Suite to run: cards | blending | all"
     ),
     fast: bool = typer.Option(
         False, "--fast",
@@ -63,11 +63,9 @@ def list_cases(
 ) -> None:
     """List all available eval cases."""
     from arcana.evals.suites.cards import CARD_CASES
-    from arcana.evals.suites.memory import MEMORY_CASES
-    from arcana.evals.suites.decay import DECAY_CASES
     from arcana.evals.suites.blending import BLENDING_CASES
 
-    all_cases = [*CARD_CASES, *MEMORY_CASES, *DECAY_CASES, *BLENDING_CASES]
+    all_cases = [*CARD_CASES, *BLENDING_CASES]
     if suite:
         all_cases = [c for c in all_cases if c.suite == suite]
 

@@ -41,7 +41,7 @@ from arcana.evals.types import (
     RegressionReport,
 )
 
-RESULTS_DIR = Path(__file__).parent / "results"
+RESULTS_DIR = Path.home() / ".arcana" / "evals" / "results"
 
 
 class EvalHarness:
@@ -52,7 +52,7 @@ class EvalHarness:
         - Load cases from suites
         - Run each case (skipping marked cases)
         - Score with the configured judge
-        - Store results to evals/results/
+        - Store results to ~/.arcana/evals/results/
         - Optionally compare against a baseline run (regression mode)
         - Return a summary
     """
@@ -110,11 +110,9 @@ class EvalHarness:
 
     def _load_cases(self, suite: str | None = None) -> list[EvalCase]:
         from arcana.evals.suites.cards import CARD_CASES
-        from arcana.evals.suites.memory import MEMORY_CASES
-        from arcana.evals.suites.decay import DECAY_CASES
         from arcana.evals.suites.blending import BLENDING_CASES
 
-        all_cases = [*CARD_CASES, *MEMORY_CASES, *DECAY_CASES, *BLENDING_CASES]
+        all_cases = [*CARD_CASES, *BLENDING_CASES]
         if suite:
             all_cases = [c for c in all_cases if c.suite == suite]
         return all_cases
@@ -234,7 +232,7 @@ class EvalHarness:
     # ------------------------------------------------------------------
 
     def _save_results(self, run_id: str, results: list[EvalResult]) -> None:
-        RESULTS_DIR.mkdir(exist_ok=True)
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
         path = RESULTS_DIR / f"{run_id}.json"
         data = [r.model_dump(mode="json") for r in results]
         path.write_text(json.dumps(data, indent=2, default=str))

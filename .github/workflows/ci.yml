@@ -29,13 +29,13 @@ jobs:
         run: uv run ruff check .
 
       - name: Type check
-        run: uv run mypy packages/arcana-core/arcana
+        run: uv run pyright packages/arcana-core/arcana
 
-      - name: Unit tests (no LLM)
-        run: uv run pytest tests/ -v -m "not llm_eval"
+      - name: Unit tests — arcana-core
+        run: uv run pytest packages/arcana-core/tests/ -v -m "not llm_eval"
 
-      - name: Eval harness — rules only (no LLM)
-        run: uv run pytest tests/test_eval_harness.py -v
+      - name: Unit tests — arcana-cli
+        run: uv run pytest packages/arcana-cli/tests/ -v -m "not llm_eval"
 
   eval:
     # Runs on merge to main only — needs real LLM, costs money
@@ -56,7 +56,7 @@ jobs:
       - name: Restore eval results cache
         uses: actions/cache@v4
         with:
-          path: evals/results/
+          path: ~/.arcana/evals/results/
           key: eval-results-${{ github.ref }}
           restore-keys: eval-results-
 
@@ -82,5 +82,5 @@ jobs:
       - name: Save eval results
         uses: actions/cache@v4
         with:
-          path: evals/results/
+          path: ~/.arcana/evals/results/
           key: eval-results-${{ github.sha }}

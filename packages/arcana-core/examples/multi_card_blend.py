@@ -5,7 +5,7 @@ A researcher with a warm, generous tone. Depth of The Hermit,
 richness of The Empress. Temperature blends to ~0.50.
 
 Run with:
-    uv run python examples/multi_card_blend.py
+    uv run python packages/arcana-core/examples/multi_card_blend.py
 """
 
 import asyncio

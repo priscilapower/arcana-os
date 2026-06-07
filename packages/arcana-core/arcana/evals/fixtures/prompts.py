@@ -39,23 +39,6 @@ CREATIVE_PROMPTS = {
     ),
 }
 
-# Memory recall — tests whether pre-seeded context is used
-MEMORY_PROMPTS = {
-    "context_aware_recommendation": (
-        "What embedding model should I use for my project?"
-    ),
-    "preference_aware_response": (
-        "Summarise the key points from our last conversation."
-    ),
-    "work_context": (
-        "What should I keep in mind about my current work context "
-        "when making technical decisions?"
-    ),
-    "stale_vs_fresh": (
-        "Where do I work?"
-    ),
-}
-
 # Behavioural — tests card-specific traits
 BEHAVIOURAL_PROMPTS = {
     "ask_before_acting": (

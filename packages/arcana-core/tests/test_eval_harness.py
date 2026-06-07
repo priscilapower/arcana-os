@@ -3,7 +3,7 @@ Tests for the evaluation harness.
 
 These tests cover the harness infrastructure itself (types, judges, rubrics).
 They do NOT make real LLM calls — use mocked responses throughout.
-Real LLM eval runs are in evals/suites/ and marked @pytest.mark.llm_eval.
+Real LLM eval runs are in arcana/evals/suites/ and marked @pytest.mark.llm_eval.
 """
 
 from __future__ import annotations
@@ -294,21 +294,6 @@ def test_card_suite_cases_are_valid():
         assert case.rubric
 
 
-def test_memory_suite_cases_are_valid():
-    from arcana.evals.suites.memory import MEMORY_CASES
-    assert len(MEMORY_CASES) > 0
-    for case in MEMORY_CASES:
-        assert case.suite == "memory"
-        assert case.memory_state is not None
-
-
-def test_decay_suite_cases_are_valid():
-    from arcana.evals.suites.decay import DECAY_CASES
-    assert len(DECAY_CASES) > 0
-    for case in DECAY_CASES:
-        assert case.suite == "decay"
-
-
 def test_blending_suite_cases_have_modifiers():
     from arcana.evals.suites.blending import BLENDING_CASES
     assert len(BLENDING_CASES) > 0
@@ -319,10 +304,8 @@ def test_blending_suite_cases_have_modifiers():
 
 def test_all_case_ids_are_unique():
     from arcana.evals.suites.cards import CARD_CASES
-    from arcana.evals.suites.memory import MEMORY_CASES
-    from arcana.evals.suites.decay import DECAY_CASES
     from arcana.evals.suites.blending import BLENDING_CASES
 
-    all_cases = [*CARD_CASES, *MEMORY_CASES, *DECAY_CASES, *BLENDING_CASES]
+    all_cases = [*CARD_CASES, *BLENDING_CASES]
     ids = [c.id for c in all_cases]
     assert len(ids) == len(set(ids)), "Duplicate eval case IDs found"

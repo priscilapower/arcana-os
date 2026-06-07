@@ -2,7 +2,7 @@
 Example: A research agent powered by The Hermit card.
 
 Run with:
-    uv run python examples/research_agent.py
+    uv run python packages/arcana-core/examples/research_agent.py
 
 Requirements:
     - Ollama running locally with hermes-3 (or change the model)
