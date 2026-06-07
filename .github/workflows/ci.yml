@@ -23,13 +23,16 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: uv sync --all-packages --all-extras
 
       - name: Lint
         run: uv run ruff check .
 
-      - name: Type check
+      - name: Type check - arcana-core
         run: uv run pyright packages/arcana-core/arcana
+
+      - name: Type check - arcana-cli
+        run: uv run pyright packages/arcana-cli/arcana_cli
 
       - name: Unit tests — arcana-core
         run: uv run pytest packages/arcana-core/tests/ -v -m "not llm_eval"
