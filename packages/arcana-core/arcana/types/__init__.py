@@ -1,14 +1,6 @@
 """All Pydantic types — import from here."""
 
 from arcana.types.agent import Agent, AgentStatus
-from arcana.types.automation import (
-    Automation,
-    AutomationRun,
-    AutomationStatus,
-    PipelineStep,
-    Trigger,
-    TriggerType,
-)
 from arcana.types.card import (
     AgentConfig,
     Card,
@@ -67,9 +59,6 @@ __all__ = [
     # Tool
     "ToolDefinition", "ToolResult", "ToolType", "ToolSubscription",
     "Skill", "MCPServerConfig", "MCPTransport",
-    # Automation
-    "Automation", "AutomationRun", "AutomationStatus",
-    "Trigger", "TriggerType", "PipelineStep",
     # World
     "RoutingRule", "Spread", "SpreadLayout",
 ]
