@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
+from arcana.types._utils import now_utc
 
-class MessageRole(str, Enum):
+
+class MessageRole(StrEnum):
     USER = "user"
     ASSISTANT = "assistant"
     TOOL = "tool"
@@ -21,7 +23,7 @@ class Message(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     role: MessageRole
     content: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=now_utc)
 
 
 class ToolCall(BaseModel):
@@ -33,14 +35,14 @@ class ToolCall(BaseModel):
     duration_ms: int = 0
 
 
-class SessionStatus(str, Enum):
+class SessionStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
     INTERRUPTED = "interrupted"
 
 
-class SessionTrigger(str, Enum):
+class SessionTrigger(StrEnum):
     USER = "user"
     WORLD = "world"
     AGENT = "agent"
@@ -69,7 +71,7 @@ class Session(BaseModel):
     summary: str | None = None
     memories_extracted: list[UUID] = []
 
-    started_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: datetime = Field(default_factory=now_utc)
     ended_at: datetime | None = None
 
     def add_message(self, role: MessageRole, content: str) -> Message:
@@ -79,8 +81,6 @@ class Session(BaseModel):
 
     def close(self, status: SessionStatus = SessionStatus.COMPLETED) -> None:
         self.status = status
-        self.ended_at = datetime.utcnow()
+        self.ended_at = datetime.now(tz=UTC)
         if self.started_at:
-            self.duration_ms = int(
-                (self.ended_at - self.started_at).total_seconds() * 1000
-            )
+            self.duration_ms = int((self.ended_at - self.started_at).total_seconds() * 1000)

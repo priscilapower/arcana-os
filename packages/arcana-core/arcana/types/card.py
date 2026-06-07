@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-from enum import Enum
-from typing import TYPE_CHECKING
+from enum import StrEnum
 
 from pydantic import BaseModel
 
-if TYPE_CHECKING:
-    from arcana.types.memory import DecayProfile, MemoryType
 
-
-class Card(str, Enum):
+class Card(StrEnum):
     """The 22 Major Arcana. Assign one to any agent."""
 
     FOOL = "the-fool"
@@ -64,6 +60,7 @@ class CardDecayConfig(BaseModel):
       - Fool lives in the present (very short half-lives)
       - The World never forgets (strategy=NONE on all types)
     """
+
     episodic_half_life_days: float | None = None
     semantic_half_life_days: float | None = None
     procedural_half_life_days: float | None = None

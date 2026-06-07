@@ -25,3 +25,7 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# AI-related files
+CLAUDE.md
+.claude

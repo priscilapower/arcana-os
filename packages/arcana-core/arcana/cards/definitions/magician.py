@@ -1,8 +1,12 @@
 """I · The Magician — Executor / Tool Master"""
 
 from arcana.types.card import (
-    Card, CardArchetype, CardDecayConfig, MemoryWeights,
-    PromptIngredients, TarotCard,
+    Card,
+    CardArchetype,
+    CardDecayConfig,
+    MemoryWeights,
+    PromptIngredients,
+    TarotCard,
 )
 
 MAGICIAN = TarotCard(
@@ -28,13 +32,16 @@ MAGICIAN = TarotCard(
         ),
         default_temperature=0.50,
         memory_weights=MemoryWeights(
-            episodic=0.2, semantic=0.3, procedural=0.9, preference=0.1,
+            episodic=0.2,
+            semantic=0.3,
+            procedural=0.9,
+            preference=0.1,
         ),
         # Magician remembers HOW to do things longest — procedural is slow
         decay_config=CardDecayConfig(
             episodic_half_life_days=7.0,
             semantic_half_life_days=90.0,
-            procedural_half_life_days=730.0,   # 2 years — procedures are stable
+            procedural_half_life_days=730.0,  # 2 years — procedures are stable
             preference_half_life_days=30.0,
         ),
         preferred_tool_categories=["code", "automation", "file", "api"],

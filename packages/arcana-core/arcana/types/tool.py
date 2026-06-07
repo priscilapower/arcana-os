@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
-from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
-class ToolType(str, Enum):
+class ToolType(StrEnum):
     BUILTIN = "builtin"
     MCP = "mcp"
     CUSTOM = "custom"
@@ -23,7 +22,7 @@ class ToolDefinition(BaseModel):
     input_schema: dict[str, Any]
     output_schema: dict[str, Any] = {}
     type: ToolType = ToolType.BUILTIN
-    mcp_server_name: str | None = None   # e.g. "notion-mcp"
+    mcp_server_name: str | None = None  # e.g. "notion-mcp"
 
     @property
     def qualified_name(self) -> str:
@@ -50,13 +49,13 @@ class Skill(BaseModel):
     id: str
     name: str
     description: str
-    tarot_name: str | None = None        # e.g. "The Scribe", "The Sleuth"
+    tarot_name: str | None = None  # e.g. "The Scribe", "The Sleuth"
     required_tool_names: list[str] = []  # qualified names e.g. "notion-mcp/search_pages"
-    prompt_strategy: str = ""            # injected into system prompt when active
-    affinity_cards: list[str] = []       # card ids that naturally fit this skill
+    prompt_strategy: str = ""  # injected into system prompt when active
+    affinity_cards: list[str] = []  # card ids that naturally fit this skill
 
 
-class MCPTransport(str, Enum):
+class MCPTransport(StrEnum):
     SSE = "sse"
     STDIO = "stdio"
     WEBSOCKET = "websocket"
@@ -69,11 +68,11 @@ class MCPServerConfig(BaseModel):
     Persisted to ~/.arcana/connections/mcps.json (no secrets here).
     """
 
-    name: str                            # human key: "notion-mcp", "gmail-mcp"
+    name: str  # human key: "notion-mcp", "gmail-mcp"
     server_url: str
     transport: MCPTransport = MCPTransport.SSE
     discovered_tools: list[ToolDefinition] = []  # populated on connect
-    status: str = "disconnected"         # connected | error | discovering
+    status: str = "disconnected"  # connected | error | discovering
     description: str = ""
 
     @property
@@ -91,7 +90,7 @@ class ToolSubscription(BaseModel):
     OR a builtin: "builtin/web_search"
     """
 
-    qualified_name: str                  # "notion-mcp/search_pages"
+    qualified_name: str  # "notion-mcp/search_pages"
 
     @property
     def server_name(self) -> str | None:
@@ -109,7 +108,3 @@ class ToolSubscription(BaseModel):
 
     def __str__(self) -> str:
         return self.qualified_name
-
-
-# Legacy alias — kept for backward compat during transition
-MCPConnection = MCPServerConfig

@@ -42,9 +42,7 @@ class OllamaAdapter(ModelAdapter):
             "stream": False,
             "options": {"temperature": request.temperature},
         }
-        response = await self._client.post(
-            f"{self.endpoint}/api/chat", json=payload
-        )
+        response = await self._client.post(f"{self.endpoint}/api/chat", json=payload)
         response.raise_for_status()
         data = response.json()
         return CompletionResponse(
@@ -53,9 +51,7 @@ class OllamaAdapter(ModelAdapter):
             output_tokens=data.get("eval_count", 0),
         )
 
-    async def stream(
-        self, request: CompletionRequest
-    ) -> AsyncGenerator[str, None]:
+    async def stream(self, request: CompletionRequest) -> AsyncGenerator[str, None]:
         messages = self._build_messages(request)
         payload = {
             "model": self.model,
@@ -63,11 +59,10 @@ class OllamaAdapter(ModelAdapter):
             "stream": True,
             "options": {"temperature": request.temperature},
         }
-        async with self._client.stream(
-            "POST", f"{self.endpoint}/api/chat", json=payload
-        ) as response:
+        async with self._client.stream("POST", f"{self.endpoint}/api/chat", json=payload) as response:
             response.raise_for_status()
             import json
+
             async for line in response.aiter_lines():
                 if line:
                     chunk = json.loads(line)
@@ -81,9 +76,7 @@ class OllamaAdapter(ModelAdapter):
             response = await self._client.get(f"{self.endpoint}/api/tags")
             response.raise_for_status()
             models = [m["name"] for m in response.json().get("models", [])]
-            available = self.model in models or any(
-                m.startswith(self.model.split(":")[0]) for m in models
-            )
+            available = self.model in models or any(m.startswith(self.model.split(":")[0]) for m in models)
             return ModelHealth(
                 healthy=available,
                 model_id=self.model,
@@ -92,8 +85,8 @@ class OllamaAdapter(ModelAdapter):
         except Exception as e:
             return ModelHealth(healthy=False, model_id=self.model, message=str(e))
 
-    def _build_messages(self, request: CompletionRequest) -> list[dict]:
-        messages = []
+    def _build_messages(self, request: CompletionRequest) -> list[dict[str, str]]:
+        messages: list[dict[str, str]] = []
         if request.system:
             messages.append({"role": "system", "content": request.system})
         messages.extend(request.messages)

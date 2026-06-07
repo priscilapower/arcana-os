@@ -1,8 +1,12 @@
 """II · The High Priestess — Archivist / Pattern Reader"""
 
 from arcana.types.card import (
-    Card, CardArchetype, CardDecayConfig, MemoryWeights,
-    PromptIngredients, TarotCard,
+    Card,
+    CardArchetype,
+    CardDecayConfig,
+    MemoryWeights,
+    PromptIngredients,
+    TarotCard,
 )
 
 HIGH_PRIESTESS = TarotCard(
@@ -28,14 +32,17 @@ HIGH_PRIESTESS = TarotCard(
         ),
         default_temperature=0.40,
         memory_weights=MemoryWeights(
-            episodic=0.9, semantic=0.7, procedural=0.2, preference=0.5,
+            episodic=0.9,
+            semantic=0.7,
+            procedural=0.2,
+            preference=0.5,
         ),
         # High Priestess remembers everything — extremely long half-lives
         decay_config=CardDecayConfig(
-            episodic_half_life_days=180.0,   # 6 months
+            episodic_half_life_days=180.0,  # 6 months
             semantic_half_life_days=3650.0,  # 10 years — effectively never
             procedural_half_life_days=3650.0,
-            preference_half_life_days=365.0, # 1 year
+            preference_half_life_days=365.0,  # 1 year
         ),
         preferred_tool_categories=["memory", "search", "notes"],
     ),

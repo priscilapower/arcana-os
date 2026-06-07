@@ -1,27 +1,60 @@
+[project]
+name = "arcana-os"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[tool.uv.sources]
+arcana-core = { workspace = true }
+
 [tool.uv.workspace]
 members = ["packages/*"]
 
-[tool.uv]
-dev-dependencies = [
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
-    "pytest-cov>=5.0.0",
+# Workspace-level dev tools — available when running from the repo root.
+# Per-package test deps (pytest, pytest-asyncio, pytest-cov) live in each
+# package's own pyproject.toml so they install correctly in isolation too.
+[dependency-groups]
+dev = [
     "ruff>=0.4.0",
-    "mypy>=1.10.0",
+    "pyright>=1.1.0",
+    "pre-commit>=4.6.0",
 ]
 
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-testpaths = ["tests", "packages"]
-addopts = "--cov=arcana --cov-report=term-missing"
+# ---------------------------------------------------------------------------
+# Ruff — lint + format
+# ---------------------------------------------------------------------------
 
 [tool.ruff]
-line-length = 88
+line-length = 119
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP"]
+select = ["E", "F", "I", "UP", "B"]
+# E — pycodestyle errors
+# F — pyflakes
+# I — isort
+# UP — pyupgrade (modernise syntax)
+# B — flake8-bugbear (common Python pitfalls)
 
-[tool.mypy]
-python_version = "3.11"
-strict = true
+[tool.ruff.lint.isort]
+known-first-party = ["arcana", "arcana_cli"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+
+# ---------------------------------------------------------------------------
+# Pyright — strict type checking on arcana-core; examples and tests excluded
+# ---------------------------------------------------------------------------
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+venvPath = "."
+venv = ".venv"
+exclude = [
+    "**/examples/**",
+    "**/tests/**",
+]
+# Suppress missing-stubs warnings for third-party packages that don't ship them
+reportMissingTypeStubs = false

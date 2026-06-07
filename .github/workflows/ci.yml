@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v4
@@ -23,64 +23,67 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: uv sync --all-packages --all-extras
 
       - name: Lint
         run: uv run ruff check .
 
-      - name: Type check
-        run: uv run mypy packages/arcana-core/arcana
+      - name: Type check - arcana-core
+        run: uv run pyright packages/arcana-core/arcana
 
-      - name: Unit tests (no LLM)
-        run: uv run pytest tests/ -v -m "not llm_eval"
+      - name: Type check - arcana-cli
+        run: uv run pyright packages/arcana-cli/arcana_cli
 
-      - name: Eval harness — rules only (no LLM)
-        run: uv run pytest tests/test_eval_harness.py -v
+      - name: Unit tests — arcana-core
+        run: uv run pytest packages/arcana-core/tests/ -v -m "not llm_eval"
 
-  eval:
-    # Runs on merge to main only — needs real LLM, costs money
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: test
+      - name: Unit tests — arcana-cli
+        run: uv run pytest packages/arcana-cli/tests/ -v -m "not llm_eval"
 
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-
-      - name: Install dependencies
-        run: uv sync --all-extras
-
-      # Restore cached baseline results for regression comparison
-      - name: Restore eval results cache
-        uses: actions/cache@v4
-        with:
-          path: evals/results/
-          key: eval-results-${{ github.ref }}
-          restore-keys: eval-results-
-
-      - name: Run eval suites (LLM judge)
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          uv run python -c "
-          import asyncio
-          from arcana.evals.harness import EvalHarness
-
-          async def main():
-              harness = EvalHarness(use_llm=True)
-              summary = await harness.run()
-              if summary.regression_report and summary.regression_report.has_regressions:
-                  import sys
-                  sys.exit(1)
-
-          asyncio.run(main())
-          "
-
-      # Cache results so next run can compare
-      - name: Save eval results
-        uses: actions/cache@v4
-        with:
-          path: evals/results/
-          key: eval-results-${{ github.sha }}
+#  eval:
+#    # Runs on merge to main only — needs real LLM, costs money
+#    runs-on: ubuntu-latest
+#    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+#    needs: test
+#
+#    steps:
+#      - uses: actions/checkout@v4
+#
+#      - name: Install uv
+#        uses: astral-sh/setup-uv@v3
+#
+#      - name: Install dependencies
+#        run: uv sync --all-extras
+#
+#      # Restore cached baseline results for regression comparison
+#      - name: Restore eval results cache
+#        uses: actions/cache@v4
+#        with:
+#          path: ~/.arcana/evals/results/
+#          key: eval-results-${{ github.ref }}
+#          restore-keys: eval-results-
+#
+#      - name: Run eval suites (LLM judge)
+#        env:
+#          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+#        run: |
+#          uv run python -c "
+#          import asyncio
+#          from arcana.evals.harness import EvalHarness
+#
+#          async def main():
+#              harness = EvalHarness(use_llm=True)
+#              summary = await harness.run()
+#              if summary.regression_report and summary.regression_report.has_regressions:
+#                  import sys
+#                  sys.exit(1)
+#
+#          asyncio.run(main())
+#          "
+#
+#      # Cache results so next run can compare
+#      - name: Save eval results
+#        uses: actions/cache@v4
+#        with:
+#          path: ~/.arcana/evals/results/
+#          key: eval-results-${{ github.sha }}

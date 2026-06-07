@@ -1,8 +1,12 @@
 """XXI · The World — Meta-Agent / Integrating Consciousness"""
 
 from arcana.types.card import (
-    Card, CardArchetype, CardDecayConfig, MemoryWeights,
-    PromptIngredients, TarotCard,
+    Card,
+    CardArchetype,
+    CardDecayConfig,
+    MemoryWeights,
+    PromptIngredients,
+    TarotCard,
 )
 
 WORLD = TarotCard(
@@ -29,12 +33,15 @@ WORLD = TarotCard(
         ),
         default_temperature=0.50,
         memory_weights=MemoryWeights(
-            episodic=0.9, semantic=0.9, procedural=0.7, preference=0.8,
+            episodic=0.9,
+            semantic=0.9,
+            procedural=0.7,
+            preference=0.8,
         ),
         # The World never forgets — strategy=NONE enforced in WorldEngine
         # These values are placeholders; decay is bypassed for The World
         decay_config=CardDecayConfig(
-            episodic_half_life_days=36500.0,    # 100 years
+            episodic_half_life_days=36500.0,  # 100 years
             semantic_half_life_days=36500.0,
             procedural_half_life_days=36500.0,
             preference_half_life_days=36500.0,

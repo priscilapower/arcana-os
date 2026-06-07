@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
+from arcana.types._utils import now_utc
 from arcana.types.card import Card
 
 
-class AgentStatus(str, Enum):
+class AgentStatus(StrEnum):
     ACTIVE = "active"
     IDLE = "idle"
     ERROR = "error"
@@ -51,7 +52,7 @@ class Agent(BaseModel):
     skill_ids: list[str] = []
 
     # Memory config (resolved at runtime by MemoryFederation)
-    shared_pool_names: list[str] = []   # which SharedMemoryPools to join
+    shared_pool_names: list[str] = []  # which SharedMemoryPools to join
 
     # State
     status: AgentStatus = AgentStatus.IDLE
@@ -59,6 +60,9 @@ class Agent(BaseModel):
     is_reversed: bool = False
 
     # Meta
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=now_utc)
     tags: list[str] = []
     is_archived: bool = False
+
+    # Cloud — workspace scoping (always "local" in Phase 1/2)
+    workspace_id: str = "local"

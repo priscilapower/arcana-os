@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from typing import Any
 
 from arcana.models.adapters.base import (
     CompletionRequest,
@@ -29,30 +30,32 @@ class AnthropicAdapter(ModelAdapter):
     ) -> None:
         self.model = model
         self._api_key = api_key
-        self._client: object | None = None
+        self._client: Any = None
 
-    def _get_client(self):  # type: ignore[return]
+    def _get_client(self) -> Any:
         if self._client is None:
             import anthropic
+
             key = self._api_key or self._resolve_key()
             self._client = anthropic.AsyncAnthropic(api_key=key)
         return self._client
 
     def _resolve_key(self) -> str:
         import os
+
         key = os.getenv("ANTHROPIC_API_KEY")
         if key:
             return key
         try:
             import keyring
+
             key = keyring.get_password("arcana", "anthropic_api_key")
             if key:
                 return key
         except Exception:
             pass
         raise ValueError(
-            "Anthropic API key not found. Set ANTHROPIC_API_KEY or run: "
-            "arcana connect model anthropic --api-key <key>"
+            "Anthropic API key not found. Set ANTHROPIC_API_KEY or run: arcana connect model anthropic --api-key <key>"
         )
 
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
@@ -71,9 +74,7 @@ class AnthropicAdapter(ModelAdapter):
             stop_reason=response.stop_reason or "end_turn",
         )
 
-    async def stream(
-        self, request: CompletionRequest
-    ) -> AsyncGenerator[str, None]:
+    async def stream(self, request: CompletionRequest) -> AsyncGenerator[str, None]:
         client = self._get_client()
         async with client.messages.stream(
             model=self.model,
