@@ -8,6 +8,7 @@ import httpx
 from arcana.models.adapters.base import (
     CompletionRequest,
     CompletionResponse,
+    MessageParam,
     ModelAdapter,
     ModelHealth,
 )
@@ -82,8 +83,8 @@ class OllamaAdapter(ModelAdapter):
         except Exception as e:
             return ModelHealth(healthy=False, model_id=self.model, message=str(e))
 
-    def _build_messages(self, request: CompletionRequest) -> list[dict[str, str]]:
-        messages: list[dict[str, str]] = []
+    def _build_messages(self, request: CompletionRequest) -> list[MessageParam]:
+        messages: list[MessageParam] = []
         if request.system:
             messages.append({"role": "system", "content": request.system})
         messages.extend(request.messages)

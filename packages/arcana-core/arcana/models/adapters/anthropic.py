@@ -2,10 +2,11 @@
 
 import os
 from collections.abc import AsyncGenerator
-from typing import Any
 
 try:
-    import anthropic
+    from anthropic import AsyncAnthropic
+    from anthropic.types import MessageParam as AnthropicMessageParam
+    from anthropic.types import TextBlock
 except ImportError as e:
     raise ImportError("Install arcana-core[anthropic] to use AnthropicAdapter") from e
 
@@ -36,12 +37,12 @@ class AnthropicAdapter(ModelAdapter):
     ) -> None:
         self.model = model
         self._api_key = api_key
-        self._client: Any = None
+        self._client: AsyncAnthropic | None = None
 
-    def _get_client(self) -> Any:
+    def _get_client(self) -> AsyncAnthropic:
         if self._client is None:
             key = self._api_key or self._resolve_key()
-            self._client = anthropic.AsyncAnthropic(api_key=key)
+            self._client = AsyncAnthropic(api_key=key)
         return self._client
 
     def _resolve_key(self) -> str:
@@ -58,17 +59,31 @@ class AnthropicAdapter(ModelAdapter):
             "Anthropic API key not found. Set ANTHROPIC_API_KEY or run: arcana connect model anthropic --api-key <key>"
         )
 
+    def _build_messages(self, request: CompletionRequest) -> list[AnthropicMessageParam]:
+        result: list[AnthropicMessageParam] = []
+        for msg in request.messages:
+            role = msg["role"]
+            content = msg["content"]
+            if role == "user":
+                result.append(AnthropicMessageParam(role="user", content=content))
+            elif role == "assistant":
+                result.append(AnthropicMessageParam(role="assistant", content=content))
+            elif role == "system":
+                result.append(AnthropicMessageParam(role="system", content=content))
+        return result
+
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
         client = self._get_client()
         response = await client.messages.create(
             model=self.model,
             max_tokens=request.max_tokens,
             system=request.system,
-            messages=request.messages,
+            messages=self._build_messages(request),
             temperature=request.temperature,
         )
+        text = next((block.text for block in response.content if isinstance(block, TextBlock)), "")
         return CompletionResponse(
-            content=response.content[0].text,
+            content=text,
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
             stop_reason=response.stop_reason or "end_turn",
@@ -80,7 +95,7 @@ class AnthropicAdapter(ModelAdapter):
             model=self.model,
             max_tokens=request.max_tokens,
             system=request.system,
-            messages=request.messages,
+            messages=self._build_messages(request),
             temperature=request.temperature,
         ) as stream:
             async for text in stream.text_stream:
@@ -90,5 +105,5 @@ class AnthropicAdapter(ModelAdapter):
         try:
             self._resolve_key()
             return ModelHealth(healthy=True, model_id=self.model)
-        except Exception as e:
-            return ModelHealth(healthy=False, model_id=self.model, message=str(e))
+        except Exception as exc:
+            return ModelHealth(healthy=False, model_id=self.model, message=str(exc))
