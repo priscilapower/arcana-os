@@ -1,7 +1,5 @@
 """TarotCard and related types — the soul of every agent."""
 
-from __future__ import annotations
-
 from enum import StrEnum
 
 from pydantic import BaseModel

@@ -6,8 +6,6 @@ They do NOT make real LLM calls — use mocked responses throughout.
 Real LLM eval runs are in arcana/evals/suites/ and marked @pytest.mark.llm_eval.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from arcana.evals.judge import CompositeJudge, RuleJudge

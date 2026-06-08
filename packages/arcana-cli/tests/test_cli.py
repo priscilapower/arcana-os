@@ -1,11 +1,10 @@
 """Tests for arcana-cli commands — basic invocation and output sanity."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from typer.testing import CliRunner
 
+import arcana_cli.commands.run as run_mod
 from arcana_cli.main import app
 
 runner = CliRunner()
@@ -33,8 +32,6 @@ def test_help_lists_subcommands():
 
 
 def test_init_creates_arcana_home(tmp_path, monkeypatch):
-    import arcana_cli.commands.run as run_mod
-
     fake_home = tmp_path / ".arcana"
     monkeypatch.setattr(run_mod, "ARCANA_HOME", fake_home)
     result = runner.invoke(app, ["init"])
@@ -45,8 +42,6 @@ def test_init_creates_arcana_home(tmp_path, monkeypatch):
 
 
 def test_init_already_exists_is_noop(tmp_path, monkeypatch):
-    import arcana_cli.commands.run as run_mod
-
     fake_home = tmp_path / ".arcana"
     fake_home.mkdir()
     monkeypatch.setattr(run_mod, "ARCANA_HOME", fake_home)
@@ -64,8 +59,6 @@ def test_status_without_init_exits_nonzero(tmp_path, monkeypatch):
 
 
 def test_status_with_init_exits_zero(tmp_path, monkeypatch):
-    import arcana_cli.commands.run as run_mod
-
     fake_home = tmp_path / ".arcana"
     fake_home.mkdir()
     (fake_home / "agents").mkdir()

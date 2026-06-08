@@ -1,7 +1,5 @@
 """Agent and related types."""
 
-from __future__ import annotations
-
 from datetime import datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
@@ -64,5 +62,5 @@ class Agent(BaseModel):
     tags: list[str] = []
     is_archived: bool = False
 
-    # Cloud — workspace scoping (always "local" in Phase 1/2)
-    workspace_id: str = "local"
+    # Cloud — namespace scoping (always "local" in Phase 1/2)
+    namespace_id: str = "local"

@@ -1,6 +1,6 @@
 """Agent management commands."""
 
-from __future__ import annotations
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -105,8 +105,6 @@ def create(
 @app.command("list")
 def list_agents() -> None:
     """List all agents."""
-    from pathlib import Path
-
     agents_dir = Path.home() / ".arcana" / "agents"
     if not agents_dir.exists() or not list(agents_dir.iterdir()):
         console.print("[dim]No agents yet. Run: arcana agent create[/dim]")

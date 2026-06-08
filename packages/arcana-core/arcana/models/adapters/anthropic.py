@@ -1,9 +1,15 @@
 """AnthropicAdapter — Claude models via Anthropic SDK."""
 
-from __future__ import annotations
-
+import os
 from collections.abc import AsyncGenerator
 from typing import Any
+
+try:
+    import anthropic
+except ImportError as e:
+    raise ImportError("Install arcana-core[anthropic] to use AnthropicAdapter") from e
+
+import keyring
 
 from arcana.models.adapters.base import (
     CompletionRequest,
@@ -34,21 +40,15 @@ class AnthropicAdapter(ModelAdapter):
 
     def _get_client(self) -> Any:
         if self._client is None:
-            import anthropic
-
             key = self._api_key or self._resolve_key()
             self._client = anthropic.AsyncAnthropic(api_key=key)
         return self._client
 
     def _resolve_key(self) -> str:
-        import os
-
         key = os.getenv("ANTHROPIC_API_KEY")
         if key:
             return key
         try:
-            import keyring
-
             key = keyring.get_password("arcana", "anthropic_api_key")
             if key:
                 return key

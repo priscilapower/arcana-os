@@ -1,7 +1,5 @@
 """Agent — the central object. Wires card + model + memory + tools together."""
 
-from __future__ import annotations
-
 from collections.abc import AsyncGenerator
 from typing import Any
 from uuid import UUID
@@ -10,7 +8,7 @@ from arcana.cards.engine import CardEngine
 from arcana.cards.registry import get_registry
 from arcana.models.adapters.base import CompletionRequest, ModelAdapter
 from arcana.types.card import Card
-from arcana.types.memory import MemoryEntry, MemoryType
+from arcana.types.memory import MemoryEntry, MemoryQuery, MemoryType
 from arcana.types.session import MessageRole, Session, SessionStatus
 
 
@@ -128,8 +126,6 @@ class Agent:
     async def _retrieve_memory_context(self, prompt: str) -> str:
         if not self.memory:
             return ""
-        from arcana.types.memory import MemoryQuery
-
         query = MemoryQuery(text=prompt, limit=5)
         entries = await self.memory.search(query)
         if not entries:
@@ -151,6 +147,4 @@ class Agent:
 
     def _dummy_id(self) -> UUID:
         """Placeholder until AgentRegistry assigns a real UUID."""
-        import uuid
-
-        return uuid.UUID("00000000-0000-0000-0000-000000000001")
+        return UUID("00000000-0000-0000-0000-000000000001")

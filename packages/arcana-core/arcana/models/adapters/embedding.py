@@ -9,8 +9,6 @@ Keeping embedding generation separate from vector storage means you can switch
 embedding providers (and re-index) without touching the vector store, and vice versa.
 """
 
-from __future__ import annotations
-
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 

@@ -1,7 +1,5 @@
 """Tool, Skill, MCP connection, and MCPRegistry types."""
 
-from __future__ import annotations
-
 from enum import StrEnum
 from typing import Any
 

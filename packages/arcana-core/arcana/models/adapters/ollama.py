@@ -1,7 +1,6 @@
 """OllamaAdapter — local models via Ollama."""
 
-from __future__ import annotations
-
+import json
 from collections.abc import AsyncGenerator
 
 import httpx
@@ -61,8 +60,6 @@ class OllamaAdapter(ModelAdapter):
         }
         async with self._client.stream("POST", f"{self.endpoint}/api/chat", json=payload) as response:
             response.raise_for_status()
-            import json
-
             async for line in response.aiter_lines():
                 if line:
                     chunk = json.loads(line)

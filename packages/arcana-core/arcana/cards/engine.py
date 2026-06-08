@@ -8,8 +8,6 @@ Blending rules:
 Produces: system_prompt, temperature, memory_weights, decay_config, suggested_skills.
 """
 
-from __future__ import annotations
-
 from arcana.cards.registry import CardRegistry
 from arcana.types.card import (
     AgentConfig,

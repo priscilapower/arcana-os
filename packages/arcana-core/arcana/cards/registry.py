@@ -1,7 +1,5 @@
 """CardRegistry — loads and provides access to all 22 card definitions."""
 
-from __future__ import annotations
-
 from functools import lru_cache
 
 from arcana.types.card import Card, TarotCard

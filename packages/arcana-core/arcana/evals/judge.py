@@ -11,11 +11,16 @@ Design principle:
   This prevents circular evaluation where the model grades its own outputs.
 """
 
-from __future__ import annotations
-
+import json
 import time
 from abc import ABC, abstractmethod
 from typing import Any
+
+try:
+    import anthropic
+    from anthropic.types import TextBlock
+except ImportError as e:
+    raise ImportError("Install arcana-core[anthropic] to use LLMJudge") from e
 
 from arcana.evals.types import (
     DimensionScore,
@@ -130,18 +135,18 @@ class LLMJudge(BaseJudge):
     JUDGE_MODEL = "claude-opus-4-5"
 
     JUDGE_SYSTEM = """You are a calibrated evaluator of AI agent responses.
-Your job is to score responses against defined quality dimensions.
+    Your job is to score responses against defined quality dimensions.
 
-Scoring guidelines:
-  1.0 = Excellent — clearly meets the dimension's criteria
-  0.7 = Good — mostly meets criteria with minor gaps
-  0.5 = Partial — meets some criteria but has notable gaps
-  0.3 = Poor — barely meets criteria
-  0.0 = Fail — does not meet the dimension's criteria at all
+    Scoring guidelines:
+      1.0 = Excellent — clearly meets the dimension's criteria
+      0.7 = Good — mostly meets criteria with minor gaps
+      0.5 = Partial — meets some criteria but has notable gaps
+      0.3 = Poor — barely meets criteria
+      0.0 = Fail — does not meet the dimension's criteria at all
 
-Be calibrated, not generous. A score of 0.7 means "good but not excellent".
-Respond ONLY with valid JSON matching the specified schema. No preamble.
-"""
+    Be calibrated, not generous. A score of 0.7 means "good but not excellent".
+    Respond ONLY with valid JSON matching the specified schema. No preamble.
+    """
 
     def __init__(self, model: str | None = None) -> None:
         self._model = model or self.JUDGE_MODEL
@@ -192,10 +197,6 @@ Respond ONLY with valid JSON matching the specified schema. No preamble.
 
     async def _call_judge(self, case: EvalCase, result: EvalResult) -> dict[str, Any]:
         """Call the judge model. Returns raw parsed JSON."""
-        import json
-
-        import anthropic
-
         dimensions_spec = "\n".join(f'  - "{d.name}": {d.description}' for d in case.rubric.dimensions)
         schema = {
             "scores": {
@@ -206,19 +207,19 @@ Respond ONLY with valid JSON matching the specified schema. No preamble.
 
         user_message = f"""Evaluate this AI agent response.
 
-## Original prompt
-{case.prompt}
+        ## Original prompt
+        {case.prompt}
 
-## Agent response
-{result.response}
+        ## Agent response
+        {result.response}
 
-## Dimensions to score
-{dimensions_spec}
+        ## Dimensions to score
+        {dimensions_spec}
 
-## Required JSON schema
-{json.dumps(schema, indent=2)}
+        ## Required JSON schema
+        {json.dumps(schema, indent=2)}
 
-Score each dimension from 0.0 to 1.0 with one-sentence reasoning."""
+        Score each dimension from 0.0 to 1.0 with one-sentence reasoning."""
 
         client = anthropic.AsyncAnthropic()
         response = await client.messages.create(
@@ -227,8 +228,6 @@ Score each dimension from 0.0 to 1.0 with one-sentence reasoning."""
             system=self.JUDGE_SYSTEM,
             messages=[{"role": "user", "content": user_message}],
         )
-
-        from anthropic.types import TextBlock
 
         first_block = response.content[0]
         raw = first_block.text.strip() if isinstance(first_block, TextBlock) else ""

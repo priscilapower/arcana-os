@@ -22,15 +22,16 @@ Usage:
     arcana eval run --baseline <id> # regression check
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from arcana.agents.agent import Agent
 from arcana.evals.judge import CompositeJudge, LLMJudge
+from arcana.evals.suites.blending import BLENDING_CASES
+from arcana.evals.suites.cards import CARD_CASES
 from arcana.evals.types import (
     EvalCase,
     EvalResult,
@@ -39,6 +40,8 @@ from arcana.evals.types import (
     RegressionDetail,
     RegressionReport,
 )
+from arcana.models.adapters.anthropic import AnthropicAdapter
+from arcana.models.adapters.ollama import OllamaAdapter
 
 RESULTS_DIR = Path.home() / ".arcana" / "evals" / "results"
 
@@ -106,9 +109,6 @@ class EvalHarness:
     # ------------------------------------------------------------------
 
     def _load_cases(self, suite: str | None = None) -> list[EvalCase]:
-        from arcana.evals.suites.blending import BLENDING_CASES
-        from arcana.evals.suites.cards import CARD_CASES
-
         all_cases = [*CARD_CASES, *BLENDING_CASES]
         if suite:
             all_cases = [c for c in all_cases if c.suite == suite]
@@ -175,10 +175,6 @@ class EvalHarness:
         TODO: Wire to real AgentRegistry in Epic 5.
         Currently uses Agent directly with the card config.
         """
-        from arcana.agents.agent import Agent
-        from arcana.models.adapters.anthropic import AnthropicAdapter
-        from arcana.models.adapters.ollama import OllamaAdapter
-
         start = time.monotonic()
 
         # Resolve model

@@ -1,7 +1,7 @@
 """Top-level CLI commands: init, status, run."""
 
-from __future__ import annotations
-
+import asyncio
+import json
 from pathlib import Path
 
 import typer
@@ -27,8 +27,6 @@ def init_cmd() -> None:
         (ARCANA_HOME / "cards" / "custom").mkdir(parents=True)
         (ARCANA_HOME / "spreads").mkdir()
         (ARCANA_HOME / "vector").mkdir()
-
-        import json
 
         config = {
             "version": "0.1.0",
@@ -73,7 +71,6 @@ def run_cmd(
     no_memory: bool = typer.Option(False, "--no-memory", help="Stateless run"),
 ) -> None:
     """Run a prompt — The World routes it, or specify --agent directly."""
-    import asyncio
 
     async def _run() -> None:
         if agent:

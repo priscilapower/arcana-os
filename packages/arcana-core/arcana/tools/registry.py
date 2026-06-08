@@ -15,8 +15,6 @@ At session start, Agent asks the registry to resolve subscriptions
 into ToolDefinitions, filtered by model capability.
 """
 
-from __future__ import annotations
-
 import json
 from functools import lru_cache
 from pathlib import Path
@@ -57,7 +55,7 @@ class MCPRegistry:
         self._loaded = True
 
     def save(self) -> None:
-        """Persist server configs to disk (no secrets — those live in keyring)."""
+        """Persist server configs to disk (no secrets)."""
         self.CONNECTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
         data = {"servers": [s.model_dump(exclude={"status"}) for s in self._servers.values()]}
         self.CONNECTIONS_FILE.write_text(json.dumps(data, indent=2))

@@ -1,13 +1,17 @@
 """Evaluation harness CLI commands."""
 
-from __future__ import annotations
-
 import asyncio
+import json
+from pathlib import Path
 from typing import Any
 
 import typer
 from rich.console import Console
 from rich.table import Table
+
+from arcana.evals.harness import EvalHarness
+from arcana.evals.suites.blending import BLENDING_CASES
+from arcana.evals.suites.cards import CARD_CASES
 
 app = typer.Typer(help="Run evaluation suites.")
 console = Console()
@@ -26,7 +30,6 @@ def run(
     ),
 ) -> None:
     """Run evaluation suites against live agents."""
-    from arcana.evals.harness import EvalHarness
 
     async def _run() -> None:
         harness = EvalHarness(
@@ -54,9 +57,6 @@ def list_cases(
     suite: str | None = typer.Option(None, "--suite", "-s"),
 ) -> None:
     """List all available eval cases."""
-    from arcana.evals.suites.blending import BLENDING_CASES
-    from arcana.evals.suites.cards import CARD_CASES
-
     all_cases = [*CARD_CASES, *BLENDING_CASES]
     if suite:
         all_cases = [c for c in all_cases if c.suite == suite]
@@ -84,9 +84,6 @@ def show_results(
     run_id: str = typer.Argument(..., help="Run ID to show"),
 ) -> None:
     """Show results from a previous eval run."""
-    import json
-    from pathlib import Path
-
     results_path = Path(__file__).parent.parent.parent.parent.parent / "evals" / "results" / f"{run_id}.json"
     if not results_path.exists():
         console.print(f"[red]No results found for run: {run_id}[/red]")

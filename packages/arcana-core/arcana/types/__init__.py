@@ -40,6 +40,7 @@ from arcana.types.tool import (
     ToolSubscription,
     ToolType,
 )
+from arcana.types.workspace import Workspace
 from arcana.types.world import RoutingRule, Spread, SpreadLayout
 
 __all__ = [
@@ -84,4 +85,6 @@ __all__ = [
     "RoutingRule",
     "Spread",
     "SpreadLayout",
+    # Workspace
+    "Workspace",
 ]

@@ -8,8 +8,6 @@ JudgeVerdict — scores from a judge
 RegressionReport — comparison between two eval runs
 """
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
