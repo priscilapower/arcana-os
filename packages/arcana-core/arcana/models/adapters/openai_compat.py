@@ -62,7 +62,7 @@ def _to_openai_tools(tools: Sequence[ToolParam]) -> list[ChatCompletionToolParam
             function=FunctionDefinition(
                 name=t["name"],
                 description=t["description"],
-                parameters=t["input_schema"],
+                parameters=t["input_schema"],  # type: ignore[arg-type]  # dict invariance at SDK boundary
             ),
         )
         for t in tools

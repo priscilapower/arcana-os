@@ -12,6 +12,7 @@ Architecture summary:
 
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Protocol, runtime_checkable
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -386,3 +387,16 @@ class ConsolidationReport(BaseModel):
     conflicts_detected: int = 0
     conflicts_resolved: int = 0
     ran_at: datetime = Field(default_factory=now_utc)
+
+
+# ---------------------------------------------------------------------------
+# Adapter protocol
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class MemoryAdapter(Protocol):
+    """Structural interface for any memory backend wired into an Agent."""
+
+    async def search(self, query: MemoryQuery) -> list[MemoryEntry]: ...
+    async def write(self, entry: MemoryEntry) -> None: ...

@@ -3,7 +3,9 @@
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Sequence
 from dataclasses import dataclass
-from typing import Any, TypedDict
+from typing import TypedDict
+
+from arcana.types._utils import JsonObject
 
 
 class MessageParam(TypedDict):
@@ -39,7 +41,7 @@ class ToolParam(TypedDict):
 
     name: str
     description: str
-    input_schema: dict[str, Any]
+    input_schema: JsonObject
 
 
 @dataclass

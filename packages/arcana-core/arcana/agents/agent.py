@@ -1,14 +1,13 @@
 """Agent — the central object. Wires card + model + memory + tools together."""
 
 from collections.abc import AsyncGenerator
-from typing import Any
 from uuid import UUID
 
 from arcana.cards.engine import CardEngine
 from arcana.cards.registry import get_registry
 from arcana.models.adapters.base import CompletionRequest, ModelAdapter
 from arcana.types.card import Card
-from arcana.types.memory import MemoryEntry, MemoryQuery, MemoryType
+from arcana.types.memory import MemoryAdapter, MemoryEntry, MemoryQuery, MemoryType
 from arcana.types.session import MessageRole, Session, SessionStatus
 
 
@@ -32,7 +31,7 @@ class Agent:
         model: ModelAdapter,
         description: str = "",
         modifier_cards: list[Card] | None = None,
-        memory: Any = None,
+        memory: MemoryAdapter | None = None,
         system_prompt_override: str | None = None,
     ) -> None:
         self.name = name

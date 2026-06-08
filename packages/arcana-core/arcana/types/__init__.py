@@ -1,5 +1,6 @@
 """All Pydantic types — import from here."""
 
+from arcana.types._utils import JsonObject, JsonValue
 from arcana.types.agent import Agent, AgentStatus
 from arcana.types.card import (
     AgentConfig,
@@ -12,6 +13,7 @@ from arcana.types.card import (
 from arcana.types.memory import (
     AdapterCapabilities,
     AdapterHealth,
+    MemoryAdapter,
     MemoryEntry,
     MemoryQuery,
     MemoryScope,
@@ -44,6 +46,9 @@ from arcana.types.workspace import Workspace
 from arcana.types.world import RoutingRule, Spread, SpreadLayout
 
 __all__ = [
+    # JSON primitives
+    "JsonValue",
+    "JsonObject",
     # Agent
     "Agent",
     "AgentStatus",
@@ -55,6 +60,7 @@ __all__ = [
     "MemoryWeights",
     "AgentConfig",
     # Memory
+    "MemoryAdapter",
     "MemoryEntry",
     "MemoryQuery",
     "MemoryType",

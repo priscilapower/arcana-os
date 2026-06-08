@@ -1,9 +1,10 @@
 """Tool, Skill, MCP connection, and MCPRegistry types."""
 
 from enum import StrEnum
-from typing import Any
 
 from pydantic import BaseModel
+
+from arcana.types._utils import JsonObject, JsonValue
 
 
 class ToolType(StrEnum):
@@ -17,8 +18,8 @@ class ToolDefinition(BaseModel):
 
     name: str
     description: str
-    input_schema: dict[str, Any]
-    output_schema: dict[str, Any] = {}
+    input_schema: JsonObject
+    output_schema: JsonObject = {}
     type: ToolType = ToolType.BUILTIN
     mcp_server_name: str | None = None  # e.g. "notion-mcp"
 
@@ -33,7 +34,7 @@ class ToolDefinition(BaseModel):
 class ToolResult(BaseModel):
     tool_name: str
     success: bool
-    output: Any = None
+    output: JsonValue = None
     error: str | None = None
     duration_ms: int = 0
 
