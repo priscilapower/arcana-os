@@ -66,8 +66,11 @@ def _make_store(*, api_key: str | None = None) -> MagicMock:
 
 def _make_registry(adapter: MagicMock) -> ProviderRegistry:
     factory = MagicMock(return_value=adapter)
-    entry = ProviderEntry(factory=factory, default_endpoint="http://localhost:11434")
-    return ProviderRegistry({"ollama": entry, "anthropic": entry})
+    ollama_entry = ProviderEntry(
+        factory=factory, default_endpoint="http://localhost:11434", provider=ModelProvider.OLLAMA
+    )
+    anthropic_entry = ProviderEntry(factory=factory, default_endpoint="", provider=ModelProvider.ANTHROPIC)
+    return ProviderRegistry({"ollama": ollama_entry, "anthropic": anthropic_entry})
 
 
 # ---------------------------------------------------------------------------
@@ -681,7 +684,7 @@ async def test_health_all_cached():
 async def test_adapter_cached_per_connection():
     adapter = _make_adapter()
     factory = MagicMock(return_value=adapter)
-    entry = ProviderEntry(factory=factory, default_endpoint="http://localhost:11434")
+    entry = ProviderEntry(factory=factory, default_endpoint="http://localhost:11434", provider=ModelProvider.OLLAMA)
     registry = ProviderRegistry({"ollama": entry})
     store = _make_store()
     gw = ModelGateway(connections=store, providers=registry)
@@ -740,6 +743,20 @@ def test_cache_key_different_endpoints():
     k1 = _cache_key("openai_compat", "http://localhost:1234", None)
     k2 = _cache_key("openai_compat", "http://localhost:5678", None)
     assert k1 != k2
+
+
+# ---------------------------------------------------------------------------
+# Provider registry consistency
+# ---------------------------------------------------------------------------
+
+
+def test_every_alias_resolves_to_factory_and_enum():
+    """Every alias in the default registry must have a factory and a valid ModelProvider."""
+    from arcana.models.gateway import _DEFAULT_ENTRIES
+
+    for alias, entry in _DEFAULT_ENTRIES.items():
+        assert callable(entry.factory), f"{alias}: factory is not callable"
+        assert isinstance(entry.provider, ModelProvider), f"{alias}: {entry.provider!r} is not a valid ModelProvider"
 
 
 # ---------------------------------------------------------------------------

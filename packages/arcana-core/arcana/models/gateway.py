@@ -69,10 +69,11 @@ _AdapterFactory = Callable[[ModelConnection, str | None], ModelAdapter]
 
 @dataclass
 class ProviderEntry:
-    """Maps a provider string to an adapter factory and its default endpoint."""
+    """Maps a provider string to an adapter factory, its default endpoint, and canonical enum."""
 
     factory: _AdapterFactory
     default_endpoint: str
+    provider: "ModelProvider"
 
 
 def _ollama_factory(conn: ModelConnection, _api_key: str | None) -> ModelAdapter:
@@ -102,27 +103,16 @@ def _custom_factory(conn: ModelConnection, api_key: str | None) -> ModelAdapter:
     )
 
 
-# Provider string → (factory, default endpoint).
-# Aliases (lmstudio, openai-compat) map to the same factory as openai.
+# Single source of truth: provider alias → (factory, default endpoint, canonical enum).
+# Aliases (lmstudio, openai-compat) share a factory and all point to OPENAI_COMPAT.
 _DEFAULT_ENTRIES: dict[str, ProviderEntry] = {
-    "ollama": ProviderEntry(_ollama_factory, "http://localhost:11434"),
-    "anthropic": ProviderEntry(_anthropic_factory, ""),
-    "openai": ProviderEntry(_openai_compat_factory, "https://api.openai.com/v1"),
-    "lmstudio": ProviderEntry(_openai_compat_factory, "http://localhost:1234/v1"),
-    "openai-compat": ProviderEntry(_openai_compat_factory, ""),
-    "openai_compat": ProviderEntry(_openai_compat_factory, ""),
-    "custom": ProviderEntry(_custom_factory, ""),
-}
-
-# Normalize provider strings to ModelProvider enum values for ConnectionStore lookup.
-_PROVIDER_ENUM: dict[str, ModelProvider] = {
-    "ollama": ModelProvider("ollama"),
-    "anthropic": ModelProvider("anthropic"),
-    "openai": ModelProvider("openai"),
-    "lmstudio": ModelProvider("openai_compat"),
-    "openai-compat": ModelProvider("openai_compat"),
-    "openai_compat": ModelProvider("openai_compat"),
-    "custom": ModelProvider("custom"),
+    "ollama": ProviderEntry(_ollama_factory, "http://localhost:11434", ModelProvider.OLLAMA),
+    "anthropic": ProviderEntry(_anthropic_factory, "", ModelProvider.ANTHROPIC),
+    "openai": ProviderEntry(_openai_compat_factory, "https://api.openai.com/v1", ModelProvider.OPENAI),
+    "lmstudio": ProviderEntry(_openai_compat_factory, "http://localhost:1234/v1", ModelProvider.OPENAI_COMPAT),
+    "openai-compat": ProviderEntry(_openai_compat_factory, "", ModelProvider.OPENAI_COMPAT),
+    "openai_compat": ProviderEntry(_openai_compat_factory, "", ModelProvider.OPENAI_COMPAT),
+    "custom": ProviderEntry(_custom_factory, "", ModelProvider.CUSTOM),
 }
 
 
@@ -150,7 +140,7 @@ class ProviderRegistry:
             )
         return ModelConnection(
             name=f"{provider}/{model_id}",
-            provider=_PROVIDER_ENUM.get(provider, ModelProvider.CUSTOM),
+            provider=entry.provider,
             model_id=model_id,
             endpoint=entry.default_endpoint,
         )
@@ -312,10 +302,10 @@ class ModelGateway:
         defaults so out-of-the-box usage requires no config file.
         """
         provider, model_id = self._parse_model_string(model)
-        enum_provider = _PROVIDER_ENUM.get(provider)
+        entry = self._providers.get(provider)
 
-        if enum_provider is not None:
-            conn = self._connections.get_by_provider(enum_provider)
+        if entry is not None:
+            conn = self._connections.get_by_provider(entry.provider)
             if conn is not None:
                 return conn.model_copy(update={"model_id": model_id})
 
