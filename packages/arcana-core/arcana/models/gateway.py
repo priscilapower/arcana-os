@@ -85,7 +85,7 @@ def _ollama_factory(conn: ModelConnection, _api_key: str | None) -> ModelAdapter
 
 
 def _anthropic_factory(conn: ModelConnection, api_key: str | None) -> ModelAdapter:
-    return AnthropicAdapter(model=conn.model_id, api_key=api_key)
+    return AnthropicAdapter(model=conn.model_id, api_key=api_key, connection_id=conn.id)
 
 
 def _openai_compat_factory(conn: ModelConnection, api_key: str | None) -> ModelAdapter:

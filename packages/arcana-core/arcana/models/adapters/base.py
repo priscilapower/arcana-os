@@ -131,8 +131,9 @@ class ModelAdapter(ABC):
     def _translate(self, exc: Exception, model_id: str) -> Exception:
         """Translate a provider-specific exception into the shared error taxonomy.
 
-        Override in every concrete adapter. The gateway's retry logic is
-        provider-agnostic — it only ever sees ``ModelError`` subclasses.
+        Must be overridden in every concrete adapter. The gateway's retry logic
+        only catches ``ModelError`` subclasses — a missing override leaks raw
+        provider exceptions past the retry net.
         Return the original ``exc`` unchanged for errors that need no translation.
         """
-        return exc
+        raise NotImplementedError(f"{type(self).__name__} must override _translate")

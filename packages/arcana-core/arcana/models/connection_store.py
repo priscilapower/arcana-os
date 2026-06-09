@@ -1,12 +1,51 @@
 """ConnectionStore — loads ModelConnections from ~/.arcana/connections/models.json."""
 
 import json
+import os
 from pathlib import Path
 from uuid import UUID
 
 import keyring
 
 from arcana.types.model import ModelConnection, ModelProvider
+
+
+def resolve_api_key(
+    connection_id: UUID | None,
+    env_var: str,
+    provider_key_name: str,
+    *,
+    direct: str | None = None,
+) -> str | None:
+    """Resolve an API key using the canonical four-step precedence.
+
+    1. ``direct`` — explicit key passed at construction time (highest priority).
+    2. Connection-id keyring — ``keyring("arcana", "<connection_id>_api_key")``.
+    3. Environment variable — ``os.getenv(env_var)``.
+    4. Provider-named keyring — ``keyring("arcana", provider_key_name)``.
+
+    Returns the first non-empty value found, or ``None`` if all steps miss.
+    Callers that require a key should raise after receiving ``None``.
+    """
+    if direct:
+        return direct
+    if connection_id is not None:
+        try:
+            key = keyring.get_password("arcana", f"{connection_id}_api_key")
+            if key:
+                return key
+        except Exception:
+            pass
+    key = os.getenv(env_var)
+    if key:
+        return key
+    try:
+        key = keyring.get_password("arcana", provider_key_name)
+        if key:
+            return key
+    except Exception:
+        pass
+    return None
 
 
 def _default_path() -> Path:

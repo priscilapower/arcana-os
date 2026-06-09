@@ -5,6 +5,48 @@ import pytest
 from arcana.models.adapters.base import CompletionRequest, ModelAdapter, ModelHealth
 from arcana.models.errors import ModelBadRequestError
 
+# ---------------------------------------------------------------------------
+# _translate override enforcement
+# ---------------------------------------------------------------------------
+
+
+def test_all_adapters_override_translate():
+    """Every concrete ModelAdapter must override _translate.
+
+    The base raises NotImplementedError — an adapter that inherits it would
+    leak raw provider exceptions past the gateway's retry net.
+    """
+    from arcana.models.adapters.anthropic import AnthropicAdapter
+    from arcana.models.adapters.custom_api import CustomAPIAdapter
+    from arcana.models.adapters.ollama import OllamaAdapter
+    from arcana.models.adapters.openai_compat import OpenAICompatAdapter
+
+    concrete_adapters = [AnthropicAdapter, OllamaAdapter, OpenAICompatAdapter, CustomAPIAdapter]
+    for cls in concrete_adapters:
+        assert "_translate" in cls.__dict__, (
+            f"{cls.__name__} must override _translate — "
+            "the base raises NotImplementedError and raw provider exceptions must not escape the gateway"
+        )
+
+
+def test_base_translate_raises_not_implemented():
+    """ModelAdapter._translate raises NotImplementedError when not overridden."""
+
+    class _NoTranslate(ModelAdapter):
+        async def complete(self, request):  # type: ignore[override]
+            return None
+
+        async def stream(self, request):  # type: ignore[override]
+            return
+            yield
+
+        async def health_check(self):
+            return ModelHealth(healthy=True, model_id="stub")
+
+    adapter = _NoTranslate()
+    with pytest.raises(NotImplementedError, match="_translate"):
+        adapter._translate(ValueError("boom"), "model")
+
 
 class _StubAdapter(ModelAdapter):
     """Minimal adapter with no tool support (uses base default supports_tools=False)."""

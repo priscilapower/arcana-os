@@ -1,9 +1,9 @@
 """AnthropicAdapter — Claude models via Anthropic SDK."""
 
 import json
-import os
 from collections.abc import AsyncGenerator
 from typing import cast
+from uuid import UUID
 
 try:
     import anthropic as _anthropic_mod
@@ -13,8 +13,6 @@ try:
     from anthropic.types import ToolParam as AnthropicToolParam
 except ImportError as e:
     raise ImportError("Install arcana-core[anthropic] to use AnthropicAdapter") from e
-
-import keyring
 
 from arcana.models.adapters.base import (
     CompletionRequest,
@@ -26,6 +24,7 @@ from arcana.models.adapters.base import (
     ToolCallResult,
     ToolParam,
 )
+from arcana.models.connection_store import resolve_api_key
 from arcana.models.errors import (
     ModelAuthError,
     ModelBadRequestError,
@@ -33,6 +32,9 @@ from arcana.models.errors import (
     ModelTransientError,
     ModelUnavailableError,
 )
+
+_ENV_VAR = "ANTHROPIC_API_KEY"
+_PROVIDER_KEY = "anthropic_api_key"
 
 
 def _to_anthropic_tools(tools: list[ToolParam]) -> list[AnthropicToolParam]:
@@ -52,7 +54,12 @@ def _to_anthropic_tools(tools: list[ToolParam]) -> list[AnthropicToolParam]:
 class AnthropicAdapter(ModelAdapter):
     """
     Connects to Anthropic's API.
-    API key resolved from: argument → ANTHROPIC_API_KEY env → keyring.
+
+    API key precedence (see ``resolve_api_key`` in ``connection_store``):
+      1. ``api_key`` argument
+      2. Connection-id keyring entry (``{connection_id}_api_key``)
+      3. ``ANTHROPIC_API_KEY`` environment variable
+      4. Provider-named keyring entry (``anthropic_api_key``)
 
     Usage:
         adapter = AnthropicAdapter(model="claude-sonnet-4-6")
@@ -65,9 +72,11 @@ class AnthropicAdapter(ModelAdapter):
         self,
         model: str = "claude-sonnet-4-6",
         api_key: str | None = None,
+        connection_id: UUID | None = None,
     ) -> None:
         self.model = model
         self._api_key = api_key
+        self._connection_id = connection_id
         self._client: AsyncAnthropic | None = None
 
     def _translate(self, exc: Exception, model_id: str) -> Exception:
@@ -104,15 +113,9 @@ class AnthropicAdapter(ModelAdapter):
         return self._client
 
     def _resolve_key(self) -> str:
-        key = os.getenv("ANTHROPIC_API_KEY")
+        key = resolve_api_key(self._connection_id, _ENV_VAR, _PROVIDER_KEY)
         if key:
             return key
-        try:
-            key = keyring.get_password("arcana", "anthropic_api_key")
-            if key:
-                return key
-        except Exception:
-            pass
         raise ValueError(
             "Anthropic API key not found. Set ANTHROPIC_API_KEY or run: arcana connect model anthropic --api-key <key>"
         )

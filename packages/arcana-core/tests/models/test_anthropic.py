@@ -54,17 +54,64 @@ def test_resolve_key_reads_env_var(monkeypatch):
 
 def test_resolve_key_falls_back_to_keyring(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    with patch("arcana.models.adapters.anthropic.keyring.get_password", return_value="keyring-key"):
+    with patch("arcana.models.connection_store.keyring.get_password", return_value="keyring-key"):
         adapter = AnthropicAdapter()
         assert adapter._resolve_key() == "keyring-key"
 
 
 def test_resolve_key_raises_when_no_key_found(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    with patch("arcana.models.adapters.anthropic.keyring.get_password", return_value=None):
+    with patch("arcana.models.connection_store.keyring.get_password", return_value=None):
         adapter = AnthropicAdapter()
         with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
             adapter._resolve_key()
+
+
+def test_api_key_resolution_precedence(monkeypatch):
+    """resolve_api_key follows: direct → connection-id keyring → env var → provider keyring."""
+    from uuid import UUID
+
+    from arcana.models.connection_store import resolve_api_key
+
+    conn_id = UUID("12345678-1234-1234-1234-123456789abc")
+    env_var = "TEST_ARCANA_API_KEY_XYZ_UNIQUE"
+    provider_key = "test_provider_arcana_key"
+    monkeypatch.delenv(env_var, raising=False)
+
+    # Step 1: direct wins over everything
+    with patch("arcana.models.connection_store.keyring.get_password", return_value="kr-key"):
+        monkeypatch.setenv(env_var, "env-key")
+        assert resolve_api_key(conn_id, env_var, provider_key, direct="direct-key") == "direct-key"
+    monkeypatch.delenv(env_var, raising=False)
+
+    # Step 2: connection-id keyring entry wins over env and provider keyring
+    def _kr_conn(service: str, key: str) -> str | None:
+        return "conn-key" if key == f"{conn_id}_api_key" else "provider-key"
+
+    with patch("arcana.models.connection_store.keyring.get_password", side_effect=_kr_conn):
+        monkeypatch.setenv(env_var, "env-key")
+        assert resolve_api_key(conn_id, env_var, provider_key) == "conn-key"
+    monkeypatch.delenv(env_var, raising=False)
+
+    # Step 3: env var wins over provider keyring when connection-id entry is absent
+    def _kr_none(service: str, key: str) -> None:
+        return None
+
+    with patch("arcana.models.connection_store.keyring.get_password", side_effect=_kr_none):
+        monkeypatch.setenv(env_var, "env-key")
+        assert resolve_api_key(conn_id, env_var, provider_key) == "env-key"
+    monkeypatch.delenv(env_var, raising=False)
+
+    # Step 4: provider keyring is the last resort when nothing else matches
+    def _kr_provider(service: str, key: str) -> str | None:
+        return "provider-key" if key == provider_key else None
+
+    with patch("arcana.models.connection_store.keyring.get_password", side_effect=_kr_provider):
+        assert resolve_api_key(conn_id, env_var, provider_key) == "provider-key"
+
+    # None when all steps miss
+    with patch("arcana.models.connection_store.keyring.get_password", return_value=None):
+        assert resolve_api_key(conn_id, env_var, provider_key) is None
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +313,7 @@ async def test_health_check_healthy_when_key_available(monkeypatch):
 @pytest.mark.asyncio
 async def test_health_check_unhealthy_when_key_missing(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    with patch("arcana.models.adapters.anthropic.keyring.get_password", return_value=None):
+    with patch("arcana.models.connection_store.keyring.get_password", return_value=None):
         adapter = AnthropicAdapter()
         health = await adapter.health_check()
 
