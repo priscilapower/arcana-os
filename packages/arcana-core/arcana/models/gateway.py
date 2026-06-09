@@ -296,14 +296,24 @@ class ModelGateway:
         return results
 
     def resolve(self, model: str) -> ModelConnection:
-        """Parse ``provider/model_id`` and return a ``ModelConnection``.
+        """Parse ``provider/model_id`` or ``provider:connection_name/model_id`` and return a ``ModelConnection``.
 
-        Checks ``ConnectionStore`` first; falls back to ``ProviderRegistry``
-        defaults so out-of-the-box usage requires no config file.
+        When a connection name is given, looks it up by name in ``ConnectionStore`` and raises
+        ``ValueError`` if it doesn't exist.  Without a name, checks by provider first then falls
+        back to ``ProviderRegistry`` defaults so out-of-the-box usage requires no config file.
         """
-        provider, model_id = self._parse_model_string(model)
-        entry = self._providers.get(provider)
+        provider, conn_name, model_id = self._parse_model_string(model)
 
+        if conn_name is not None:
+            conn = self._connections.get_by_name(conn_name)
+            if conn is None:
+                raise ValueError(
+                    f"No connection named {conn_name!r} found. "
+                    f"Add it with `arcana connect model` or check your connections file."
+                )
+            return conn.model_copy(update={"model_id": model_id})
+
+        entry = self._providers.get(provider)
         if entry is not None:
             conn = self._connections.get_by_provider(entry.provider)
             if conn is not None:
@@ -329,14 +339,23 @@ class ModelGateway:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _parse_model_string(model: str) -> tuple[str, str]:
+    def _parse_model_string(model: str) -> tuple[str, str | None, str]:
+        """Return ``(provider, connection_name_or_None, model_id)``."""
+        _invalid = (
+            f"Invalid model string: {model!r}. "
+            f"Expected 'provider/model_id' or 'provider:connection_name/model_id' "
+            f"(e.g. 'ollama/hermes-3', 'openai:groq/llama-3')."
+        )
         parts = model.split("/", 1)
         if len(parts) != 2 or not parts[0] or not parts[1]:
-            raise ValueError(
-                f"Invalid model string: {model!r}. Expected 'provider/model_id' "
-                f"(e.g. 'ollama/hermes-3', 'anthropic/claude-sonnet-4-6')."
-            )
-        return parts[0], parts[1]
+            raise ValueError(_invalid)
+        left, model_id = parts
+        if ":" in left:
+            provider, conn_name = left.split(":", 1)
+            if not provider or not conn_name:
+                raise ValueError(_invalid)
+            return provider, conn_name, model_id
+        return left, None, model_id
 
     async def _get_cache_entry(self, conn: ModelConnection) -> _CacheEntry:
         provider = str(conn.provider)

@@ -353,6 +353,44 @@ def test_resolve_lmstudio_alias():
     assert conn.provider == ModelProvider.OPENAI_COMPAT
 
 
+def test_resolve_selects_named_connection():
+    conn = ModelConnection(
+        name="groq",
+        provider=ModelProvider.OPENAI_COMPAT,
+        model_id="some-default",
+        endpoint="https://api.groq.com/v1",
+    )
+    store = MagicMock(spec=ConnectionStore)
+    store.get_by_name.return_value = conn
+    store.get_api_key.return_value = None
+    gw = ModelGateway(connections=store)
+
+    resolved = gw.resolve("openai:groq/llama-3")
+    assert resolved.name == "groq"
+    assert resolved.model_id == "llama-3"
+    assert resolved.endpoint == "https://api.groq.com/v1"
+    store.get_by_name.assert_called_once_with("groq")
+
+
+def test_resolve_unnamed_falls_back_to_provider():
+    store = _make_store()
+    gw = ModelGateway(connections=store)
+
+    conn = gw.resolve("ollama/llama3")
+    assert conn.model_id == "llama3"
+    store.get_by_name.assert_not_called()
+    store.get_by_provider.assert_called_once()
+
+
+def test_resolve_unknown_named_connection_raises():
+    store = MagicMock(spec=ConnectionStore)
+    store.get_by_name.return_value = None
+    gw = ModelGateway(connections=store)
+
+    with pytest.raises(ValueError, match="No connection named 'ghost'"):
+        gw.resolve("openai:ghost/gpt-4")
+
+
 # ---------------------------------------------------------------------------
 # ModelGateway.complete() — dispatch and cost
 # ---------------------------------------------------------------------------
