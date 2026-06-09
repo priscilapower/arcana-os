@@ -170,22 +170,22 @@ def test_create_with_tags(tmp_registry: AgentRegistry, model_connection_id):
     assert "research" in record.tags
 
 
-def test_build_runtime_uses_record_id(tmp_registry: AgentRegistry, model_connection_id, adapter):
+def test_build_runtime_uses_record_id(tmp_registry: AgentRegistry, model_connection_id, gateway):
     record = tmp_registry.create(
         name="runtime-test",
         card=Card.HERMIT,
         model_connection_id=model_connection_id,
     )
-    agent = tmp_registry.build_runtime(record, adapter)
+    agent = tmp_registry.build_runtime(record, gateway, "ollama/test")
     assert agent.id == record.id
 
 
-def test_build_runtime_uses_record_system_prompt(tmp_registry: AgentRegistry, model_connection_id, adapter):
+def test_build_runtime_uses_record_system_prompt(tmp_registry: AgentRegistry, model_connection_id, gateway):
     record = tmp_registry.create(
         name="rt",
         card=Card.HERMIT,
         model_connection_id=model_connection_id,
         system_prompt_override="Custom prompt.",
     )
-    agent = tmp_registry.build_runtime(record, adapter)
+    agent = tmp_registry.build_runtime(record, gateway, "ollama/test")
     assert agent._system_prompt == "Custom prompt."

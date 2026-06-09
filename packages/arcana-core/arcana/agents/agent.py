@@ -8,7 +8,8 @@ from uuid import UUID, uuid4
 
 from arcana.cards.engine import CardEngine
 from arcana.cards.registry import get_registry
-from arcana.models.adapters.base import CompletionRequest, ModelAdapter
+from arcana.models.adapters.base import CompletionRequest
+from arcana.models.gateway import ModelGateway
 from arcana.types.card import Card
 from arcana.types.memory import MemoryAdapter, MemoryEntry, MemoryQuery, MemoryType
 from arcana.types.session import MessageRole, Session, SessionStatus, SessionTrigger
@@ -22,19 +23,22 @@ class Agent:
     A configured AI agent. Assign a tarot card — get a soul.
 
     Usage:
-        agent = Agent(
-            name="researcher",
-            card=Card.HERMIT,
-            model=OllamaAdapter(model="hermes-3"),
-        )
-        result = await agent.run("summarize advances in RAG")
+        async with ModelGateway(ConnectionStore()) as gw:
+            agent = Agent(
+                name="researcher",
+                card=Card.HERMIT,
+                gateway=gw,
+                model="ollama/hermes-3",
+            )
+            result = await agent.run("summarize advances in RAG")
     """
 
     def __init__(
         self,
         name: str,
         card: Card,
-        model: ModelAdapter,
+        gateway: ModelGateway,
+        model: str,
         description: str = "",
         modifier_cards: list[Card] | None = None,
         memory: MemoryAdapter | None = None,
@@ -46,7 +50,8 @@ class Agent:
         self.name = name
         self.card = card
         self.modifier_cards = modifier_cards or []
-        self.model = model
+        self._gateway = gateway
+        self._model = model
         self.memory = memory
         self.description = description
         self._session_manager = session_manager
@@ -87,7 +92,7 @@ class Agent:
             messages=[{"role": "user", "content": prompt}],
             temperature=self._temperature,
         )
-        response = await self.model.complete(request)
+        response = await self._gateway.complete(self._model, request)
 
         if self._session_manager:
             self._session_manager.append(session, MessageRole.ASSISTANT, response.content)
@@ -111,7 +116,14 @@ class Agent:
         prompt: str,
         context: str | None = None,
     ) -> AsyncGenerator[str, None]:
-        """Stream a response token by token."""
+        """Stream a response token by token. Records a session with token totals."""
+        if self._session_manager:
+            session = self._session_manager.start(self.id, SessionTrigger.USER)
+            self._session_manager.append(session, MessageRole.USER, prompt)
+        else:
+            session = Session(agent_id=self.id)
+            session.add_message(MessageRole.USER, prompt)
+
         memory_context = await self._retrieve_memory_context(prompt)
         system = self._build_system(memory_context, context)
 
@@ -121,8 +133,29 @@ class Agent:
             temperature=self._temperature,
             stream=True,
         )
-        async for chunk in self.model.stream(request):
-            yield chunk.text
+
+        content_parts: list[str] = []
+        input_tokens = 0
+        output_tokens = 0
+        try:
+            async for chunk in self._gateway.stream(self._model, request):
+                content_parts.append(chunk.text)
+                input_tokens += chunk.input_tokens
+                output_tokens += chunk.output_tokens
+                yield chunk.text
+        finally:
+            full_content = "".join(content_parts)
+            if self._session_manager:
+                self._session_manager.append(session, MessageRole.ASSISTANT, full_content)
+            else:
+                session.add_message(MessageRole.ASSISTANT, full_content)
+            session.total_input_tokens = input_tokens
+            session.total_output_tokens = output_tokens
+            if self._session_manager:
+                self._session_manager.close(session, SessionStatus.COMPLETED)
+            else:
+                session.close(SessionStatus.COMPLETED)
+            self._sessions.append(session)
 
     @property
     def card_config(self):  # type: ignore[return]

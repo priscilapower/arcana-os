@@ -9,7 +9,7 @@ from uuid import UUID
 from arcana.agents.agent import Agent as RuntimeAgent
 from arcana.cards.engine import CardEngine
 from arcana.cards.registry import get_registry
-from arcana.models.adapters.base import ModelAdapter
+from arcana.models.gateway import ModelGateway
 from arcana.types.agent import Agent as AgentRecord
 from arcana.types.card import Card
 from arcana.types.memory import MemoryAdapter
@@ -113,17 +113,19 @@ class AgentRegistry:
     def build_runtime(
         self,
         record: AgentRecord,
-        adapter: ModelAdapter,
+        gateway: ModelGateway,
+        model: str,
         *,
         memory: MemoryAdapter | None = None,
         session_manager: SessionManager | None = None,
     ) -> RuntimeAgent:
-        """Reconstruct a runtime Agent from a stored record and a model adapter."""
+        """Reconstruct a runtime Agent from a stored record, gateway, and model routing key."""
         return RuntimeAgent(
             id=record.id,
             name=record.name,
             card=record.card,
-            model=adapter,
+            gateway=gateway,
+            model=model,
             description=record.description,
             modifier_cards=record.modifier_cards,
             memory=memory,

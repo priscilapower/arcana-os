@@ -3,14 +3,16 @@ Arcana OS — The OS that gives your agents a soul.
 
 Quick start:
     from arcana import Agent, Card
-    from arcana.models import OllamaAdapter
+    from arcana.models import ConnectionStore, ModelGateway
 
-    agent = Agent(
-        name="researcher",
-        card=Card.HERMIT,
-        model=OllamaAdapter(model="hermes-3"),
-    )
-    result = await agent.run("Summarise recent advances in RAG")
+    async with ModelGateway(ConnectionStore()) as gw:
+        agent = Agent(
+            name="researcher",
+            card=Card.HERMIT,
+            gateway=gw,
+            model="ollama/hermes-3",
+        )
+        result = await agent.run("Summarise recent advances in RAG")
 """
 
 from arcana.agents.agent import Agent

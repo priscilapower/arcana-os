@@ -10,32 +10,39 @@ import pytest
 from arcana.agents.agent import Agent
 from arcana.agents.registry import AgentRegistry
 from arcana.agents.session_manager import SessionManager
-from arcana.models.adapters.base import CompletionResponse, ModelChunk, ModelHealth
+from arcana.models.adapters.base import CompletionResponse, ModelChunk
+from arcana.models.gateway import ModelGateway
 from arcana.types.card import Card
 
 
-def _make_adapter(*, content: str = "Hello from the agent.") -> MagicMock:
-    """Return a mock ModelAdapter that returns a canned response."""
-    adapter = MagicMock()
-    adapter.complete = AsyncMock(return_value=CompletionResponse(content=content, input_tokens=10, output_tokens=5))
-    adapter.health_check = AsyncMock(return_value=ModelHealth(healthy=True, model_id="test"))
+def _make_gateway(*, content: str = "Hello from the agent.") -> MagicMock:
+    """Return a mock ModelGateway with canned responses."""
+    gw = MagicMock(spec=ModelGateway)
+    gw.complete = AsyncMock(return_value=CompletionResponse(content=content, input_tokens=10, output_tokens=5))
 
-    async def _stream(_req) -> AsyncGenerator[ModelChunk, None]:
-        for word in content.split():
-            yield ModelChunk(text=word + " ")
+    words = content.split()
 
-    adapter.stream = _stream
-    return adapter
+    async def _stream(_model: str, _req: object) -> AsyncGenerator[ModelChunk, None]:
+        for i, word in enumerate(words):
+            is_last = i == len(words) - 1
+            yield ModelChunk(
+                text=word + " ",
+                input_tokens=10 if is_last else 0,
+                output_tokens=5 if is_last else 0,
+            )
+
+    gw.stream = _stream
+    return gw
 
 
 @pytest.fixture
-def adapter():
-    return _make_adapter()
+def gateway():
+    return _make_gateway()
 
 
 @pytest.fixture
-def agent(adapter):
-    return Agent(name="test-agent", card=Card.HERMIT, model=adapter)
+def agent(gateway):
+    return Agent(name="test-agent", card=Card.HERMIT, gateway=gateway, model="ollama/test-model")
 
 
 @pytest.fixture
