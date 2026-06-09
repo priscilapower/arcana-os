@@ -2,16 +2,21 @@
 
 import json
 from collections.abc import AsyncGenerator
+from typing import Any, Required, TypedDict
 
 import httpx
 
 from arcana.models.adapters.base import (
     CompletionRequest,
     CompletionResponse,
+    FunctionCall,
     MessageParam,
     ModelAdapter,
     ModelChunk,
     ModelHealth,
+    OpenAIFunctionDef,
+    OpenAIToolParam,
+    ToolCallResult,
 )
 from arcana.models.errors import (
     ModelBadRequestError,
@@ -19,6 +24,40 @@ from arcana.models.errors import (
     ModelTransientError,
     ModelUnavailableError,
 )
+
+# ---------------------------------------------------------------------------
+# Ollama-specific wire-format TypedDicts
+# ---------------------------------------------------------------------------
+
+
+class _OllamaOptions(TypedDict):
+    temperature: float
+
+
+class _OllamaChatPayload(TypedDict, total=False):
+    model: Required[str]
+    messages: Required[list[MessageParam]]
+    stream: Required[bool]
+    options: Required[_OllamaOptions]
+    tools: list[OpenAIToolParam]
+
+
+class _OllamaToolCallFn(TypedDict):
+    """Function sub-object inside an Ollama tool_call entry (always present)."""
+
+    name: str
+    arguments: Any  # Ollama returns arguments as a dict, not a JSON string
+
+
+class _OllamaToolCall(TypedDict):
+    """A single tool_call entry in an Ollama /api/chat response (always has function)."""
+
+    function: _OllamaToolCallFn
+
+
+# ---------------------------------------------------------------------------
+# Adapter
+# ---------------------------------------------------------------------------
 
 
 class OllamaAdapter(ModelAdapter):
@@ -30,6 +69,8 @@ class OllamaAdapter(ModelAdapter):
         adapter = OllamaAdapter(model="hermes-3")
         response = await adapter.complete(request)
     """
+
+    supports_tools = True
 
     def __init__(
         self,
@@ -73,22 +114,52 @@ class OllamaAdapter(ModelAdapter):
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
         model = request.model_id or self.model
         messages = self._build_messages(request)
-        payload = {
+        payload: _OllamaChatPayload = {
             "model": model,
             "messages": messages,
             "stream": False,
             "options": {"temperature": request.temperature},
         }
+        if request.tools:
+            payload["tools"] = [
+                OpenAIToolParam(
+                    type="function",
+                    function=OpenAIFunctionDef(
+                        name=t["name"],
+                        description=t["description"],
+                        parameters=t["input_schema"],
+                    ),
+                )
+                for t in request.tools
+            ]
         try:
             response = await self._client.post(f"{self.endpoint}/api/chat", json=payload)
             response.raise_for_status()
         except Exception as exc:
             raise self._translate(exc, model) from exc
         data = response.json()
+        msg = data["message"]
+        tool_calls: list[ToolCallResult] | None = None
+        raw_calls: list[_OllamaToolCall] = msg.get("tool_calls") or []
+        if raw_calls:
+            tool_calls = [
+                ToolCallResult(
+                    id=str(i),
+                    type="function",
+                    function=FunctionCall(
+                        name=str(tc["function"]["name"] or ""),
+                        arguments=json.dumps(tc["function"]["arguments"])
+                        if isinstance(tc["function"]["arguments"], dict)
+                        else str(tc["function"]["arguments"] or ""),
+                    ),
+                )
+                for i, tc in enumerate(raw_calls)
+            ]
         return CompletionResponse(
-            content=data["message"]["content"],
+            content=msg.get("content") or "",
             input_tokens=data.get("prompt_eval_count", 0),
             output_tokens=data.get("eval_count", 0),
+            tool_calls=tool_calls,
         )
 
     async def stream(self, request: CompletionRequest) -> AsyncGenerator[ModelChunk, None]:

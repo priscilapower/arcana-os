@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator, Sequence
 from dataclasses import dataclass
 from typing import TypedDict
 
+from arcana.models.errors import ModelBadRequestError
 from arcana.types._utils import JsonObject
 
 
@@ -42,6 +43,21 @@ class ToolParam(TypedDict):
     name: str
     description: str
     input_schema: JsonObject
+
+
+class OpenAIFunctionDef(TypedDict):
+    """The ``function`` sub-object in an OpenAI-style tool definition."""
+
+    name: str
+    description: str
+    parameters: JsonObject
+
+
+class OpenAIToolParam(TypedDict):
+    """OpenAI-style tool entry as sent on the wire (Ollama, Custom, OpenAI-compat)."""
+
+    type: str  # always "function"
+    function: OpenAIFunctionDef
 
 
 @dataclass
@@ -87,6 +103,8 @@ class ModelHealth:
 class ModelAdapter(ABC):
     """Every LLM backend implements this interface."""
 
+    supports_tools: bool = False
+
     @abstractmethod
     async def complete(self, request: CompletionRequest) -> CompletionResponse: ...
 
@@ -101,6 +119,14 @@ class ModelAdapter(ABC):
 
     async def aclose(self) -> None:  # noqa: B027
         """Close underlying connections. Called by the gateway on shutdown. Default: no-op."""
+
+    def _guard_tools(self, request: CompletionRequest) -> None:
+        """Raise ModelBadRequestError if the caller passes tools and this adapter can't handle them."""
+        if request.tools and not self.supports_tools:
+            raise ModelBadRequestError(
+                f"{type(self).__name__} does not support tool calls. "
+                "Check ModelCapabilities.supports_tools before passing tools."
+            )
 
     def _translate(self, exc: Exception, model_id: str) -> Exception:
         """Translate a provider-specific exception into the shared error taxonomy.

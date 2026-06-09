@@ -3,17 +3,21 @@
 import json
 import os
 from collections.abc import AsyncGenerator, Callable
-from typing import Any
+from typing import Any, TypedDict
 
 import httpx
 
 from arcana.models.adapters.base import (
     CompletionRequest,
     CompletionResponse,
+    FunctionCall,
     MessageParam,
     ModelAdapter,
     ModelChunk,
     ModelHealth,
+    OpenAIFunctionDef,
+    OpenAIToolParam,
+    ToolCallResult,
 )
 from arcana.models.errors import (
     ModelBadRequestError,
@@ -25,6 +29,22 @@ from arcana.models.errors import (
 _RequestBuilder = Callable[[CompletionRequest], dict[str, Any]]
 _ResponseParser = Callable[[dict[str, Any]], CompletionResponse]
 _StreamChunkParser = Callable[[str], str | None]
+
+
+class _OpenAIToolCallFn(TypedDict, total=False):
+    """``function`` sub-object returned inside an OpenAI-style tool_call entry."""
+
+    name: str
+    arguments: str  # JSON-encoded string
+
+
+class _OpenAIToolCall(TypedDict, total=False):
+    """A single tool_call entry returned in an OpenAI-style choices[0].message."""
+
+    id: str
+    type: str
+    function: _OpenAIToolCallFn
+
 
 _STOP_REASON_MAP = {
     "stop": "end_turn",
@@ -40,12 +60,27 @@ def _openai_like_request_builder(model: str) -> _RequestBuilder:
         if request.system:
             messages.append({"role": "system", "content": request.system})
         messages.extend(request.messages)
-        return {
+        body: dict[str, Any] = {
             "model": request.model_id or model,
             "messages": messages,
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
         }
+        if request.tools:
+            tools: list[OpenAIToolParam] = [
+                OpenAIToolParam(
+                    type="function",
+                    function=OpenAIFunctionDef(
+                        name=t["name"],
+                        description=t["description"],
+                        parameters=t["input_schema"],
+                    ),
+                )
+                for t in request.tools
+            ]
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
+        return body
 
     return build
 
@@ -53,7 +88,7 @@ def _openai_like_request_builder(model: str) -> _RequestBuilder:
 def _openai_like_response_parser(data: dict[str, Any]) -> CompletionResponse:
     """
     Tries common REST response shapes in order:
-      1. OpenAI-style: choices[0].message.content
+      1. OpenAI-style: choices[0].message.content / tool_calls
       2. Flat: content / text / message
     """
     choices: list[dict[str, Any]] = data.get("choices") or []
@@ -65,10 +100,25 @@ def _openai_like_response_parser(data: dict[str, Any]) -> CompletionResponse:
         input_tokens: int = int(usage.get("prompt_tokens") or 0)
         output_tokens: int = int(usage.get("completion_tokens") or 0)
         finish_reason: str = str(first.get("finish_reason") or "stop")
+        tool_calls: list[ToolCallResult] | None = None
+        raw_calls: list[_OpenAIToolCall] = message.get("tool_calls") or []
+        if raw_calls:
+            tool_calls = [
+                ToolCallResult(
+                    id=str(tc.get("id") or i),
+                    type=str(tc.get("type") or "function"),
+                    function=FunctionCall(
+                        name=str((tc.get("function") or {}).get("name") or ""),
+                        arguments=str((tc.get("function") or {}).get("arguments") or ""),
+                    ),
+                )
+                for i, tc in enumerate(raw_calls)
+            ]
         return CompletionResponse(
             content=content,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            tool_calls=tool_calls,
             stop_reason=_STOP_REASON_MAP.get(finish_reason, "end_turn"),
         )
     flat: str = str(data.get("content") or data.get("text") or data.get("message") or "")
@@ -129,6 +179,8 @@ class CustomAPIAdapter(ModelAdapter):
             response_parser=parse,
         )
     """
+
+    supports_tools = True
 
     def __init__(
         self,

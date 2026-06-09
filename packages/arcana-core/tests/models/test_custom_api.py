@@ -406,3 +406,59 @@ async def test_health_check_generic_exception(adapter, mock_http):
 
     assert health.healthy is False
     assert "boom" in health.message
+
+
+# ---------------------------------------------------------------------------
+# Tool support
+# ---------------------------------------------------------------------------
+
+
+def test_custom_api_tools_in_request_body():
+    """_openai_like_request_builder includes tools and tool_choice when tools are present."""
+    from arcana.models.adapters.base import CompletionRequest
+
+    build = _openai_like_request_builder("my-model")
+    tools = [{"name": "search", "description": "Search the web", "input_schema": {"type": "object", "properties": {}}}]
+    request = CompletionRequest(
+        system="",
+        messages=[{"role": "user", "content": "find it"}],
+        tools=tools,  # type: ignore[arg-type]
+    )
+    body = build(request)
+
+    assert "tools" in body
+    assert body["tool_choice"] == "auto"
+    sent = body["tools"][0]
+    assert sent["type"] == "function"
+    assert sent["function"]["name"] == "search"
+    assert sent["function"]["description"] == "Search the web"
+    assert sent["function"]["parameters"] == {"type": "object", "properties": {}}
+
+
+def test_custom_api_response_parser_populates_tool_calls():
+    """_openai_like_response_parser maps tool_calls from the OpenAI choices message."""
+    data = {
+        "choices": [
+            {
+                "message": {
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "tc_1", "type": "function", "function": {"name": "search", "arguments": '{"q":"AI"}'}}
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+    }
+
+    result = _openai_like_response_parser(data)
+
+    assert result.tool_calls is not None
+    assert len(result.tool_calls) == 1
+    tc = result.tool_calls[0]
+    assert tc["id"] == "tc_1"
+    assert tc["type"] == "function"
+    assert tc["function"]["name"] == "search"
+    assert tc["function"]["arguments"] == '{"q":"AI"}'
+    assert result.stop_reason == "tool_use"

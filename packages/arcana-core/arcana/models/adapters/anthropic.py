@@ -1,13 +1,16 @@
 """AnthropicAdapter — Claude models via Anthropic SDK."""
 
+import json
 import os
 from collections.abc import AsyncGenerator
+from typing import cast
 
 try:
     import anthropic as _anthropic_mod
     from anthropic import AsyncAnthropic
     from anthropic.types import MessageParam as AnthropicMessageParam
-    from anthropic.types import TextBlock
+    from anthropic.types import TextBlock, ToolUseBlock
+    from anthropic.types import ToolParam as AnthropicToolParam
 except ImportError as e:
     raise ImportError("Install arcana-core[anthropic] to use AnthropicAdapter") from e
 
@@ -16,9 +19,12 @@ import keyring
 from arcana.models.adapters.base import (
     CompletionRequest,
     CompletionResponse,
+    FunctionCall,
     ModelAdapter,
     ModelChunk,
     ModelHealth,
+    ToolCallResult,
+    ToolParam,
 )
 from arcana.models.errors import (
     ModelAuthError,
@@ -27,6 +33,20 @@ from arcana.models.errors import (
     ModelTransientError,
     ModelUnavailableError,
 )
+
+
+def _to_anthropic_tools(tools: list[ToolParam]) -> list[AnthropicToolParam]:
+    """Translate canonical ToolParam list to the Anthropic SDK's ToolParam list.
+
+    The shapes are identical (name / description / input_schema); cast bridges
+    the JsonObject → InputSchemaTyped gap that only exists at the type-checker level.
+    """
+    return [
+        cast(
+            AnthropicToolParam, {"name": t["name"], "description": t["description"], "input_schema": t["input_schema"]}
+        )
+        for t in tools
+    ]
 
 
 class AnthropicAdapter(ModelAdapter):
@@ -38,6 +58,8 @@ class AnthropicAdapter(ModelAdapter):
         adapter = AnthropicAdapter(model="claude-sonnet-4-6")
         response = await adapter.complete(request)
     """
+
+    supports_tools = True
 
     def __init__(
         self,
@@ -111,35 +133,70 @@ class AnthropicAdapter(ModelAdapter):
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
         model = request.model_id or self.model
         client = self._get_client()
+        messages = self._build_messages(request)
         try:
-            response = await client.messages.create(
-                model=model,
-                max_tokens=request.max_tokens,
-                system=request.system,
-                messages=self._build_messages(request),
-                temperature=request.temperature,
-            )
+            if request.tools:
+                response = await client.messages.create(
+                    model=model,
+                    max_tokens=request.max_tokens,
+                    system=request.system,
+                    messages=messages,
+                    temperature=request.temperature,
+                    tools=_to_anthropic_tools(list(request.tools)),
+                )
+            else:
+                response = await client.messages.create(
+                    model=model,
+                    max_tokens=request.max_tokens,
+                    system=request.system,
+                    messages=messages,
+                    temperature=request.temperature,
+                )
         except Exception as exc:
             raise self._translate(exc, model) from exc
         text = next((block.text for block in response.content if isinstance(block, TextBlock)), "")
+        tool_calls: list[ToolCallResult] | None = None
+        tool_use_blocks = [b for b in response.content if isinstance(b, ToolUseBlock)]
+        if tool_use_blocks:
+            tool_calls = [
+                ToolCallResult(
+                    id=b.id,
+                    type="function",
+                    function=FunctionCall(name=b.name, arguments=json.dumps(b.input)),
+                )
+                for b in tool_use_blocks
+            ]
         return CompletionResponse(
             content=text,
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
+            tool_calls=tool_calls,
             stop_reason=response.stop_reason or "end_turn",
         )
 
     async def stream(self, request: CompletionRequest) -> AsyncGenerator[ModelChunk, None]:
         model = request.model_id or self.model
         client = self._get_client()
+        messages = self._build_messages(request)
         try:
-            async with client.messages.stream(
-                model=model,
-                max_tokens=request.max_tokens,
-                system=request.system,
-                messages=self._build_messages(request),
-                temperature=request.temperature,
-            ) as stream:
+            if request.tools:
+                stream_cm = client.messages.stream(
+                    model=model,
+                    max_tokens=request.max_tokens,
+                    system=request.system,
+                    messages=messages,
+                    temperature=request.temperature,
+                    tools=_to_anthropic_tools(list(request.tools)),
+                )
+            else:
+                stream_cm = client.messages.stream(
+                    model=model,
+                    max_tokens=request.max_tokens,
+                    system=request.system,
+                    messages=messages,
+                    temperature=request.temperature,
+                )
+            async with stream_cm as stream:
                 async for text in stream.text_stream:
                     yield ModelChunk(text=text)
                 final = await stream.get_final_message()

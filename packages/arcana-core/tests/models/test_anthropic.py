@@ -1,9 +1,10 @@
 """Tests for AnthropicAdapter."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from anthropic.types import TextBlock
+from anthropic.types import TextBlock, ToolUseBlock
 
 from arcana.models.adapters.anthropic import AnthropicAdapter
 from arcana.models.adapters.base import CompletionRequest
@@ -271,3 +272,57 @@ async def test_health_check_unhealthy_when_key_missing(monkeypatch):
 
     assert health.healthy is False
     assert "ANTHROPIC_API_KEY" in health.message
+
+
+# ---------------------------------------------------------------------------
+# Tool support
+# ---------------------------------------------------------------------------
+
+
+def _tool_use_block(id: str, name: str, input: dict) -> MagicMock:
+    block = MagicMock(spec=ToolUseBlock)
+    block.id = id
+    block.name = name
+    block.input = input
+    return block
+
+
+@pytest.mark.asyncio
+async def test_anthropic_passes_tools_and_parses_tool_calls():
+    sdk = MagicMock()
+    sdk.messages = MagicMock()
+
+    tool_block = _tool_use_block("tc_1", "get_weather", {"city": "London"})
+    msg = MagicMock()
+    msg.content = [tool_block]
+    msg.usage = MagicMock(input_tokens=10, output_tokens=5)
+    msg.stop_reason = "tool_use"
+    sdk.messages.create = AsyncMock(return_value=msg)
+
+    tools = [
+        {"name": "get_weather", "description": "Get weather", "input_schema": {"type": "object", "properties": {}}}
+    ]
+    request = CompletionRequest(
+        system="You are helpful.",
+        messages=[{"role": "user", "content": "What's the weather?"}],
+        tools=tools,
+    )
+
+    with patch("arcana.models.adapters.anthropic.AsyncAnthropic", return_value=sdk):
+        adapter = AnthropicAdapter(api_key="test-key")
+        result = await adapter.complete(request)
+
+    call_kwargs = sdk.messages.create.call_args.kwargs
+    assert "tools" in call_kwargs
+    sent_tool = call_kwargs["tools"][0]
+    assert sent_tool["name"] == "get_weather"
+    assert sent_tool["description"] == "Get weather"
+
+    assert result.tool_calls is not None
+    assert len(result.tool_calls) == 1
+    tc = result.tool_calls[0]
+    assert tc["id"] == "tc_1"
+    assert tc["type"] == "function"
+    assert tc["function"]["name"] == "get_weather"
+    assert json.loads(tc["function"]["arguments"]) == {"city": "London"}
+    assert result.stop_reason == "tool_use"

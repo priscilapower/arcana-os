@@ -93,6 +93,8 @@ class OpenAICompatAdapter(ModelAdapter):
         response = await adapter.complete(request)
     """
 
+    supports_tools = True
+
     def __init__(
         self,
         model: str,

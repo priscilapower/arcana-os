@@ -220,3 +220,48 @@ async def test_health_check_connection_error(adapter, mock_http):
 
     assert health.healthy is False
     assert "Connection refused" in health.message
+
+
+# ---------------------------------------------------------------------------
+# Tool support
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ollama_tools_supported_or_raises(adapter, mock_http):
+    """Ollama passes tools to the API and parses tool_calls from the response."""
+    tool_response = {
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"function": {"name": "get_weather", "arguments": {"city": "London"}}}],
+        },
+        "prompt_eval_count": 10,
+        "eval_count": 5,
+    }
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json.return_value = tool_response
+    mock_http.post.return_value = resp
+
+    tools = [
+        {"name": "get_weather", "description": "Get weather", "input_schema": {"type": "object", "properties": {}}}
+    ]
+    request = CompletionRequest(
+        system="",
+        messages=[{"role": "user", "content": "Weather?"}],
+        tools=tools,
+    )
+
+    result = await adapter.complete(request)
+
+    payload = mock_http.post.call_args.kwargs["json"]
+    assert "tools" in payload
+    sent = payload["tools"][0]
+    assert sent["type"] == "function"
+    assert sent["function"]["name"] == "get_weather"
+
+    assert result.tool_calls is not None
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0]["function"]["name"] == "get_weather"
+    assert result.content == ""
