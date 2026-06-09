@@ -1,14 +1,20 @@
 """Agent — the central object. Wires card + model + memory + tools together."""
 
+from __future__ import annotations
+
 from collections.abc import AsyncGenerator
-from uuid import UUID
+from typing import TYPE_CHECKING
+from uuid import UUID, uuid4
 
 from arcana.cards.engine import CardEngine
 from arcana.cards.registry import get_registry
 from arcana.models.adapters.base import CompletionRequest, ModelAdapter
 from arcana.types.card import Card
 from arcana.types.memory import MemoryAdapter, MemoryEntry, MemoryQuery, MemoryType
-from arcana.types.session import MessageRole, Session, SessionStatus
+from arcana.types.session import MessageRole, Session, SessionStatus, SessionTrigger
+
+if TYPE_CHECKING:
+    from arcana.agents.session_manager import SessionManager
 
 
 class Agent:
@@ -33,13 +39,17 @@ class Agent:
         modifier_cards: list[Card] | None = None,
         memory: MemoryAdapter | None = None,
         system_prompt_override: str | None = None,
+        id: UUID | None = None,
+        session_manager: SessionManager | None = None,
     ) -> None:
+        self.id = id or uuid4()
         self.name = name
         self.card = card
         self.modifier_cards = modifier_cards or []
         self.model = model
         self.memory = memory
         self.description = description
+        self._session_manager = session_manager
 
         # Resolve config from card(s)
         registry = get_registry()
@@ -62,8 +72,12 @@ class Agent:
         context: str | None = None,
     ) -> str:
         """Run a single prompt. Returns the assistant's response."""
-        session = Session(agent_id=self._dummy_id())
-        session.add_message(MessageRole.USER, prompt)
+        if self._session_manager:
+            session = self._session_manager.start(self.id, SessionTrigger.USER)
+            self._session_manager.append(session, MessageRole.USER, prompt)
+        else:
+            session = Session(agent_id=self.id)
+            session.add_message(MessageRole.USER, prompt)
 
         memory_context = await self._retrieve_memory_context(prompt)
         system = self._build_system(memory_context, context)
@@ -74,10 +88,19 @@ class Agent:
             temperature=self._temperature,
         )
         response = await self.model.complete(request)
-        session.add_message(MessageRole.ASSISTANT, response.content)
+
+        if self._session_manager:
+            self._session_manager.append(session, MessageRole.ASSISTANT, response.content)
+        else:
+            session.add_message(MessageRole.ASSISTANT, response.content)
+
         session.total_input_tokens = response.input_tokens
         session.total_output_tokens = response.output_tokens
-        session.close(SessionStatus.COMPLETED)
+
+        if self._session_manager:
+            self._session_manager.close(session, SessionStatus.COMPLETED)
+        else:
+            session.close(SessionStatus.COMPLETED)
 
         await self._extract_memory(prompt, response.content, session)
         self._sessions.append(session)
@@ -136,14 +159,10 @@ class Agent:
         if not self.memory:
             return
         entry = MemoryEntry(
-            agent_id=self._dummy_id(),
+            agent_id=self.id,
             type=MemoryType.EPISODIC,
             content=f"User asked: {prompt[:200]}\nResponse summary: {response[:300]}",
             source_session_id=session.id,
             importance=0.5,
         )
         await self.memory.write(entry)
-
-    def _dummy_id(self) -> UUID:
-        """Placeholder until AgentRegistry assigns a real UUID."""
-        return UUID("00000000-0000-0000-0000-000000000001")
