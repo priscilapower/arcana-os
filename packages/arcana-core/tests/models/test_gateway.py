@@ -740,3 +740,58 @@ def test_cache_key_different_endpoints():
     k1 = _cache_key("openai_compat", "http://localhost:1234", None)
     k2 = _cache_key("openai_compat", "http://localhost:5678", None)
     assert k1 != k2
+
+
+# ---------------------------------------------------------------------------
+# Cost sink error isolation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_complete_returns_response_when_cost_sink_raises():
+    adapter = _make_adapter(response=_ok_response())
+    registry = _make_registry(adapter)
+    store = _make_store()
+
+    def bad_sink(event: CostEvent) -> None:
+        raise RuntimeError("sink exploded")
+
+    gw = ModelGateway(connections=store, providers=registry, on_cost=bad_sink)
+
+    result = await gw.complete("ollama/hermes-3", _req())
+    assert result.content == "ok"
+
+
+@pytest.mark.asyncio
+async def test_cost_sink_failure_is_logged(caplog):
+    import logging
+
+    adapter = _make_adapter(response=_ok_response())
+    registry = _make_registry(adapter)
+    store = _make_store()
+
+    def bad_sink(event: CostEvent) -> None:
+        raise RuntimeError("sink exploded")
+
+    gw = ModelGateway(connections=store, providers=registry, on_cost=bad_sink)
+
+    with caplog.at_level(logging.WARNING, logger="arcana.models.gateway"):
+        await gw.complete("ollama/hermes-3", _req())
+
+    assert any("on_cost" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_stream_returns_chunks_when_cost_sink_raises():
+    adapter = _make_adapter()
+    adapter.stream = MagicMock(return_value=_aiter([ModelChunk(text="hello"), ModelChunk(text=" world")]))
+    registry = _make_registry(adapter)
+    store = _make_store()
+
+    def bad_sink(event: CostEvent) -> None:
+        raise RuntimeError("sink exploded")
+
+    gw = ModelGateway(connections=store, providers=registry, on_cost=bad_sink)
+
+    chunks = [c async for c in gw.stream("ollama/hermes-3", _req())]
+    assert [c.text for c in chunks] == ["hello", " world"]

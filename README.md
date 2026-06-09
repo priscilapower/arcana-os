@@ -130,6 +130,8 @@ arcana/
 
 ## Roadmap
 
+Arcana is and will always be free and open source. A hosted version is planned for teams and multi-device sync.
+
 | Phase | What | Status |
 |---|---|---|
 | Phase 1 | arcana-core + arcana-cli | 🚧 In progress |

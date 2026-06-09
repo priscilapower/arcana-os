@@ -7,6 +7,7 @@ protocol and surface normalized ModelError subclasses.
 
 import asyncio
 import hashlib
+import logging
 import random
 from collections.abc import AsyncGenerator, Callable
 from contextlib import aclosing
@@ -33,6 +34,7 @@ from arcana.models.errors import (
 from arcana.models.pricing import DEFAULT_PRICING, CostEvent, PricingTable, Usage
 from arcana.types.model import ModelConnection, ModelProvider
 
+_log = logging.getLogger(__name__)
 _RETRYABLE = (ModelTransientError, ModelUnavailableError)
 
 # ---------------------------------------------------------------------------
@@ -201,7 +203,7 @@ class ModelGateway:
         providers: ProviderRegistry | None = None,
         retry: RetryPolicy | None = None,
         pricing: PricingTable | None = None,
-        on_cost: Callable[[CostEvent], None] | None = None,
+        on_cost: Callable[[CostEvent], Any] | None = None,
     ) -> None:
         self._connections = connections
         self._providers = providers or DEFAULT_PROVIDERS
@@ -225,7 +227,7 @@ class ModelGateway:
         for attempt in range(self._retry.max_retries + 1):
             try:
                 response = await adapter.complete(req)
-                self._emit_cost(model, response, conn)
+                await self._emit_cost(model, response, conn)
                 return response
             except _RETRYABLE as exc:
                 last_exc = exc
@@ -346,7 +348,7 @@ class ModelGateway:
                         output_tokens += chunk.output_tokens
                         total_chars += len(chunk.text)
                         yield chunk
-                self._emit_cost_streaming(model, conn, input_tokens, output_tokens, total_chars)
+                await self._emit_cost_streaming(model, conn, input_tokens, output_tokens, total_chars)
                 return
             except _RETRYABLE as exc:
                 if started:
@@ -361,14 +363,19 @@ class ModelGateway:
         if last_exc is not None:
             raise last_exc
 
-    def _emit_cost(self, model: str, response: CompletionResponse, conn: ModelConnection) -> None:
+    async def _emit_cost(self, model: str, response: CompletionResponse, conn: ModelConnection) -> None:
         if self._on_cost is None:
             return
         cost = self._pricing.cost(model, response.input_tokens, response.output_tokens, conn)
         usage = Usage.from_tokens(response.input_tokens, response.output_tokens, cost)
-        self._on_cost(CostEvent(model=model, usage=usage, priced=cost is not None))
+        try:
+            result = self._on_cost(CostEvent(model=model, usage=usage, priced=cost is not None))
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception:
+            _log.warning("on_cost sink raised; sink errors are non-fatal", exc_info=True)
 
-    def _emit_cost_streaming(
+    async def _emit_cost_streaming(
         self, model: str, conn: ModelConnection, input_tokens: int, output_tokens: int, total_chars: int
     ) -> None:
         if self._on_cost is None:
@@ -378,4 +385,9 @@ class ModelGateway:
             output_tokens = total_chars // 4
         cost = self._pricing.cost(model, input_tokens, output_tokens, conn)
         usage = Usage.from_tokens(input_tokens, output_tokens, cost)
-        self._on_cost(CostEvent(model=model, usage=usage, estimated=estimated, priced=cost is not None))
+        try:
+            result = self._on_cost(CostEvent(model=model, usage=usage, estimated=estimated, priced=cost is not None))
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception:
+            _log.warning("on_cost sink raised; sink errors are non-fatal", exc_info=True)
