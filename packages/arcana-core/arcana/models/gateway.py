@@ -9,9 +9,10 @@ import asyncio
 import hashlib
 import logging
 import random
+import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import aclosing
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from arcana.models.adapters.anthropic import AnthropicAdapter
@@ -36,6 +37,7 @@ from arcana.types.model import ModelConnection, ModelProvider
 
 _log = logging.getLogger(__name__)
 _RETRYABLE = (ModelTransientError, ModelUnavailableError)
+_UNHEALTHY_COOLDOWN: float = 30.0  # seconds before a half-open probe is allowed
 
 # ---------------------------------------------------------------------------
 # Retry policy
@@ -165,6 +167,21 @@ DEFAULT_PROVIDERS = ProviderRegistry()
 class _CacheEntry:
     adapter: ModelAdapter
     healthy: bool = True
+    unhealthy_since: float | None = field(default=None, compare=False)
+
+    def is_open(self, cooldown: float) -> bool:
+        """True when the entry is in its cooldown window and calls should fast-fail."""
+        if self.healthy or self.unhealthy_since is None:
+            return False
+        return (time.monotonic() - self.unhealthy_since) < cooldown
+
+    def mark_unhealthy(self) -> None:
+        self.healthy = False
+        self.unhealthy_since = time.monotonic()
+
+    def mark_healthy(self) -> None:
+        self.healthy = True
+        self.unhealthy_since = None
 
 
 def _cache_key(provider: str, endpoint: str, api_key: str | None) -> str:
@@ -204,12 +221,14 @@ class ModelGateway:
         retry: RetryPolicy | None = None,
         pricing: PricingTable | None = None,
         on_cost: Callable[[CostEvent], Any] | None = None,
+        unhealthy_cooldown: float = _UNHEALTHY_COOLDOWN,
     ) -> None:
         self._connections = connections
         self._providers = providers or DEFAULT_PROVIDERS
         self._retry = retry or RetryPolicy()
         self._pricing = pricing or DEFAULT_PRICING
         self._on_cost = on_cost
+        self._unhealthy_cooldown = unhealthy_cooldown
         self._cache: dict[str, _CacheEntry] = {}
         self._cache_locks: dict[str, asyncio.Lock] = {}
 
@@ -220,13 +239,17 @@ class ModelGateway:
     async def complete(self, model: str, request: CompletionRequest) -> CompletionResponse:
         """Dispatch a completion request, retrying transient errors with backoff."""
         conn = self.resolve(model)
-        adapter = await self._get_adapter(conn)
-        req = replace(request, model_id=conn.model_id)
+        entry = await self._get_cache_entry(conn)
 
+        if entry.is_open(self._unhealthy_cooldown):
+            raise ModelUnavailableError(f"Connection {model!r} is in cooldown after repeated failures.")
+
+        req = replace(request, model_id=conn.model_id)
         last_exc: Exception | None = None
         for attempt in range(self._retry.max_retries + 1):
             try:
-                response = await adapter.complete(req)
+                response = await entry.adapter.complete(req)
+                entry.mark_healthy()
                 await self._emit_cost(model, response, conn)
                 return response
             except _RETRYABLE as exc:
@@ -238,6 +261,8 @@ class ModelGateway:
             except ModelError:
                 raise
 
+        if isinstance(last_exc, ModelUnavailableError):
+            entry.mark_unhealthy()
         raise last_exc  # type: ignore[misc]
 
     async def stream(self, model: str, request: CompletionRequest) -> AsyncGenerator[ModelChunk, None]:
@@ -248,22 +273,36 @@ class ModelGateway:
         Emits one ``CostEvent`` after the stream completes.
         """
         conn = self.resolve(model)
-        adapter = await self._get_adapter(conn)
+        entry = await self._get_cache_entry(conn)
+
+        if entry.is_open(self._unhealthy_cooldown):
+            raise ModelUnavailableError(f"Connection {model!r} is in cooldown after repeated failures.")
+
         req = replace(request, model_id=conn.model_id)
-        async with aclosing(self._retry_stream(model, conn, adapter, req)) as gen:
+        async with aclosing(self._retry_stream(model, conn, entry, req)) as gen:
             async for chunk in gen:
                 yield chunk
 
     async def health(self, model: str | None = None) -> dict[str, ModelHealth]:
-        """Check health for one model string or all cached adapters."""
+        """Check health for one model string or all cached adapters.
+
+        A successful check resets the unhealthy flag so the connection is
+        allowed back into the request path without waiting for cooldown.
+        """
         if model is not None:
             conn = self.resolve(model)
-            adapter = await self._get_adapter(conn)
-            return {model: await adapter.health_check()}
+            entry = await self._get_cache_entry(conn)
+            result = await entry.adapter.health_check()
+            if result.healthy:
+                entry.mark_healthy()
+            return {model: result}
 
         results: dict[str, ModelHealth] = {}
         for key, entry in self._cache.items():
-            results[key] = await entry.adapter.health_check()
+            result = await entry.adapter.health_check()
+            if result.healthy:
+                entry.mark_healthy()
+            results[key] = result
         return results
 
     def resolve(self, model: str) -> ModelConnection:
@@ -309,7 +348,7 @@ class ModelGateway:
             )
         return parts[0], parts[1]
 
-    async def _get_adapter(self, conn: ModelConnection) -> ModelAdapter:
+    async def _get_cache_entry(self, conn: ModelConnection) -> _CacheEntry:
         provider = str(conn.provider)
         endpoint = conn.endpoint
         api_key = self._connections.get_api_key(conn.id)
@@ -329,10 +368,10 @@ class ModelGateway:
                 await adapter.connect()
                 self._cache[key] = _CacheEntry(adapter=adapter)
 
-        return self._cache[key].adapter
+        return self._cache[key]
 
     async def _retry_stream(
-        self, model: str, conn: ModelConnection, adapter: ModelAdapter, request: CompletionRequest
+        self, model: str, conn: ModelConnection, entry: _CacheEntry, request: CompletionRequest
     ) -> AsyncGenerator[ModelChunk, None]:
         last_exc: Exception | None = None
         for attempt in range(self._retry.max_retries + 1):
@@ -341,13 +380,14 @@ class ModelGateway:
             output_tokens = 0
             total_chars = 0
             try:
-                async with aclosing(adapter.stream(request)) as gen:
+                async with aclosing(entry.adapter.stream(request)) as gen:
                     async for chunk in gen:
                         started = True
                         input_tokens += chunk.input_tokens
                         output_tokens += chunk.output_tokens
                         total_chars += len(chunk.text)
                         yield chunk
+                entry.mark_healthy()
                 await self._emit_cost_streaming(model, conn, input_tokens, output_tokens, total_chars)
                 return
             except _RETRYABLE as exc:
@@ -360,6 +400,8 @@ class ModelGateway:
             except ModelError:
                 raise
 
+        if isinstance(last_exc, ModelUnavailableError):
+            entry.mark_unhealthy()
         if last_exc is not None:
             raise last_exc
 

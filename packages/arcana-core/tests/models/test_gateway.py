@@ -795,3 +795,92 @@ async def test_stream_returns_chunks_when_cost_sink_raises():
 
     chunks = [c async for c in gw.stream("ollama/hermes-3", _req())]
     assert [c.text for c in chunks] == ["hello", " world"]
+
+
+# ---------------------------------------------------------------------------
+# Health-based fast-fail (circuit-breaker-lite)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_unhealthy_connection_fails_fast_within_cooldown():
+    adapter = _make_adapter(side_effect=ModelUnavailableError("down"))
+    registry = _make_registry(adapter)
+    store = _make_store()
+    gw = ModelGateway(
+        connections=store,
+        providers=registry,
+        retry=RetryPolicy(max_retries=0, base=0.0),
+        unhealthy_cooldown=60.0,
+    )
+
+    with pytest.raises(ModelUnavailableError):
+        await gw.complete("ollama/hermes-3", _req())
+
+    calls_after_first = adapter.complete.await_count
+
+    # Second call within cooldown must fast-fail — no additional adapter calls.
+    with pytest.raises(ModelUnavailableError):
+        await gw.complete("ollama/hermes-3", _req())
+
+    assert adapter.complete.await_count == calls_after_first
+
+
+@pytest.mark.asyncio
+async def test_connection_recovers_after_cooldown_probe():
+    call_count = 0
+
+    async def down_then_up(*_):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise ModelUnavailableError("down")
+        return _ok_response()
+
+    adapter = _make_adapter(side_effect=down_then_up)
+    registry = _make_registry(adapter)
+    store = _make_store()
+    gw = ModelGateway(
+        connections=store,
+        providers=registry,
+        retry=RetryPolicy(max_retries=0, base=0.0),
+        unhealthy_cooldown=1.0,
+    )
+
+    with pytest.raises(ModelUnavailableError):
+        await gw.complete("ollama/hermes-3", _req())
+
+    # Backdate unhealthy_since to simulate cooldown elapsed.
+    cache_entry = list(gw._cache.values())[0]
+    cache_entry.unhealthy_since -= 2.0
+
+    result = await gw.complete("ollama/hermes-3", _req())
+    assert result.content == "ok"
+    assert cache_entry.healthy is True
+
+
+@pytest.mark.asyncio
+async def test_health_check_resets_unhealthy_flag():
+    adapter = _make_adapter(side_effect=ModelUnavailableError("down"))
+    adapter.health_check = AsyncMock(return_value=ModelHealth(healthy=True, model_id="hermes-3"))
+    registry = _make_registry(adapter)
+    store = _make_store()
+    gw = ModelGateway(
+        connections=store,
+        providers=registry,
+        retry=RetryPolicy(max_retries=0, base=0.0),
+        unhealthy_cooldown=60.0,
+    )
+
+    with pytest.raises(ModelUnavailableError):
+        await gw.complete("ollama/hermes-3", _req())
+
+    await gw.health("ollama/hermes-3")
+
+    cache_entry = list(gw._cache.values())[0]
+    assert cache_entry.healthy is True
+
+    # After health check reset, complete must reach the adapter again.
+    adapter.complete = AsyncMock(return_value=_ok_response())
+    result = await gw.complete("ollama/hermes-3", _req())
+    assert result.content == "ok"
