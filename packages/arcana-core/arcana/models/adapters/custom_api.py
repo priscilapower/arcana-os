@@ -12,7 +12,14 @@ from arcana.models.adapters.base import (
     CompletionResponse,
     MessageParam,
     ModelAdapter,
+    ModelChunk,
     ModelHealth,
+)
+from arcana.models.errors import (
+    ModelBadRequestError,
+    ModelNotFoundError,
+    ModelTransientError,
+    ModelUnavailableError,
 )
 
 _RequestBuilder = Callable[[CompletionRequest], dict[str, Any]]
@@ -34,7 +41,7 @@ def _openai_like_request_builder(model: str) -> _RequestBuilder:
             messages.append({"role": "system", "content": request.system})
         messages.extend(request.messages)
         return {
-            "model": model,
+            "model": request.model_id or model,
             "messages": messages,
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
@@ -154,34 +161,70 @@ class CustomAPIAdapter(ModelAdapter):
         self._stream_chunk_parser: _StreamChunkParser = stream_chunk_parser or _sse_chunk_parser
         self._client = httpx.AsyncClient(timeout=timeout, headers=merged_headers)
 
+    def _translate(self, exc: Exception, model_id: str) -> Exception:
+        if isinstance(exc, httpx.ConnectError):
+            return ModelUnavailableError(f"Cannot connect to endpoint: {exc}")
+        if isinstance(exc, httpx.TimeoutException):
+            return ModelTransientError(f"Request timed out: {exc}")
+        if isinstance(exc, httpx.HTTPStatusError):
+            status = exc.response.status_code
+            if status == 404:
+                return ModelNotFoundError(f"Model not found: {model_id!r}")
+            if status == 400:
+                return ModelBadRequestError(f"Bad request (HTTP 400): {exc}")
+            if status == 429:
+                retry_after: float | None = None
+                raw = exc.response.headers.get("Retry-After")
+                if raw:
+                    try:
+                        retry_after = float(raw)
+                    except ValueError:
+                        pass
+                return ModelTransientError("Rate limited (HTTP 429)", retry_after=retry_after)
+            if 500 <= status < 600:
+                return ModelTransientError(f"Server error (HTTP {status}): {exc}")
+        return exc
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
+        model = request.model_id or self.model
         body = self._request_builder(request)
-        response = await self._client.post(f"{self._base_url}{self._chat_path}", json=body)
-        response.raise_for_status()
+        try:
+            response = await self._client.post(f"{self._base_url}{self._chat_path}", json=body)
+            response.raise_for_status()
+        except Exception as exc:
+            raise self._translate(exc, model) from exc
         return self._response_parser(response.json())
 
-    async def stream(self, request: CompletionRequest) -> AsyncGenerator[str, None]:
+    async def stream(self, request: CompletionRequest) -> AsyncGenerator[ModelChunk, None]:
+        model = request.model_id or self.model
         body = {**self._request_builder(request), "stream": True}
-        async with self._client.stream("POST", f"{self._base_url}{self._stream_path}", json=body) as response:
-            response.raise_for_status()
-            async for line in response.aiter_lines():
-                if token := self._stream_chunk_parser(line):
-                    yield token
+        try:
+            async with self._client.stream("POST", f"{self._base_url}{self._stream_path}", json=body) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if token := self._stream_chunk_parser(line):
+                        yield ModelChunk(text=token)
+        except Exception as exc:
+            raise self._translate(exc, model) from exc
 
     async def health_check(self) -> ModelHealth:
+        model = self.model
         try:
             if self._health_path:
                 resp = await self._client.get(f"{self._base_url}{self._health_path}")
                 resp.raise_for_status()
-                return ModelHealth(healthy=True, model_id=self.model)
+                return ModelHealth(healthy=True, model_id=model)
             resp = await self._client.head(self._base_url)
             ok = resp.is_success or resp.status_code < 500
             return ModelHealth(
                 healthy=ok,
-                model_id=self.model,
+                model_id=model,
                 message="" if ok else f"HTTP {resp.status_code}",
             )
         except httpx.ConnectError as exc:
-            return ModelHealth(healthy=False, model_id=self.model, message=f"Connection error: {exc}")
+            return ModelHealth(healthy=False, model_id=model, message=f"Connection error: {exc}")
         except Exception as exc:
-            return ModelHealth(healthy=False, model_id=self.model, message=str(exc))
+            return ModelHealth(healthy=False, model_id=model, message=str(exc))

@@ -1,4 +1,4 @@
-"""ModelAdapter ABC."""
+"""ModelAdapter ABC and shared wire types."""
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Sequence
@@ -52,6 +52,7 @@ class CompletionRequest:
     max_tokens: int = 4096
     tools: Sequence[ToolParam] | None = None
     stream: bool = False
+    model_id: str = ""
 
 
 @dataclass
@@ -61,6 +62,19 @@ class CompletionResponse:
     output_tokens: int = 0
     tool_calls: Sequence[ToolCallResult] | None = None
     stop_reason: str = "end_turn"
+
+
+@dataclass
+class ModelChunk:
+    """A single streaming text delta from the gateway.
+
+    ``input_tokens`` and ``output_tokens`` are non-zero only on the final
+    chunk (providers differ on when they send usage information).
+    """
+
+    text: str
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 @dataclass
@@ -77,7 +91,22 @@ class ModelAdapter(ABC):
     async def complete(self, request: CompletionRequest) -> CompletionResponse: ...
 
     @abstractmethod
-    def stream(self, request: CompletionRequest) -> AsyncGenerator[str, None]: ...
+    def stream(self, request: CompletionRequest) -> AsyncGenerator[ModelChunk, None]: ...
 
     @abstractmethod
     async def health_check(self) -> ModelHealth: ...
+
+    async def connect(self) -> None:  # noqa: B027
+        """Called once by the gateway after adapter construction. Default: no-op."""
+
+    async def aclose(self) -> None:  # noqa: B027
+        """Close underlying connections. Called by the gateway on shutdown. Default: no-op."""
+
+    def _translate(self, exc: Exception, model_id: str) -> Exception:
+        """Translate a provider-specific exception into the shared error taxonomy.
+
+        Override in every concrete adapter. The gateway's retry logic is
+        provider-agnostic — it only ever sees ``ModelError`` subclasses.
+        Return the original ``exc`` unchanged for errors that need no translation.
+        """
+        return exc

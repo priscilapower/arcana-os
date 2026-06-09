@@ -99,7 +99,7 @@ class Agent:
             stream=True,
         )
         async for chunk in self.model.stream(request):
-            yield chunk
+            yield chunk.text
 
     @property
     def card_config(self):  # type: ignore[return]

@@ -144,7 +144,10 @@ async def test_stream_yields_content_chunks(adapter, mock_http):
 
     collected = [chunk async for chunk in adapter.stream(_req())]
 
-    assert collected == ["Hello", " world"]
+    assert [c.text for c in collected if c.text] == ["Hello", " world"]
+    # Final chunk from the done event carries usage (zeros here since mock omits counts)
+    assert collected[-1].input_tokens == 0
+    assert collected[-1].output_tokens == 0
 
 
 @pytest.mark.asyncio
@@ -158,7 +161,7 @@ async def test_stream_stops_on_done_flag(adapter, mock_http):
 
     collected = [chunk async for chunk in adapter.stream(_req())]
 
-    assert collected == ["only"]
+    assert [c.text for c in collected if c.text] == ["only"]
 
 
 @pytest.mark.asyncio
@@ -172,7 +175,9 @@ async def test_stream_skips_empty_content(adapter, mock_http):
 
     collected = [chunk async for chunk in adapter.stream(_req())]
 
-    assert collected == []
+    # Only the final usage chunk is yielded (no content chunks)
+    assert [c.text for c in collected if c.text] == []
+    assert len(collected) == 1  # just the done/usage chunk
 
 
 # ---------------------------------------------------------------------------

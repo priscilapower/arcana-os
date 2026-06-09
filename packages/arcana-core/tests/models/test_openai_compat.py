@@ -343,43 +343,60 @@ async def test_complete_without_tools_omits_tool_choice():
 # ---------------------------------------------------------------------------
 
 
-async def _chunks(*contents):
-    for content in contents:
-        chunk = MagicMock()
-        chunk.choices = [MagicMock()]
-        chunk.choices[0].delta = MagicMock()
-        chunk.choices[0].delta.content = content
-        yield chunk
+class _MockStream:
+    """Minimal mock for openai.AsyncStream: iterable + close()."""
+
+    def __init__(self, *contents, usage=None):
+        self._contents = contents
+        self._usage = usage
+        self.close = AsyncMock()
+
+    def __aiter__(self):
+        return self._gen()
+
+    async def _gen(self):
+        for content in self._contents:
+            chunk = MagicMock()
+            chunk.choices = [MagicMock()]
+            chunk.choices[0].delta = MagicMock()
+            chunk.choices[0].delta.content = content
+            chunk.usage = None
+            yield chunk
+        if self._usage is not None:
+            final = MagicMock()
+            final.choices = []
+            final.usage = self._usage
+            yield final
 
 
 @pytest.mark.asyncio
 async def test_stream_yields_delta_content():
     sdk = _mock_openai_client()
-    sdk.chat.completions.create.return_value = _chunks("Hello", " world")
+    sdk.chat.completions.create.return_value = _MockStream("Hello", " world")
 
     with patch("arcana.models.adapters.openai_compat.AsyncOpenAI", return_value=sdk):
         adapter = OpenAICompatAdapter(model="llama3", api_key="k")
         collected = [chunk async for chunk in adapter.stream(_req())]
 
-    assert collected == ["Hello", " world"]
+    assert [c.text for c in collected if c.text] == ["Hello", " world"]
 
 
 @pytest.mark.asyncio
 async def test_stream_skips_none_content():
     sdk = _mock_openai_client()
-    sdk.chat.completions.create.return_value = _chunks(None, "hi", None)
+    sdk.chat.completions.create.return_value = _MockStream(None, "hi", None)
 
     with patch("arcana.models.adapters.openai_compat.AsyncOpenAI", return_value=sdk):
         adapter = OpenAICompatAdapter(model="llama3", api_key="k")
         collected = [chunk async for chunk in adapter.stream(_req())]
 
-    assert collected == ["hi"]
+    assert [c.text for c in collected if c.text] == ["hi"]
 
 
 @pytest.mark.asyncio
 async def test_stream_passes_stream_true():
     sdk = _mock_openai_client()
-    sdk.chat.completions.create.return_value = _chunks()
+    sdk.chat.completions.create.return_value = _MockStream()
 
     with patch("arcana.models.adapters.openai_compat.AsyncOpenAI", return_value=sdk):
         adapter = OpenAICompatAdapter(model="llama3", api_key="k")
@@ -387,6 +404,21 @@ async def test_stream_passes_stream_true():
 
     call_kwargs = sdk.chat.completions.create.call_args.kwargs
     assert call_kwargs["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_stream_propagates_usage_from_final_chunk():
+    usage = MagicMock(prompt_tokens=15, completion_tokens=7)
+    sdk = _mock_openai_client()
+    sdk.chat.completions.create.return_value = _MockStream("hello", usage=usage)
+
+    with patch("arcana.models.adapters.openai_compat.AsyncOpenAI", return_value=sdk):
+        adapter = OpenAICompatAdapter(model="llama3", api_key="k")
+        collected = [chunk async for chunk in adapter.stream(_req())]
+
+    usage_chunk = next(c for c in collected if c.input_tokens or c.output_tokens)
+    assert usage_chunk.input_tokens == 15
+    assert usage_chunk.output_tokens == 7
 
 
 # ---------------------------------------------------------------------------

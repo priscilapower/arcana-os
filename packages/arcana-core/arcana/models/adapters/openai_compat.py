@@ -21,7 +21,8 @@ from openai.types.shared_params import FunctionDefinition
 
 try:
     import openai as _openai_mod
-    from openai import AsyncOpenAI
+    from openai import AsyncOpenAI, AsyncStream
+    from openai.types.chat import ChatCompletionChunk
 except ImportError as e:
     raise ImportError("Install arcana-core[openai] to use OpenAICompatAdapter") from e
 
@@ -31,9 +32,17 @@ from arcana.models.adapters.base import (
     FunctionCall,
     MessageParam,
     ModelAdapter,
+    ModelChunk,
     ModelHealth,
     ToolCallResult,
     ToolParam,
+)
+from arcana.models.errors import (
+    ModelAuthError,
+    ModelBadRequestError,
+    ModelNotFoundError,
+    ModelTransientError,
+    ModelUnavailableError,
 )
 
 _STOP_REASON_MAP = {
@@ -97,6 +106,33 @@ class OpenAICompatAdapter(ModelAdapter):
         self._timeout = timeout
         self._client: AsyncOpenAI | None = None
 
+    def _translate(self, exc: Exception, model_id: str) -> Exception:
+        if isinstance(exc, _openai_mod.APIConnectionError):
+            return ModelUnavailableError(f"Cannot connect to the endpoint: {exc}")
+        if isinstance(exc, _openai_mod.APITimeoutError):
+            return ModelTransientError(f"Request timed out: {exc}")
+        if isinstance(exc, _openai_mod.AuthenticationError):
+            return ModelAuthError(f"Authentication failed: {exc}")
+        if isinstance(exc, _openai_mod.PermissionDeniedError):
+            return ModelAuthError(f"Permission denied: {exc}")
+        if isinstance(exc, _openai_mod.NotFoundError):
+            return ModelNotFoundError(f"Model not found: {model_id!r}")
+        if isinstance(exc, _openai_mod.BadRequestError):
+            return ModelBadRequestError(f"Bad request: {exc}")
+        if isinstance(exc, _openai_mod.RateLimitError):
+            retry_after: float | None = None
+            if hasattr(exc, "response"):
+                raw = exc.response.headers.get("retry-after")
+                if raw:
+                    try:
+                        retry_after = float(raw)
+                    except ValueError:
+                        pass
+            return ModelTransientError("Rate limited (HTTP 429)", retry_after=retry_after)
+        if isinstance(exc, _openai_mod.InternalServerError):
+            return ModelTransientError(f"Server error: {exc}")
+        return exc
+
     def _get_client(self) -> AsyncOpenAI:
         if self._client is None:
             key = self._api_key or os.getenv("OPENAI_API_KEY") or "not-needed"
@@ -115,9 +151,10 @@ class OpenAICompatAdapter(ModelAdapter):
         return messages
 
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
+        model = request.model_id or self.model
         client = self._get_client()
         kwargs: CompletionCreateParamsNonStreaming = {
-            "model": self.model,
+            "model": model,
             "messages": self._build_messages(request),
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
@@ -126,7 +163,11 @@ class OpenAICompatAdapter(ModelAdapter):
             kwargs["tools"] = _to_openai_tools(request.tools)
             kwargs["tool_choice"] = "auto"
 
-        response = await client.chat.completions.create(**kwargs)
+        try:
+            response = await client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            raise self._translate(exc, model) from exc
+
         choice = response.choices[0]
         message = choice.message
 
@@ -150,34 +191,56 @@ class OpenAICompatAdapter(ModelAdapter):
             stop_reason=_STOP_REASON_MAP.get(choice.finish_reason or "stop", "end_turn"),
         )
 
-    async def stream(self, request: CompletionRequest) -> AsyncGenerator[str, None]:
+    async def stream(self, request: CompletionRequest) -> AsyncGenerator[ModelChunk, None]:
+        model = request.model_id or self.model
         client = self._get_client()
         kwargs: CompletionCreateParamsStreaming = {
-            "model": self.model,
+            "model": model,
             "messages": self._build_messages(request),
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
 
-        response = await client.chat.completions.create(**kwargs)
-        async for chunk in response:
-            delta = chunk.choices[0].delta if chunk.choices else None
-            if delta and delta.content:
-                yield delta.content
+        response: AsyncStream[ChatCompletionChunk] | None = None
+        try:
+            response = await client.chat.completions.create(**kwargs)
+            async for chunk in response:
+                if chunk.choices:
+                    delta = chunk.choices[0].delta
+                    if delta and delta.content:
+                        yield ModelChunk(text=delta.content)
+                if chunk.usage:
+                    yield ModelChunk(
+                        text="",
+                        input_tokens=chunk.usage.prompt_tokens,
+                        output_tokens=chunk.usage.completion_tokens,
+                    )
+        except Exception as exc:
+            raise self._translate(exc, model) from exc
+        finally:
+            if response is not None:
+                await response.close()
 
     async def health_check(self) -> ModelHealth:
+        model = self.model
         try:
             client = self._get_client()
             models_page = await client.models.list()
             model_ids = [m.id for m in models_page.data]
-            available = self.model in model_ids or any(mid.startswith(self.model.split(":")[0]) for mid in model_ids)
+            available = model in model_ids or any(mid.startswith(model.split(":")[0]) for mid in model_ids)
             return ModelHealth(
                 healthy=available,
-                model_id=self.model,
+                model_id=model,
                 message="" if available else f"Available models: {', '.join(model_ids)}",
             )
         except _openai_mod.APIConnectionError as exc:
-            return ModelHealth(healthy=False, model_id=self.model, message=f"Connection error: {exc}")
+            return ModelHealth(healthy=False, model_id=model, message=f"Connection error: {exc}")
         except Exception as exc:
-            return ModelHealth(healthy=False, model_id=self.model, message=str(exc))
+            return ModelHealth(healthy=False, model_id=model, message=str(exc))
+
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.close()
+            self._client = None

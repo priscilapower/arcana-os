@@ -12,6 +12,7 @@ from arcana.models.adapters.custom_api import (
     _openai_like_response_parser,
     _sse_chunk_parser,
 )
+from arcana.models.errors import ModelTransientError
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -285,13 +286,13 @@ async def test_complete_uses_custom_response_parser(mock_http):
 
 @pytest.mark.asyncio
 async def test_complete_raises_on_http_error(adapter, mock_http):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 500
     mock_response = MagicMock()
-    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-        "500", request=MagicMock(), response=MagicMock()
-    )
+    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError("500", request=MagicMock(), response=mock_resp)
     mock_http.post.return_value = mock_response
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(ModelTransientError):
         await adapter.complete(_req())
 
 
@@ -309,9 +310,9 @@ async def test_stream_yields_tokens(adapter, mock_http):
     ]
     mock_http.stream.return_value = _stream_cm(lines)
 
-    tokens = [t async for t in adapter.stream(_req())]
+    chunks = [c async for c in adapter.stream(_req())]
 
-    assert tokens == ["Hello", " world"]
+    assert [c.text for c in chunks] == ["Hello", " world"]
 
 
 @pytest.mark.asyncio
@@ -335,9 +336,9 @@ async def test_stream_uses_custom_chunk_parser(mock_http):
 
     with patch("arcana.models.adapters.custom_api.httpx.AsyncClient", return_value=mock_http):
         custom = CustomAPIAdapter(model="m", base_url="http://host", stream_chunk_parser=my_parser)
-    tokens = [t async for t in custom.stream(_req())]
+    chunks = [c async for c in custom.stream(_req())]
 
-    assert tokens == ["hello", "world"]
+    assert [c.text for c in chunks] == ["hello", "world"]
 
 
 # ---------------------------------------------------------------------------

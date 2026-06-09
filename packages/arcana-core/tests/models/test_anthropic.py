@@ -196,23 +196,34 @@ async def _text_chunks(*texts):
         yield t
 
 
+def _mock_stream_inner(texts=(), input_tokens: int = 10, output_tokens: int = 5) -> MagicMock:
+    """Build a mock Anthropic stream inner object with text_stream and get_final_message."""
+    final_message = MagicMock()
+    final_message.usage = MagicMock(input_tokens=input_tokens, output_tokens=output_tokens)
+
+    stream_inner = MagicMock()
+    stream_inner.text_stream = _text_chunks(*texts)
+    stream_inner.get_final_message = AsyncMock(return_value=final_message)
+    return stream_inner
+
+
 @pytest.mark.asyncio
 async def test_stream_yields_text_chunks():
     sdk = MagicMock()
     sdk.messages = MagicMock()
 
-    stream_inner = MagicMock()
-    stream_inner.text_stream = _text_chunks("Hello", " world")
-
     stream_cm = AsyncMock()
-    stream_cm.__aenter__.return_value = stream_inner
+    stream_cm.__aenter__.return_value = _mock_stream_inner(("Hello", " world"))
     sdk.messages.stream.return_value = stream_cm
 
     with patch("arcana.models.adapters.anthropic.AsyncAnthropic", return_value=sdk):
         adapter = AnthropicAdapter(api_key="test-key")
         collected = [chunk async for chunk in adapter.stream(_req())]
 
-    assert collected == ["Hello", " world"]
+    assert [c.text for c in collected if c.text] == ["Hello", " world"]
+    # Final chunk carries usage
+    assert collected[-1].input_tokens == 10
+    assert collected[-1].output_tokens == 5
 
 
 @pytest.mark.asyncio
@@ -220,11 +231,8 @@ async def test_stream_passes_correct_kwargs():
     sdk = MagicMock()
     sdk.messages = MagicMock()
 
-    stream_inner = MagicMock()
-    stream_inner.text_stream = _text_chunks()
-
     stream_cm = AsyncMock()
-    stream_cm.__aenter__.return_value = stream_inner
+    stream_cm.__aenter__.return_value = _mock_stream_inner()
     sdk.messages.stream.return_value = stream_cm
 
     with patch("arcana.models.adapters.anthropic.AsyncAnthropic", return_value=sdk):
