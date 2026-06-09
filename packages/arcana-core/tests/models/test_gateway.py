@@ -491,6 +491,96 @@ async def test_complete_raises_after_max_retries():
 
 
 @pytest.mark.asyncio
+async def test_retry_stops_at_total_timeout():
+    call_count = 0
+
+    async def always_fails(*_):
+        nonlocal call_count
+        call_count += 1
+        raise ModelTransientError("transient")
+
+    adapter = _make_adapter(side_effect=always_fails)
+    registry = _make_registry(adapter)
+    store = _make_store()
+    gw = ModelGateway(
+        connections=store,
+        providers=registry,
+        retry=RetryPolicy(max_retries=3, base=0.0, total_timeout=5.0),
+    )
+
+    # start=0.0, then elapsed check after first failure=6.0 → remaining=-1.0 → stop
+    time_values = iter([0.0, 6.0])
+    with patch("arcana.models.gateway.time.monotonic", side_effect=time_values):
+        with patch("arcana.models.gateway.asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(ModelTransientError):
+                await gw.complete("ollama/hermes-3", _req())
+
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_after_clamped_to_remaining_budget():
+    call_count = 0
+
+    async def fail_then_succeed(*_):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise ModelTransientError("429", retry_after=60.0)
+        return _ok_response()
+
+    adapter = _make_adapter(side_effect=fail_then_succeed)
+    registry = _make_registry(adapter)
+    store = _make_store()
+    gw = ModelGateway(
+        connections=store,
+        providers=registry,
+        retry=RetryPolicy(max_retries=3, base=0.0, total_timeout=5.0),
+    )
+
+    delays_slept: list[float] = []
+
+    async def mock_sleep(secs: float) -> None:
+        delays_slept.append(secs)
+
+    # start=0.0, elapsed check after first failure=1.0 → remaining=4.0 → clamp 60.0 to 4.0
+    time_values = iter([0.0, 1.0])
+    with patch("arcana.models.gateway.time.monotonic", side_effect=time_values):
+        with patch("arcana.models.gateway.asyncio.sleep", side_effect=mock_sleep):
+            result = await gw.complete("ollama/hermes-3", _req())
+
+    assert result.content == "ok"
+    assert delays_slept == [4.0]
+
+
+@pytest.mark.asyncio
+async def test_no_total_timeout_preserves_default_behavior():
+    call_count = 0
+
+    async def flaky(*_):
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            raise ModelTransientError("transient")
+        return _ok_response()
+
+    adapter = _make_adapter(side_effect=flaky)
+    registry = _make_registry(adapter)
+    store = _make_store()
+    gw = ModelGateway(
+        connections=store,
+        providers=registry,
+        retry=RetryPolicy(max_retries=3, base=0.0),  # total_timeout=None
+    )
+
+    with patch("arcana.models.gateway.asyncio.sleep", new_callable=AsyncMock):
+        result = await gw.complete("ollama/hermes-3", _req())
+
+    assert result.content == "ok"
+    assert call_count == 3
+
+
+@pytest.mark.asyncio
 async def test_complete_does_not_retry_fatal_errors():
     for fatal in [ModelAuthError("bad key"), ModelBadRequestError("bad req")]:
         adapter = _make_adapter(side_effect=fatal)

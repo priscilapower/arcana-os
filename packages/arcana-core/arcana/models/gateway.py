@@ -52,6 +52,7 @@ class RetryPolicy:
     base: float = 0.5
     factor: float = 2.0
     cap: float = 8.0
+    total_timeout: float | None = None
 
     def backoff(self, attempt: int, *, retry_after: float | None = None) -> float:
         if retry_after is not None:
@@ -236,6 +237,7 @@ class ModelGateway:
 
         req = replace(request, model_id=conn.model_id)
         last_exc: Exception | None = None
+        start = time.monotonic()
         for attempt in range(self._retry.max_retries + 1):
             try:
                 response = await entry.adapter.complete(req)
@@ -247,6 +249,12 @@ class ModelGateway:
                 if attempt == self._retry.max_retries:
                     break
                 delay = self._retry.backoff(attempt, retry_after=getattr(exc, "retry_after", None))
+                if self._retry.total_timeout is not None:
+                    elapsed = time.monotonic() - start
+                    remaining = self._retry.total_timeout - elapsed
+                    if remaining <= 0:
+                        break
+                    delay = min(delay, remaining)
                 await asyncio.sleep(delay)
             except ModelError:
                 raise
@@ -383,6 +391,7 @@ class ModelGateway:
         self, model: str, conn: ModelConnection, entry: _CacheEntry, request: CompletionRequest
     ) -> AsyncGenerator[ModelChunk, None]:
         last_exc: Exception | None = None
+        start = time.monotonic()
         for attempt in range(self._retry.max_retries + 1):
             started = False
             input_tokens = 0
@@ -405,6 +414,12 @@ class ModelGateway:
                 last_exc = exc
                 if attempt < self._retry.max_retries:
                     delay = self._retry.backoff(attempt, retry_after=getattr(exc, "retry_after", None))
+                    if self._retry.total_timeout is not None:
+                        elapsed = time.monotonic() - start
+                        remaining = self._retry.total_timeout - elapsed
+                        if remaining <= 0:
+                            break
+                        delay = min(delay, remaining)
                     await asyncio.sleep(delay)
             except ModelError:
                 raise
