@@ -6,6 +6,7 @@ import pytest
 
 from arcana.agents.registry import AgentRegistry
 from arcana.types.card import Card
+from arcana.types.session import MessageRole, SessionStatus
 
 
 def test_create_returns_agent_record(tmp_registry: AgentRegistry, model_connection_id):
@@ -189,3 +190,77 @@ def test_build_runtime_uses_record_system_prompt(tmp_registry: AgentRegistry, mo
     )
     agent = tmp_registry.build_runtime(record, gateway, "ollama/test")
     assert agent._system_prompt == "Custom prompt."
+
+
+# ---------------------------------------------------------------------------
+# build_runtime() → run() round-trip
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_then_run_returns_response(tmp_registry: AgentRegistry, model_connection_id, gateway):
+    record = tmp_registry.create(
+        name="pipeline-test",
+        card=Card.FOOL,
+        model_connection_id=model_connection_id,
+    )
+    agent = tmp_registry.build_runtime(record, gateway, "ollama/test-model")
+    result = await agent.run("hello world")
+    assert result == "Hello from the agent."
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_preserves_card_temperature(tmp_registry: AgentRegistry, model_connection_id, gateway):
+    record = tmp_registry.create(
+        name="temp-test",
+        card=Card.HERMIT,
+        model_connection_id=model_connection_id,
+    )
+    agent = tmp_registry.build_runtime(record, gateway, "ollama/test-model")
+    await agent.run("test")
+    call_args = gateway.complete.call_args[0][1]
+    assert abs(call_args.temperature - 0.35) < 0.01
+
+
+@pytest.mark.asyncio
+async def test_create_persist_reload_build_run_end_to_end(tmp_registry: AgentRegistry, model_connection_id, gateway):
+    """Full round-trip: create → persist → reload from disk → build runtime → run."""
+    original = tmp_registry.create(
+        name="e2e-agent",
+        card=Card.MAGICIAN,
+        model_connection_id=model_connection_id,
+        description="E2E test agent",
+    )
+
+    reloaded = tmp_registry.get(original.id)
+    assert reloaded is not None
+    assert reloaded.id == original.id
+    assert reloaded.card == Card.MAGICIAN
+
+    agent = tmp_registry.build_runtime(reloaded, gateway, "ollama/test-model")
+    result = await agent.run("end-to-end test")
+    assert result == "Hello from the agent."
+
+    sessions = agent._sessions
+    assert len(sessions) == 1
+    assert sessions[0].status == SessionStatus.COMPLETED
+    roles = [m.role for m in sessions[0].messages]
+    assert MessageRole.USER in roles
+    assert MessageRole.ASSISTANT in roles
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_with_modifier_cards_blends_temperature(
+    tmp_registry: AgentRegistry, model_connection_id, gateway
+):
+    # Hermit (0.35) + Empress (0.85) modifier → ~0.50
+    record = tmp_registry.create(
+        name="blended",
+        card=Card.HERMIT,
+        model_connection_id=model_connection_id,
+        modifier_cards=[Card.EMPRESS],
+    )
+    agent = tmp_registry.build_runtime(record, gateway, "ollama/test-model")
+    await agent.run("test blend")
+    call_args = gateway.complete.call_args[0][1]
+    assert abs(call_args.temperature - 0.50) < 0.01

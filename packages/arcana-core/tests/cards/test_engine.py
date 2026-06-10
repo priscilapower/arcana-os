@@ -1,5 +1,8 @@
+import pytest
+
 from arcana.cards.engine import CardEngine
 from arcana.types.card import Card
+from arcana.types.memory import DEFAULT_DECAY_PROFILES, MemoryType
 
 
 def test_engine_single_card_produces_config(engine: CardEngine):
@@ -37,3 +40,104 @@ def test_engine_system_prompt_contains_tone(engine: CardEngine):
 def test_engine_system_prompt_mentions_modifiers(engine: CardEngine):
     config = engine.resolve(Card.HERMIT, modifiers=[Card.MAGICIAN])
     assert "Magician" in config.system_prompt
+
+
+# ---------------------------------------------------------------------------
+# Three-card blending
+# ---------------------------------------------------------------------------
+
+
+def test_engine_three_card_blend_temperature(engine: CardEngine):
+    # Hermit (0.35) primary + Fool (0.95) + Empress (0.85) modifiers
+    # mod_weight = 0.3 / 2 = 0.15 each
+    # Expected: 0.35 * 0.7 + 0.95 * 0.15 + 0.85 * 0.15
+    #         = 0.245 + 0.1425 + 0.1275 = 0.515
+    config = engine.resolve(Card.HERMIT, modifiers=[Card.FOOL, Card.EMPRESS])
+    expected = 0.35 * 0.7 + 0.95 * 0.15 + 0.85 * 0.15
+    assert abs(config.temperature - expected) < 0.01
+
+
+def test_engine_three_card_blend_source_cards(engine: CardEngine):
+    config = engine.resolve(Card.HERMIT, modifiers=[Card.FOOL, Card.EMPRESS])
+    assert config.source_cards == [Card.HERMIT, Card.FOOL, Card.EMPRESS]
+
+
+def test_engine_three_card_blend_note_mentions_all(engine: CardEngine):
+    config = engine.resolve(Card.HERMIT, modifiers=[Card.FOOL, Card.EMPRESS])
+    assert "Hermit" in config.blend_note
+    assert "Fool" in config.blend_note
+    assert "Empress" in config.blend_note
+
+
+def test_engine_three_card_blend_memory_weights(engine: CardEngine):
+    # Verify blended weights are non-negative and approximately reasonable
+    config = engine.resolve(Card.MAGICIAN, modifiers=[Card.HERMIT, Card.EMPRESS])
+    mw = config.memory_weights
+    assert mw.episodic >= 0.0
+    assert mw.semantic >= 0.0
+    assert mw.procedural >= 0.0
+    assert mw.preference >= 0.0
+
+
+# ---------------------------------------------------------------------------
+# Decay config blending
+# ---------------------------------------------------------------------------
+
+
+def test_engine_single_card_decay_config_copied(engine: CardEngine):
+    config = engine.resolve(Card.FOOL)
+    assert config.decay_config.episodic_half_life_days == 3.0
+    assert config.decay_config.semantic_half_life_days == 30.0
+
+
+def test_engine_modifier_blends_decay_episodic(engine: CardEngine):
+    # Fool episodic = 3.0, Hermit has None (uses default 14.0)
+    # Hermit primary (70%) + Fool modifier (30%)
+    hermit_episodic = engine._registry.get(Card.HERMIT).archetype.decay_config.episodic_half_life_days
+    default_episodic = DEFAULT_DECAY_PROFILES[MemoryType.EPISODIC].half_life_days
+    p_val = hermit_episodic if hermit_episodic is not None else default_episodic
+    expected = round(p_val * 0.7 + 3.0 * 0.3, 1)
+
+    config = engine.resolve(Card.HERMIT, modifiers=[Card.FOOL])
+    assert abs(config.decay_config.episodic_half_life_days - expected) < 0.11
+
+
+def test_engine_none_half_life_falls_back_to_default(engine: CardEngine):
+    # Find a card with None decay values to test the fallback
+    registry = engine._registry
+    cards_with_none_decay = [c for c in registry.all() if c.archetype.decay_config.episodic_half_life_days is None]
+    if not cards_with_none_decay:
+        pytest.skip("No cards with None episodic_half_life_days in current definitions")
+
+    primary_card = cards_with_none_decay[0]
+    config = engine.resolve(primary_card.id, modifiers=[Card.FOOL])
+    # Result should be a valid float, not None — default was applied
+    assert config.decay_config.episodic_half_life_days is not None
+    assert config.decay_config.episodic_half_life_days > 0
+
+
+def test_engine_three_card_decay_blend(engine: CardEngine):
+    # With three cards the per-modifier weight is 0.15 each
+    config = engine.resolve(Card.FOOL, modifiers=[Card.HERMIT, Card.MAGICIAN])
+    # Just verify the output is a valid positive float
+    dc = config.decay_config
+    assert dc.episodic_half_life_days is not None and dc.episodic_half_life_days > 0
+    assert dc.semantic_half_life_days is not None and dc.semantic_half_life_days > 0
+
+
+# ---------------------------------------------------------------------------
+# World as primary card
+# ---------------------------------------------------------------------------
+
+
+def test_engine_world_primary_produces_valid_config(engine: CardEngine):
+    config = engine.resolve(Card.WORLD)
+    assert config.source_cards == [Card.WORLD]
+    assert "Meta-Agent" in config.system_prompt  # WORLD's role
+    assert 0.0 <= config.temperature <= 1.0
+
+
+def test_engine_world_with_modifier_blends_without_error(engine: CardEngine):
+    config = engine.resolve(Card.WORLD, modifiers=[Card.HERMIT])
+    assert Card.WORLD in config.source_cards
+    assert Card.HERMIT in config.source_cards
