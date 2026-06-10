@@ -91,6 +91,7 @@ class Agent:
             system=system,
             messages=[{"role": "user", "content": prompt}],
             temperature=self._temperature,
+            metadata={"session_id": str(session.id), "agent_id": str(self.id)},
         )
         response = await self._gateway.complete(self._model, request)
 
@@ -132,6 +133,7 @@ class Agent:
             messages=[{"role": "user", "content": prompt}],
             temperature=self._temperature,
             stream=True,
+            metadata={"session_id": str(session.id), "agent_id": str(self.id)},
         )
 
         content_parts: list[str] = []

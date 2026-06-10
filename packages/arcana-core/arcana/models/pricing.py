@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -34,13 +35,18 @@ class Usage:
 
 @dataclass(frozen=True)
 class CostEvent:
-    """Emitted by the gateway after every completed call. Not persisted — sink aggregates it."""
+    """Emitted by the gateway after every completed call. Not persisted — sink aggregates it.
+
+    ``metadata`` is copied verbatim from the originating ``CompletionRequest``. The gateway
+    never reads or validates it; callers use it to attribute cost to a session or agent.
+    """
 
     model: str
     usage: Usage
     estimated: bool = False
     priced: bool = True
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
+    metadata: Mapping[str, str] | None = None
 
 
 # (input_per_1k_tokens, output_per_1k_tokens) in USD

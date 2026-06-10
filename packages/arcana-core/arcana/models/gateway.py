@@ -10,7 +10,7 @@ import hashlib
 import logging
 import random
 import time
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Mapping
 from contextlib import aclosing
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -192,6 +192,10 @@ class ModelGateway:
     adapter instances per connection, retries transient failures with
     exponential backoff, and emits a ``CostEvent`` per completed call.
 
+    Token usage is recorded on the session regardless. Per-call cost is
+    emitted only if ``on_cost`` is provided at construction; without it,
+    no ``CostEvent`` fires.
+
     Usage::
 
         async with ModelGateway(connections=ConnectionStore()) as gw:
@@ -242,7 +246,7 @@ class ModelGateway:
             try:
                 response = await entry.adapter.complete(req)
                 entry.mark_healthy()
-                await self._emit_cost(model, response, conn)
+                await self._emit_cost(model, response, conn, req.metadata)
                 return response
             except _RETRYABLE as exc:
                 last_exc = exc
@@ -406,7 +410,9 @@ class ModelGateway:
                         total_chars += len(chunk.text)
                         yield chunk
                 entry.mark_healthy()
-                await self._emit_cost_streaming(model, conn, input_tokens, output_tokens, total_chars)
+                await self._emit_cost_streaming(
+                    model, conn, input_tokens, output_tokens, total_chars, request.metadata
+                )
                 return
             except _RETRYABLE as exc:
                 if started:
@@ -429,20 +435,32 @@ class ModelGateway:
         if last_exc is not None:
             raise last_exc
 
-    async def _emit_cost(self, model: str, response: CompletionResponse, conn: ModelConnection) -> None:
+    async def _emit_cost(
+        self,
+        model: str,
+        response: CompletionResponse,
+        conn: ModelConnection,
+        metadata: Mapping[str, str] | None = None,
+    ) -> None:
         if self._on_cost is None:
             return
         cost = self._pricing.cost(model, response.input_tokens, response.output_tokens, conn)
         usage = Usage.from_tokens(response.input_tokens, response.output_tokens, cost)
         try:
-            result = self._on_cost(CostEvent(model=model, usage=usage, priced=cost is not None))
+            result = self._on_cost(CostEvent(model=model, usage=usage, priced=cost is not None, metadata=metadata))
             if asyncio.iscoroutine(result):
                 await result
         except Exception:
             _log.warning("on_cost sink raised; sink errors are non-fatal", exc_info=True)
 
     async def _emit_cost_streaming(
-        self, model: str, conn: ModelConnection, input_tokens: int, output_tokens: int, total_chars: int
+        self,
+        model: str,
+        conn: ModelConnection,
+        input_tokens: int,
+        output_tokens: int,
+        total_chars: int,
+        metadata: Mapping[str, str] | None = None,
     ) -> None:
         if self._on_cost is None:
             return
@@ -452,7 +470,9 @@ class ModelGateway:
         cost = self._pricing.cost(model, input_tokens, output_tokens, conn)
         usage = Usage.from_tokens(input_tokens, output_tokens, cost)
         try:
-            result = self._on_cost(CostEvent(model=model, usage=usage, estimated=estimated, priced=cost is not None))
+            result = self._on_cost(
+                CostEvent(model=model, usage=usage, estimated=estimated, priced=cost is not None, metadata=metadata)
+            )
             if asyncio.iscoroutine(result):
                 await result
         except Exception:

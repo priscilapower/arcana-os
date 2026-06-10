@@ -1,7 +1,7 @@
 """ModelAdapter ABC and shared wire types."""
 
 from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TypedDict
 
@@ -69,6 +69,7 @@ class CompletionRequest:
     tools: Sequence[ToolParam] | None = None
     stream: bool = False
     model_id: str = ""
+    metadata: Mapping[str, str] | None = None
 
 
 @dataclass

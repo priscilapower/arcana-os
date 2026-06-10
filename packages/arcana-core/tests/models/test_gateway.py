@@ -1004,6 +1004,66 @@ async def test_connection_recovers_after_cooldown_probe():
     assert cache_entry.healthy is True
 
 
+# ---------------------------------------------------------------------------
+# CostEvent metadata attribution
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cost_event_carries_request_metadata_complete():
+    adapter = _make_adapter(response=_ok_response(input_tokens=10, output_tokens=5))
+    registry = _make_registry(adapter)
+    store = _make_store()
+    events: list[CostEvent] = []
+    gw = ModelGateway(connections=store, providers=registry, on_cost=events.append)
+
+    req = _req()
+    req_with_meta = CompletionRequest(
+        system=req.system,
+        messages=req.messages,
+        temperature=req.temperature,
+        metadata={"session_id": "s-123", "agent_id": "a-456"},
+    )
+    await gw.complete("ollama/hermes-3", req_with_meta)
+
+    assert len(events) == 1
+    assert events[0].metadata == {"session_id": "s-123", "agent_id": "a-456"}
+
+
+@pytest.mark.asyncio
+async def test_cost_event_carries_request_metadata_stream():
+    adapter = _make_adapter()
+    adapter.stream = MagicMock(return_value=_aiter([ModelChunk(text="hi", input_tokens=10, output_tokens=5)]))
+    registry = _make_registry(adapter)
+    store = _make_store()
+    events: list[CostEvent] = []
+    gw = ModelGateway(connections=store, providers=registry, on_cost=events.append)
+
+    req = CompletionRequest(
+        system="sys",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"session_id": "s-abc", "agent_id": "a-xyz"},
+    )
+    _ = [c async for c in gw.stream("ollama/hermes-3", req)]
+
+    assert len(events) == 1
+    assert events[0].metadata == {"session_id": "s-abc", "agent_id": "a-xyz"}
+
+
+@pytest.mark.asyncio
+async def test_no_metadata_when_unset():
+    adapter = _make_adapter(response=_ok_response())
+    registry = _make_registry(adapter)
+    store = _make_store()
+    events: list[CostEvent] = []
+    gw = ModelGateway(connections=store, providers=registry, on_cost=events.append)
+
+    await gw.complete("ollama/hermes-3", _req())
+
+    assert len(events) == 1
+    assert events[0].metadata is None
+
+
 @pytest.mark.asyncio
 async def test_health_check_resets_unhealthy_flag():
     adapter = _make_adapter(side_effect=ModelUnavailableError("down"))

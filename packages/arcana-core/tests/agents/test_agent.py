@@ -252,3 +252,19 @@ async def test_agent_routes_model_string_to_connection(gateway):
 
     model_arg = gateway.complete.call_args[0][0]
     assert model_arg == "ollama/hermes-3"
+
+
+@pytest.mark.asyncio
+async def test_agent_run_cost_event_has_session_id():
+    adapter = _stub_adapter()
+    cost_events: list[CostEvent] = []
+    async with _real_gateway(adapter, on_cost=cost_events.append) as gw:
+        ag = Agent(name="test", card=Card.FOOL, gateway=gw, model="ollama/hermes-3")
+        await ag.run("hello")
+
+    assert len(cost_events) == 1
+    ev = cost_events[0]
+    assert ev.metadata is not None
+    session = ag._sessions[0]
+    assert ev.metadata["session_id"] == str(session.id)
+    assert ev.metadata["agent_id"] == str(ag.id)

@@ -93,6 +93,8 @@ class EvalHarness:
         print(f"   Judge:   {'LLM + Rules' if self._use_llm else 'Rules only'}")
         print(f"   Suite:   {suite or 'all'}\n")
 
+        # Token usage is recorded on the session regardless. Per-call cost is emitted only if
+        # on_cost is provided at construction; without it, no CostEvent fires.
         async with ModelGateway(ConnectionStore()) as gateway:
             results = await self._run_cases(cases, run_id, gateway)
         self._save_results(run_id, results)
