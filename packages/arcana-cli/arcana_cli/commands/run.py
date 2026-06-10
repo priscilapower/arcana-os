@@ -9,6 +9,9 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from arcana.agents.registry import AgentRegistry
+from arcana.models.connection_store import ConnectionStore
+
 console = Console()
 ARCANA_HOME = Path.home() / ".arcana"
 
@@ -52,14 +55,15 @@ def status_cmd() -> None:
         console.print("[red]Arcana not initialised. Run: arcana init[/red]")
         raise typer.Exit(1)
 
-    agents_dir = ARCANA_HOME / "agents"
-    agent_count = len(list(agents_dir.iterdir())) if agents_dir.exists() else 0
+    agent_count = len(AgentRegistry(ARCANA_HOME / "agents").list())
+    conn_count = len(ConnectionStore(ARCANA_HOME / "connections" / "models.json").all())
 
     table = Table(title="🌌 Arcana OS Status", show_header=True)
     table.add_column("", style="bold")
     table.add_column("")
     table.add_row("Home", str(ARCANA_HOME))
     table.add_row("Agents", str(agent_count))
+    table.add_row("Connections", str(conn_count))
     table.add_row("The World", "[green]ready[/green]")
     console.print(table)
 

@@ -52,6 +52,12 @@ pythonVersion = "3.11"
 typeCheckingMode = "strict"
 venvPath = "."
 venv = ".venv"
+# Editable installs are registered via .pth files that some Pyright versions don't follow;
+# listing them explicitly ensures IDE resolution matches `uv run pyright`.
+extraPaths = [
+    "packages/arcana-core",
+    "packages/arcana-cli",
+]
 exclude = [
     "**/examples/**",
     "**/tests/**",

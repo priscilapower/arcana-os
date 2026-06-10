@@ -1,72 +1,162 @@
 """Agent management commands."""
 
 from pathlib import Path
+from typing import Any
+from uuid import UUID
 
 import typer
 from rich.console import Console
+from rich.panel import Panel
 from rich.table import Table
 
+from arcana.agents.registry import AgentRegistry
+from arcana.cards.engine import CardEngine
+from arcana.cards.registry import get_registry
+from arcana.models.connection_store import ConnectionStore
+from arcana.types.agent import Agent as AgentRecord
 from arcana.types.card import Card
 
 app = typer.Typer(help="Manage agents.")
 console = Console()
 
-CARD_TABLE = {
-    Card.FOOL: ("0", "The Fool", "Explorer / Autonomous Agent", "0.95"),
-    Card.MAGICIAN: ("I", "The Magician", "Executor / Tool Master", "0.50"),
-    Card.HIGH_PRIESTESS: (
-        "II",
-        "The High Priestess",
-        "Archivist / Pattern Reader",
-        "0.40",
-    ),
-    Card.EMPRESS: ("III", "The Empress", "Creator / Generative Agent", "0.85"),
-    Card.EMPEROR: ("IV", "The Emperor", "Orchestrator / System Agent", "0.30"),
-    Card.HIEROPHANT: ("V", "The Hierophant", "Advisor / Domain Expert", "0.30"),
-    Card.LOVERS: ("VI", "The Lovers", "Collaborator / Communication", "0.70"),
-    Card.CHARIOT: ("VII", "The Chariot", "Driver / Goal Agent", "0.40"),
-    Card.STRENGTH: ("VIII", "Strength", "Coach / Long-Game Agent", "0.60"),
-    Card.HERMIT: ("IX", "The Hermit", "Researcher / Deep Analyst", "0.35"),
-    Card.WHEEL_OF_FORTUNE: (
-        "X",
-        "Wheel of Fortune",
-        "Scheduler / Probabilistic",
-        "0.65",
-    ),
-    Card.JUSTICE: ("XI", "Justice", "Auditor / Evaluation Agent", "0.20"),
-    Card.HANGED_MAN: ("XII", "The Hanged Man", "Reframer / Perspective", "0.80"),
-    Card.DEATH: ("XIII", "Death", "Transformer / Refactor Agent", "0.40"),
-    Card.TEMPERANCE: ("XIV", "Temperance", "Integrator / Synthesis", "0.55"),
-    Card.DEVIL: ("XV", "The Devil", "Shadow / Constraint Breaker", "0.75"),
-    Card.TOWER: ("XVI", "The Tower", "Disruptor / Breakthrough", "0.85"),
-    Card.STAR: ("XVII", "The Star", "Companion / Wellbeing Agent", "0.70"),
-    Card.MOON: ("XVIII", "The Moon", "Interpreter / Ambiguity", "0.80"),
-    Card.SUN: ("XIX", "The Sun", "Amplifier / Output Agent", "0.75"),
-    Card.JUDGEMENT: ("XX", "Judgement", "Reviewer / Reflection", "0.45"),
-    Card.WORLD: ("XXI", "The World", "Meta-Agent [reserved]", "0.50"),
+_AGENTS_BASE = Path.home() / ".arcana" / "agents"
+_CONNECTIONS_PATH = Path.home() / ".arcana" / "connections" / "models.json"
+
+
+def _registry() -> AgentRegistry:
+    return AgentRegistry(_AGENTS_BASE)
+
+
+def _store() -> ConnectionStore:
+    return ConnectionStore(_CONNECTIONS_PATH)
+
+
+_ROMAN = {
+    0: "0",
+    1: "I",
+    2: "II",
+    3: "III",
+    4: "IV",
+    5: "V",
+    6: "VI",
+    7: "VII",
+    8: "VIII",
+    9: "IX",
+    10: "X",
+    11: "XI",
+    12: "XII",
+    13: "XIII",
+    14: "XIV",
+    15: "XV",
+    16: "XVI",
+    17: "XVII",
+    18: "XVIII",
+    19: "XIX",
+    20: "XX",
+    21: "XXI",
 }
 
 
 def _print_card_table() -> None:
-    table = Table(title="🃏 The 22 Major Arcana", show_header=True)
+    table = Table(title="🃏 The 22 Major Arcana", show_header=True, header_style="bold magenta")
     table.add_column("#", style="dim", width=4)
     table.add_column("Card", style="bold")
     table.add_column("Archetype")
     table.add_column("Temp", width=5)
     table.add_column("Key", style="dim")
-
-    for card, (num, name, archetype, temp) in CARD_TABLE.items():
-        if card == Card.WORLD:
-            continue  # The World is reserved
-        table.add_row(num, name, archetype, temp, card.value)
+    for tarot in get_registry().all():
+        if tarot.id == Card.WORLD:
+            continue
+        table.add_row(
+            _ROMAN[tarot.number],
+            tarot.name,
+            tarot.archetype.role,
+            f"{tarot.archetype.default_temperature:.2f}",
+            tarot.id.value,
+        )
     console.print(table)
+
+
+def _validate_card(raw: str) -> Card:
+    for candidate in (raw, f"the-{raw}"):
+        try:
+            return Card(candidate)
+        except ValueError:
+            pass
+    matches = [c for c in Card if raw.lower() in c.value]
+    if len(matches) == 1:
+        return matches[0]
+    raise ValueError(f"Unknown card: {raw!r}")
+
+
+def _resolve_agent(name_or_id: str) -> AgentRecord:
+    """Resolve a name or UUID string to an AgentRecord, with ambiguity detection."""
+    reg = _registry()
+    try:
+        uid = UUID(name_or_id)
+        record = reg.get(uid)
+        if record is not None and not record.is_archived:
+            return record
+        console.print(f"[red]No agent with ID '{name_or_id}'.[/red]")
+        raise typer.Exit(1)
+    except ValueError:
+        pass
+    matches = [a for a in reg.list() if a.name == name_or_id]
+    if not matches:
+        console.print(f"[red]No agent '{name_or_id}'.[/red]")
+        raise typer.Exit(1)
+    if len(matches) > 1:
+        console.print(f"[red]Ambiguous name '{name_or_id}'. Use one of these IDs:[/red]")
+        for a in matches:
+            console.print(f"  {a.id}")
+        raise typer.Exit(1)
+    return matches[0]
+
+
+def _pick_connection(default_name: str | None = None) -> tuple[UUID, str]:
+    """Show available connections and prompt the user to pick one."""
+    store = _store()
+    connections = store.all()
+    if not connections:
+        console.print("[red]No model connections configured. Run: arcana connect model[/red]")
+        raise typer.Exit(1)
+
+    table = Table(title="Model Connections", show_header=True, header_style="bold magenta")
+    table.add_column("#", style="dim", width=4)
+    table.add_column("Name", style="bold")
+    table.add_column("Provider")
+    table.add_column("Model ID")
+    for i, c in enumerate(connections, 1):
+        table.add_row(str(i), c.name, str(c.provider), c.model_id)
+    console.print(table)
+
+    prompt_default = default_name or connections[0].name
+    choice = typer.prompt("Choose a connection (name or #)", default=prompt_default)
+
+    try:
+        idx = int(choice) - 1
+        if 0 <= idx < len(connections):
+            conn = connections[idx]
+            return conn.id, conn.name
+        console.print(
+            f"[red]Invalid selection. Enter a number between 1 and {len(connections)}, or a connection name.[/red]"
+        )
+        raise typer.Exit(1)
+    except ValueError:
+        pass
+
+    conn = store.get_by_name(choice)
+    if conn is None:
+        console.print(f"[red]No connection named '{choice}'.[/red]")
+        raise typer.Exit(1)
+    return conn.id, conn.name
 
 
 @app.command("create")
 def create(
     name: str = typer.Option(None, "--name", "-n", help="Agent name"),
     card: str = typer.Option(None, "--card", "-c", help="Card id (e.g. 'hermit')"),
-    model: str = typer.Option(None, "--model", "-m", help="Model (e.g. 'ollama/hermes-3')"),
+    model: str = typer.Option(None, "--model", "-m", help="Model connection name"),
 ) -> None:
     """Create a new agent. Interactive if no flags provided."""
     if not name:
@@ -76,57 +166,167 @@ def create(
         _print_card_table()
         card = typer.prompt("\nChoose a card (enter the key, e.g. 'the-hermit')")
 
-    # Validate card
     try:
-        card_enum = Card(card) if "-" in card else Card(f"the-{card}")
-    except ValueError as exception:
-        # Try partial match
-        matches = [c for c in Card if card.lower() in c.value]
-        if len(matches) == 1:
-            card_enum = matches[0]
-        else:
-            console.print(f"[red]Unknown card: {card}[/red]")
-            raise typer.Exit(1) from exception
+        card_enum = _validate_card(card)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
 
-    if not model:
-        model = typer.prompt("Model", default="ollama/hermes-3")
+    if card_enum == Card.WORLD:
+        console.print("[red]The World is reserved and cannot be assigned.[/red]")
+        raise typer.Exit(1)
 
-    card_info = CARD_TABLE.get(card_enum, ("?", card_enum.value, "", ""))
+    if model:
+        conn = _store().get_by_name(model)
+        if conn is None:
+            console.print(f"[red]No connection named '{model}'. Run: arcana connect list[/red]")
+            raise typer.Exit(1)
+        conn_id, conn_name = conn.id, conn.name
+    else:
+        conn_id, conn_name = _pick_connection()
+
+    record = _registry().create(name=name, card=card_enum, model_connection_id=conn_id)
+    tarot = get_registry().get(card_enum)
     console.print(
-        f"\n[bold green]✨ Creating agent '{name}'[/bold green]\n"
-        f"  Card:  {card_info[0]} · {card_info[1]} — {card_info[2]}\n"
-        f"  Model: {model}\n"
-        f"  Temp:  {card_info[3]}\n"
+        Panel.fit(
+            f"[bold green]✨ Agent '{record.name}' created![/bold green]\n\n"
+            f"  ID:    [dim]{record.id}[/dim]\n"
+            f"  Card:  {_ROMAN[tarot.number]} · {tarot.name} — {tarot.archetype.role}\n"
+            f"  Model: {conn_name}\n"
+            f"  Temp:  {record.temperature:.2f}",
+            title="🤖 New Agent",
+        )
     )
-    # TODO: persist via AgentRegistry in Epic 5
-    console.print("[yellow]Agent persistence is implemented in Epic 5.[/yellow]")
 
 
 @app.command("list")
 def list_agents() -> None:
-    """List all agents."""
-    agents_dir = Path.home() / ".arcana" / "agents"
-    if not agents_dir.exists() or not list(agents_dir.iterdir()):
+    """List all registered agents."""
+    records = _registry().list()
+    if not records:
         console.print("[dim]No agents yet. Run: arcana agent create[/dim]")
         return
-    # TODO: load from registry in Epic 5
-    console.print("[dim]Agent listing is implemented in Epic 5.[/dim]")
+
+    conn_map = {c.id: c for c in _store().all()}
+    table = Table(title="🤖 Registered Agents", show_header=True, header_style="bold magenta")
+    table.add_column("Name", style="bold")
+    table.add_column("Card")
+    table.add_column("Model")
+    table.add_column("Status")
+    table.add_column("ID", style="dim")
+    for r in records:
+        conn = conn_map.get(r.model_connection_id)
+        model_name = conn.name if conn else str(r.model_connection_id)[:8] + "…"
+        table.add_row(r.name, r.card.value, model_name, r.status.value, str(r.id)[:8] + "…")
+    console.print(table)
 
 
 @app.command("show")
-def show(name: str = typer.Argument(..., help="Agent name")) -> None:
+def show(name: str = typer.Argument(..., help="Agent name or UUID")) -> None:
     """Show full config for an agent."""
-    # TODO: implement in Epic 5
-    console.print(f"[dim]Showing agent '{name}' — implemented in Epic 5.[/dim]")
+    record = _resolve_agent(name)
+    conn_map = {c.id: c for c in _store().all()}
+    conn = conn_map.get(record.model_connection_id)
+    model_label = conn.name if conn else str(record.model_connection_id)
+
+    modifier_str = ", ".join(c.value for c in record.modifier_cards) or "none"
+    tags_str = ", ".join(record.tags) or "none"
+    prompt_preview = record.system_prompt[:200] + ("…" if len(record.system_prompt) > 200 else "")
+
+    console.print(
+        Panel(
+            f"[bold]ID:[/bold]          {record.id}\n"
+            f"[bold]Name:[/bold]        {record.name}\n"
+            f"[bold]Description:[/bold] {record.description or '—'}\n"
+            f"[bold]Card:[/bold]        {record.card.value}\n"
+            f"[bold]Modifiers:[/bold]   {modifier_str}\n"
+            f"[bold]Model:[/bold]       {model_label}\n"
+            f"[bold]Temperature:[/bold] {record.temperature:.2f}\n"
+            f"[bold]Status:[/bold]      {record.status.value}\n"
+            f"[bold]Tags:[/bold]        {tags_str}\n"
+            f"[bold]Created:[/bold]     {record.created_at.strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+            f"[bold]System prompt:[/bold]\n{prompt_preview}",
+            title=f"🤖 {record.name}",
+        )
+    )
+
+
+@app.command("edit")
+def edit(
+    name: str = typer.Argument(..., help="Agent name or UUID"),
+    new_name: str | None = typer.Option(None, "--name", "-n", help="New name"),
+    description: str | None = typer.Option(None, "--description", "-d", help="Description"),
+    card: str | None = typer.Option(None, "--card", "-c", help="Card id"),
+    model: str | None = typer.Option(None, "--model", "-m", help="Connection name"),
+    tags: str | None = typer.Option(None, "--tags", "-t", help="Comma-separated tags"),
+) -> None:
+    """Edit an agent's name, description, card, model, or tags."""
+    record = _resolve_agent(name)
+
+    updated_name = new_name if new_name is not None else typer.prompt("Name", default=record.name)
+    updated_desc = (
+        description if description is not None else typer.prompt("Description", default=record.description or "")
+    )
+
+    if card is not None:
+        try:
+            updated_card = _validate_card(card)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
+    else:
+        card_input = typer.prompt("Card", default=record.card.value)
+        try:
+            updated_card = _validate_card(card_input)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
+
+    if model is not None:
+        conn = _store().get_by_name(model)
+        if conn is None:
+            console.print(f"[red]No connection named '{model}'.[/red]")
+            raise typer.Exit(1)
+        updated_conn_id = conn.id
+    else:
+        conn_map = {c.id: c for c in _store().all()}
+        current_conn = conn_map.get(record.model_connection_id)
+        updated_conn_id, _ = _pick_connection(default_name=current_conn.name if current_conn else None)
+
+    if tags is not None:
+        updated_tags = [t.strip() for t in tags.split(",") if t.strip()]
+    else:
+        tags_input = typer.prompt("Tags (comma-separated)", default=", ".join(record.tags))
+        updated_tags = [t.strip() for t in tags_input.split(",") if t.strip()]
+
+    updates: dict[str, Any] = {
+        "name": updated_name,
+        "description": updated_desc,
+        "card": updated_card,
+        "model_connection_id": updated_conn_id,
+        "tags": updated_tags,
+    }
+    if updated_card != record.card:
+        config = CardEngine(get_registry()).resolve(updated_card, record.modifier_cards)
+        updates["temperature"] = config.temperature
+        updates["system_prompt"] = config.system_prompt
+
+    _registry().save(record.model_copy(update=updates))
+    console.print(f"[bold green]✓ Agent '{updated_name}' updated.[/bold green]")
 
 
 @app.command("delete")
 def delete(
-    name: str = typer.Argument(..., help="Agent name"),
+    name: str = typer.Argument(..., help="Agent name or UUID"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
 ) -> None:
-    """Delete an agent."""
+    """Delete an agent (soft-delete)."""
+    record = _resolve_agent(name)
     if not yes:
-        typer.confirm(f"Delete agent '{name}'?", abort=True)
-    # TODO: implement in Epic 5
-    console.print(f"[dim]Deleting agent '{name}' — implemented in Epic 5.[/dim]")
+        typer.confirm(f"Delete agent '{record.name}'?", abort=True)
+    try:
+        _registry().delete(record.id)
+    except FileNotFoundError as e:
+        console.print(f"[red]Agent '{record.name}' was already deleted.[/red]")
+        raise typer.Exit(1) from e
+    console.print(f"[bold green]✓ Agent '{record.name}' deleted.[/bold green]")
