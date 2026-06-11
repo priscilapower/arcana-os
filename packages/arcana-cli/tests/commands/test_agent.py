@@ -20,8 +20,8 @@ def arcana_home(tmp_path, monkeypatch):
     home.mkdir()
     (home / "agents").mkdir()
     (home / "connections").mkdir()
-    monkeypatch.setattr(agent_mod, "_AGENTS_BASE", home / "agents")
-    monkeypatch.setattr(agent_mod, "_CONNECTIONS_PATH", home / "connections" / "models.json")
+    monkeypatch.setattr(agent_mod, "AGENTS_BASE", home / "agents")
+    monkeypatch.setattr(agent_mod, "CONNECTIONS_PATH", home / "connections" / "models.json")
     return home
 
 

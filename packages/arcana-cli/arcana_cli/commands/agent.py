@@ -1,6 +1,5 @@
 """Agent management commands."""
 
-from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -15,46 +14,18 @@ from arcana.cards.registry import get_registry
 from arcana.models.connection_store import ConnectionStore
 from arcana.types.agent import Agent as AgentRecord
 from arcana.types.card import Card
+from arcana_cli.constants import AGENTS_BASE, CONNECTIONS_PATH, ROMAN
 
 app = typer.Typer(help="Manage agents.")
 console = Console()
 
-_AGENTS_BASE = Path.home() / ".arcana" / "agents"
-_CONNECTIONS_PATH = Path.home() / ".arcana" / "connections" / "models.json"
-
 
 def _registry() -> AgentRegistry:
-    return AgentRegistry(_AGENTS_BASE)
+    return AgentRegistry(AGENTS_BASE)
 
 
 def _store() -> ConnectionStore:
-    return ConnectionStore(_CONNECTIONS_PATH)
-
-
-_ROMAN = {
-    0: "0",
-    1: "I",
-    2: "II",
-    3: "III",
-    4: "IV",
-    5: "V",
-    6: "VI",
-    7: "VII",
-    8: "VIII",
-    9: "IX",
-    10: "X",
-    11: "XI",
-    12: "XII",
-    13: "XIII",
-    14: "XIV",
-    15: "XV",
-    16: "XVI",
-    17: "XVII",
-    18: "XVIII",
-    19: "XIX",
-    20: "XX",
-    21: "XXI",
-}
+    return ConnectionStore(CONNECTIONS_PATH)
 
 
 def _print_card_table() -> None:
@@ -68,7 +39,7 @@ def _print_card_table() -> None:
         if tarot.id == Card.WORLD:
             continue
         table.add_row(
-            _ROMAN[tarot.number],
+            ROMAN[tarot.number],
             tarot.name,
             tarot.archetype.role,
             f"{tarot.archetype.default_temperature:.2f}",
@@ -191,7 +162,7 @@ def create(
         Panel.fit(
             f"[bold green]✨ Agent '{record.name}' created![/bold green]\n\n"
             f"  ID:    [dim]{record.id}[/dim]\n"
-            f"  Card:  {_ROMAN[tarot.number]} · {tarot.name} — {tarot.archetype.role}\n"
+            f"  Card:  {ROMAN[tarot.number]} · {tarot.name} — {tarot.archetype.role}\n"
             f"  Model: {conn_name}\n"
             f"  Temp:  {record.temperature:.2f}",
             title="🤖 New Agent",

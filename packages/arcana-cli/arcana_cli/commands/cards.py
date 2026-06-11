@@ -7,34 +7,10 @@ from rich.table import Table
 
 from arcana.cards.registry import get_registry
 from arcana.types.card import Card, TarotCard
+from arcana_cli.constants import ROMAN
 
 app = typer.Typer(help="Browse the 22 Major Arcana card definitions.")
 console = Console()
-
-_ROMAN = {
-    0: "0",
-    1: "I",
-    2: "II",
-    3: "III",
-    4: "IV",
-    5: "V",
-    6: "VI",
-    7: "VII",
-    8: "VIII",
-    9: "IX",
-    10: "X",
-    11: "XI",
-    12: "XII",
-    13: "XIII",
-    14: "XIV",
-    15: "XV",
-    16: "XVI",
-    17: "XVII",
-    18: "XVIII",
-    19: "XIX",
-    20: "XX",
-    21: "XXI",
-}
 
 
 def _resolve_card(name: str) -> TarotCard:
@@ -68,7 +44,7 @@ def list_cards(ctx: typer.Context) -> None:
     table.add_column("Key", style="dim")
     for card in registry.all():
         table.add_row(
-            _ROMAN[card.number],
+            ROMAN[card.number],
             card.name,
             card.archetype.role,
             f"{card.archetype.default_temperature:.2f}",
@@ -94,7 +70,7 @@ def show(name: str = typer.Argument(..., help="Card name or key (e.g. 'hermit', 
         return f"{days}d" if days is not None else "system default"
 
     lines: list[str] = [
-        f"[bold]{_ROMAN[card.number]} · {card.name}[/bold]  [dim]{card.id.value}[/dim]",
+        f"[bold]{ROMAN[card.number]} · {card.name}[/bold]  [dim]{card.id.value}[/dim]",
         f"[cyan]Role:[/cyan]        {a.role}",
         f"[cyan]Temperature:[/cyan] {a.default_temperature:.2f}",
         f"[cyan]Core traits:[/cyan] {', '.join(a.core_traits)}",

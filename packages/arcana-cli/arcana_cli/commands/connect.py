@@ -2,7 +2,6 @@
 
 import json
 import uuid
-from pathlib import Path
 from typing import Any
 
 import keyring
@@ -11,11 +10,10 @@ from rich.console import Console
 from rich.table import Table
 
 from arcana.types.model import ModelConnection, ModelProvider
+from arcana_cli.constants import CONNECTIONS_PATH
 
 app = typer.Typer(help="Manage connections to models and services.")
 console = Console()
-
-_CONNECTIONS_PATH = Path.home() / ".arcana" / "connections" / "models.json"
 
 _PROVIDERS = ["ollama", "anthropic", "openai", "openai_compat", "custom"]
 _DEFAULT_ENDPOINTS: dict[str, str] = {
@@ -29,14 +27,14 @@ _NEEDS_KEY = {"anthropic", "openai", "openai_compat", "custom"}
 
 
 def _load() -> list[dict[str, Any]]:
-    if _CONNECTIONS_PATH.exists():
-        return json.loads(_CONNECTIONS_PATH.read_text())  # type: ignore[no-any-return]
+    if CONNECTIONS_PATH.exists():
+        return json.loads(CONNECTIONS_PATH.read_text())  # type: ignore[no-any-return]
     return []
 
 
 def _save(connections: list[dict[str, Any]]) -> None:
-    _CONNECTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _CONNECTIONS_PATH.write_text(json.dumps(connections, indent=2))
+    CONNECTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONNECTIONS_PATH.write_text(json.dumps(connections, indent=2))
 
 
 @app.command("model")

@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-from pathlib import Path
 from uuid import UUID
 
 import typer
@@ -14,9 +13,9 @@ from arcana.agents.registry import AgentRegistry
 from arcana.models.connection_store import ConnectionStore
 from arcana.models.gateway import ModelGateway
 from arcana.types.agent import Agent as AgentRecord
+from arcana_cli.constants import ARCANA_HOME
 
 console = Console()
-ARCANA_HOME = Path.home() / ".arcana"
 
 
 def _find_agent(name_or_id: str, reg: AgentRegistry) -> AgentRecord | None:

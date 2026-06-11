@@ -9,14 +9,14 @@ runner = CliRunner()
 
 
 def test_connect_list_no_connections(tmp_path, monkeypatch):
-    monkeypatch.setattr(connect_mod, "_CONNECTIONS_PATH", tmp_path / "models.json")
+    monkeypatch.setattr(connect_mod, "CONNECTIONS_PATH", tmp_path / "models.json")
     result = runner.invoke(app, ["connect", "list"])
     assert result.exit_code == 0
     assert "No connections" in result.output
 
 
 def test_connect_model_with_flags(tmp_path, monkeypatch):
-    monkeypatch.setattr(connect_mod, "_CONNECTIONS_PATH", tmp_path / "models.json")
+    monkeypatch.setattr(connect_mod, "CONNECTIONS_PATH", tmp_path / "models.json")
     result = runner.invoke(
         app,
         [
@@ -38,7 +38,7 @@ def test_connect_model_with_flags(tmp_path, monkeypatch):
 
 
 def test_connect_model_unknown_provider_exits_nonzero(tmp_path, monkeypatch):
-    monkeypatch.setattr(connect_mod, "_CONNECTIONS_PATH", tmp_path / "models.json")
+    monkeypatch.setattr(connect_mod, "CONNECTIONS_PATH", tmp_path / "models.json")
     result = runner.invoke(
         app,
         [
@@ -56,7 +56,7 @@ def test_connect_model_unknown_provider_exits_nonzero(tmp_path, monkeypatch):
 
 
 def test_connect_list_shows_saved_connection(tmp_path, monkeypatch):
-    monkeypatch.setattr(connect_mod, "_CONNECTIONS_PATH", tmp_path / "models.json")
+    monkeypatch.setattr(connect_mod, "CONNECTIONS_PATH", tmp_path / "models.json")
     runner.invoke(
         app,
         [
