@@ -7,10 +7,10 @@ from typing import Any
 import keyring
 import typer
 from rich.console import Console
-from rich.table import Table
 
 from arcana.types.model import ModelConnection, ModelProvider
 from arcana_cli.constants import CONNECTIONS_PATH
+from arcana_cli.ui.theme import GREEN, TXT3, dim, err, hl, make_table, ok
 
 app = typer.Typer(help="Manage connections to models and services.")
 console = Console()
@@ -49,12 +49,12 @@ def model_cmd(
 ) -> None:
     """Add or update a model connection (stored in ~/.arcana/connections/models.json)."""
     if provider is None:
-        console.print(f"[dim]Providers: {' '.join(_PROVIDERS)}[/dim]")
+        console.print(dim(f"Providers: {' '.join(_PROVIDERS)}"))
         provider = str(typer.prompt("Provider"))
 
     provider = provider.lower().replace("-", "_")
     if provider not in _PROVIDERS:
-        console.print(f"[red]Unknown provider: {provider!r}. Choose from: {', '.join(_PROVIDERS)}[/red]")
+        console.print(err(f"Unknown provider: {provider!r}. Choose from: {', '.join(_PROVIDERS)}"))
         raise typer.Exit(1)
 
     if model_id is None:
@@ -100,13 +100,13 @@ def model_cmd(
     if api_key:
         keyring.set_password("arcana", f"{conn_id}_api_key", api_key)
 
-    key_note = "  API key:  [green]saved to OS keyring[/green]\n" if api_key else ""
-    console.print(
-        f"\n[bold green]✓ {action} connection '{name}'[/bold green]\n"
-        f"  Provider: {provider}\n"
-        f"  Model:    {model_id}\n"
-        f"  Endpoint: {endpoint or '(provider default)'}\n" + key_note
+    key_note = f"  {hl('API key:')}  [{GREEN}]saved to OS keyring[/]\n" if api_key else ""
+    details = (
+        f"\n  {hl('Provider:')} {provider}\n"
+        f"  {hl('Model:')}    {model_id}\n"
+        f"  {hl('Endpoint:')} {endpoint or '(provider default)'}\n" + key_note
     )
+    console.print("\n" + ok(f"{action} connection '{name}'") + details)
 
 
 @app.command("list")
@@ -114,13 +114,13 @@ def list_cmd() -> None:
     """List all saved model connections."""
     connections = _load()
     if not connections:
-        console.print("[dim]No connections yet. Run: arcana connect model[/dim]")
+        console.print(dim("No connections yet. Run: arcana connect model"))
         return
-    table = Table(title="Model Connections", show_header=True, header_style="bold magenta")
+    table = make_table("Model Connections")
     table.add_column("Name", style="bold")
     table.add_column("Provider")
     table.add_column("Model ID")
-    table.add_column("Endpoint", style="dim")
+    table.add_column("Endpoint", style=TXT3)
     for c in connections:
         name_val: str = c.get("name") or ""
         provider_val: str = c.get("provider") or ""

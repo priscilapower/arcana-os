@@ -7,6 +7,7 @@ from arcana.cards.registry import get_registry
 from arcana.types.card import Card, TarotCard
 from arcana_cli.ui.card_panel import card_panel
 from arcana_cli.ui.card_picker import select_card
+from arcana_cli.ui.theme import err, warn
 
 app = typer.Typer(help="Browse the 22 Major Arcana card definitions.")
 console = Console()
@@ -23,9 +24,9 @@ def _resolve_card(name: str) -> TarotCard:
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
-        console.print(f"[yellow]Ambiguous: {', '.join(c.name for c in matches)}[/yellow]")
+        console.print(warn(f"Ambiguous: {', '.join(c.name for c in matches)}"))
         raise typer.Exit(1)
-    console.print(f"[red]Unknown card: {name!r}[/red]")
+    console.print(err(f"Unknown card: {name!r}"))
     raise typer.Exit(1)
 
 

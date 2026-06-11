@@ -6,14 +6,13 @@ from uuid import UUID
 
 import typer
 from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
 
 from arcana.agents.registry import AgentRegistry
 from arcana.models.connection_store import ConnectionStore
 from arcana.models.gateway import ModelGateway
 from arcana.types.agent import Agent as AgentRecord
 from arcana_cli.constants import ARCANA_HOME
+from arcana_cli.ui.theme import ACCENT, GREEN, cmd, dim, err, make_panel_fit, make_table, warn
 
 console = Console()
 
@@ -32,7 +31,7 @@ def _find_agent(name_or_id: str, reg: AgentRegistry) -> AgentRecord | None:
     if not matches:
         return None
     if len(matches) > 1:
-        console.print(f"[red]Ambiguous agent name '{name_or_id}'. Use one of these IDs:[/red]")
+        console.print(err(f"Ambiguous agent name '{name_or_id}'. Use one of these IDs:"))
         for a in matches:
             console.print(f"  {a.id}")
         raise typer.Exit(1)
@@ -42,10 +41,10 @@ def _find_agent(name_or_id: str, reg: AgentRegistry) -> AgentRecord | None:
 def init_cmd() -> None:
     """Initialise Arcana OS — creates ~/.arcana/ and sets up The World."""
     if ARCANA_HOME.exists():
-        console.print("[yellow]~/.arcana already exists. Nothing to do.[/yellow]")
+        console.print(warn("~/.arcana already exists. Nothing to do."))
         raise typer.Exit()
 
-    with console.status("[bold green]Initialising Arcana OS..."):
+    with console.status(f"[bold {GREEN}]Initialising Arcana OS...[/]"):
         ARCANA_HOME.mkdir(parents=True)
         (ARCANA_HOME / "agents").mkdir()
         (ARCANA_HOME / "connections").mkdir()
@@ -63,11 +62,11 @@ def init_cmd() -> None:
         (ARCANA_HOME / "world.json").write_text(json.dumps({"active_spread": None, "routing_rules": []}, indent=2))
 
     console.print(
-        Panel.fit(
-            "[bold green]✨ Arcana OS initialised![/bold green]\n\n"
-            f"Home: [cyan]{ARCANA_HOME}[/cyan]\n\n"
-            "Next step: [bold]arcana agent create[/bold]",
-            title="🌌 Arcana OS",
+        make_panel_fit(
+            f"[bold {GREEN}]Arcana OS initialised.[/]\n\n"
+            f"Home: [{ACCENT}]{ARCANA_HOME}[/]\n\n"
+            f"Next step: {cmd('arcana agent create')}",
+            title="Arcana OS",
         )
     )
 
@@ -75,19 +74,19 @@ def init_cmd() -> None:
 def status_cmd() -> None:
     """Show full system status — agents, connections, The World."""
     if not ARCANA_HOME.exists():
-        console.print("[red]Arcana not initialised. Run: arcana init[/red]")
+        console.print(err("Arcana not initialised. Run: arcana init"))
         raise typer.Exit(1)
 
     agent_count = len(AgentRegistry(ARCANA_HOME / "agents").list())
     conn_count = len(ConnectionStore(ARCANA_HOME / "connections" / "models.json").all())
 
-    table = Table(title="🌌 Arcana OS Status", show_header=True)
+    table = make_table("Arcana OS — Status")
     table.add_column("", style="bold")
     table.add_column("")
     table.add_row("Home", str(ARCANA_HOME))
     table.add_row("Agents", str(agent_count))
     table.add_row("Connections", str(conn_count))
-    table.add_row("The World", "[green]ready[/green]")
+    table.add_row("The World", f"[{GREEN}]ready[/]")
     console.print(table)
 
 
@@ -101,31 +100,29 @@ def run_cmd(
 
     async def _run() -> None:
         if not prompt.strip():
-            console.print("[red]--prompt cannot be empty.[/red]")
+            console.print(err("--prompt cannot be empty."))
             raise typer.Exit(1)
 
         if not agent:
-            console.print("[red]--agent is required. Use: arcana run <prompt> --agent <name>[/red]")
+            console.print(err("--agent is required. Use: arcana run <prompt> --agent <name>"))
             raise typer.Exit(1)
 
         reg = AgentRegistry(ARCANA_HOME / "agents")
         record = _find_agent(agent, reg)
         if record is None:
-            console.print(f"[red]No agent '{agent}'.[/red]")
+            console.print(err(f"No agent '{agent}'."))
             raise typer.Exit(1)
 
         store = ConnectionStore(ARCANA_HOME / "connections" / "models.json")
         conn_map = {c.id: c for c in store.all()}
         connection = conn_map.get(record.model_connection_id)
         if connection is None:
-            console.print(
-                f"[red]Model connection for agent '{record.name}' not found. Run: arcana connect model[/red]"
-            )
+            console.print(err(f"Model connection for agent '{record.name}' not found. Run: arcana connect model"))
             raise typer.Exit(1)
 
         # provider:name/model_id — gateway resolves by connection name so the API key is found
         model_str = f"{connection.provider}:{connection.name}/{connection.model_id}"
-        console.print(f"[dim]Agent: {record.name} · {record.card.value} · {connection.name}[/dim]")
+        console.print(dim(f"Agent: {record.name} · {record.card.value} · {connection.name}"))
 
         try:
             async with ModelGateway(connections=store) as gw:
@@ -138,7 +135,7 @@ def run_cmd(
                     response = await runtime_agent.run(prompt)
                     console.print(response)
         except Exception as exc:
-            console.print(f"[red]Error: {exc}[/red]")
+            console.print(err(f"Error: {exc}"))
             raise typer.Exit(1) from exc
 
     asyncio.run(_run())

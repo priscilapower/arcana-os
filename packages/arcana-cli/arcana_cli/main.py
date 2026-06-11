@@ -7,7 +7,7 @@ from arcana_cli.commands import agent, cards, connect, eval, run
 
 app = typer.Typer(
     name="arcana",
-    help="🌌 Arcana OS — The OS that gives your agents a soul.",
+    help="Arcana OS — The OS that gives your agents a soul.",
     no_args_is_help=True,
     rich_markup_mode="rich",
 )

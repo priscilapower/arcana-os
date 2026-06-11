@@ -8,6 +8,7 @@ from rich.panel import Panel
 from arcana.cards.registry import CardRegistry
 from arcana.types.card import Card, TarotCard
 from arcana_cli.constants import ROMAN
+from arcana_cli.ui.theme import ACCENT, TXT3, card_color
 
 
 def card_panel(card: TarotCard, registry: CardRegistry) -> Panel:
@@ -24,19 +25,19 @@ def card_panel(card: TarotCard, registry: CardRegistry) -> Panel:
         return f"{days}d" if days is not None else "system default"
 
     lines: list[str] = [
-        f"[bold]{ROMAN[card.number]} · {card.name}[/bold]  [dim]{card.id.value}[/dim]",
-        f"[cyan]Role:[/cyan]        {a.role}",
-        f"[cyan]Temperature:[/cyan] {a.default_temperature:.2f}",
-        f"[cyan]Core traits:[/cyan] {', '.join(a.core_traits)}",
+        f"[bold]{ROMAN[card.number]} · {card.name}[/bold]  [{TXT3}]{card.id.value}[/]",
+        f"[{ACCENT}]Role:[/]        {a.role}",
+        f"[{ACCENT}]Temperature:[/] {a.default_temperature:.2f}",
+        f"[{ACCENT}]Core traits:[/] {', '.join(a.core_traits)}",
         "",
         "[bold]Prompt Ingredients[/bold]",
-        f"  [cyan]Tone:[/cyan]       {pi.tone}",
-        f"  [cyan]Approach:[/cyan]   {pi.approach}",
-        "  [cyan]Priorities:[/cyan]",
+        f"  [{ACCENT}]Tone:[/]       {pi.tone}",
+        f"  [{ACCENT}]Approach:[/]   {pi.approach}",
+        f"  [{ACCENT}]Priorities:[/]",
     ]
     for p in pi.priorities:
         lines.append(f"    • {p}")
-    lines.append("  [cyan]Avoid:[/cyan]")
+    lines.append(f"  [{ACCENT}]Avoid:[/]")
     for av in pi.avoid:
         lines.append(f"    • {av}")
     lines += [
@@ -51,16 +52,16 @@ def card_panel(card: TarotCard, registry: CardRegistry) -> Panel:
         f"procedural {_half_life(dc.procedural_half_life_days)}   "
         f"preference {_half_life(dc.preference_half_life_days)}",
         "",
-        f"[cyan]Synergies:[/cyan]   {_card_names(card.synergy_cards)}",
-        f"[cyan]Tensions:[/cyan]    {_card_names(card.tension_cards)}",
+        f"[{ACCENT}]Synergies:[/]   {_card_names(card.synergy_cards)}",
+        f"[{ACCENT}]Tensions:[/]    {_card_names(card.tension_cards)}",
     ]
     if a.preferred_tool_categories:
-        lines.append(f"[cyan]Tools:[/cyan]       {', '.join(a.preferred_tool_categories)}")
+        lines.append(f"[{ACCENT}]Tools:[/]       {', '.join(a.preferred_tool_categories)}")
     lines += [
         "",
-        f"[cyan]Reversed:[/cyan]    {card.reversed_meaning}",
-        f"[cyan]Trigger:[/cyan]     {card.reversed_trigger}",
+        f"[{ACCENT}]Reversed:[/]    {card.reversed_meaning}",
+        f"[{ACCENT}]Trigger:[/]     {card.reversed_trigger}",
         "",
-        f"[dim]{card.imagery}[/dim]",
+        f"[{TXT3}]{card.imagery}[/]",
     ]
-    return Panel("\n".join(lines), title=f"🃏 {card.name}", border_style="magenta")
+    return Panel("\n".join(lines), title=f"{ROMAN[card.number]} · {card.name}", border_style=card_color(card.id))

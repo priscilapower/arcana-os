@@ -7,11 +7,11 @@ from typing import Any
 
 import typer
 from rich.console import Console
-from rich.table import Table
 
 from arcana.evals.harness import EvalHarness
 from arcana.evals.suites.blending import BLENDING_CASES
 from arcana.evals.suites.cards import CARD_CASES
+from arcana_cli.ui.theme import ACCENT, CHECK, CROSS, GREEN, RED, TXT3, err, make_table
 
 app = typer.Typer(help="Run evaluation suites.")
 console = Console()
@@ -42,10 +42,11 @@ def run(
         )
 
         if summary.regression_report and summary.regression_report.has_regressions:
-            console.print("\n[red]🔴 Regressions detected:[/red]")
+            console.print(f"\n[bold {RED}]Regressions detected:[/]")
             for reg in summary.regression_report.regressions:
                 console.print(
-                    f"  {reg.case_id}: {reg.baseline_score:.3f} → {reg.current_score:.3f} ({reg.delta:+.3f})"
+                    f"  [{TXT3}]{reg.case_id}:[/] {reg.baseline_score:.3f}"
+                    f" → [{RED}]{reg.current_score:.3f}[/] ([{RED}]{reg.delta:+.3f}[/])"
                 )
             raise typer.Exit(1)
 
@@ -61,9 +62,9 @@ def list_cases(
     if suite:
         all_cases = [c for c in all_cases if c.suite == suite]
 
-    table = Table(title=f"Eval Cases {'— ' + suite if suite else ''}")
-    table.add_column("ID", style="cyan")
-    table.add_column("Suite", style="dim")
+    table = make_table(f"Eval Cases {'— ' + suite if suite else ''}")
+    table.add_column("ID", style=ACCENT)
+    table.add_column("Suite", style=TXT3)
     table.add_column("Card")
     table.add_column("Baseline")
     table.add_column("Description")
@@ -86,12 +87,12 @@ def show_results(
     """Show results from a previous eval run."""
     results_path = Path(__file__).parent.parent.parent.parent.parent / "evals" / "results" / f"{run_id}.json"
     if not results_path.exists():
-        console.print(f"[red]No results found for run: {run_id}[/red]")
+        console.print(err(f"No results found for run: {run_id}"))
         raise typer.Exit(1)
 
     data: list[dict[str, Any]] = json.loads(results_path.read_text())
-    table = Table(title=f"Results — {run_id}")
-    table.add_column("Case ID", style="cyan")
+    table = make_table(f"Results — {run_id}")
+    table.add_column("Case ID", style=ACCENT)
     table.add_column("Card")
     table.add_column("Score")
     table.add_column("Passed")
@@ -105,7 +106,7 @@ def show_results(
             r["case_id"],
             r["card"],
             f"{score:.3f}",
-            "✅" if passed else "❌",
+            f"[{GREEN}]{CHECK}[/]" if passed else f"[{RED}]{CROSS}[/]",
             f"{r.get('latency_ms', 0)}ms",
         )
     console.print(table)

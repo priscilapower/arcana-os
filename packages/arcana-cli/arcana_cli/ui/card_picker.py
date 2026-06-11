@@ -20,6 +20,19 @@ from arcana.cards.registry import get_registry
 from arcana.types.card import Card, TarotCard
 from arcana_cli.constants import ROMAN
 from arcana_cli.ui.card_panel import card_panel
+from arcana_cli.ui.theme import (
+    PICKER_BORDER,
+    PICKER_BORDER_PREVIEW,
+    PICKER_CURSOR,
+    PICKER_CURSOR_SELECTED,
+    PICKER_HINT_DIM,
+    PICKER_HINT_FILTER,
+    PICKER_SELECTED,
+    TXT3,
+    err,
+    eyebrow,
+    warn,
+)
 
 
 def _render_list(
@@ -42,28 +55,28 @@ def _render_list(
 
         t = Text(line)
         if is_cursor and is_selected:
-            t.stylize("bold reverse green")
+            t.stylize(PICKER_CURSOR_SELECTED)
         elif is_cursor:
-            t.stylize("bold reverse magenta")
+            t.stylize(PICKER_CURSOR)
         elif is_selected:
-            t.stylize("bold green")
+            t.stylize(PICKER_SELECTED)
         rows.append(t)
 
     if filtering:
-        hint = Text(f" / {filter_buf}▌", style="bold yellow")
+        hint = Text(f" / {filter_buf}▌", style=PICKER_HINT_FILTER)
     elif filter_buf:
-        hint = Text(f" / {filter_buf}  [Esc clear]", style="dim")
+        hint = Text(f" / {filter_buf}  [Esc clear]", style=PICKER_HINT_DIM)
     elif multi:
-        hint = Text(" [↑↓] nav  [Space] toggle  [Enter] confirm  [/] filter  [Esc] cancel", style="dim")
+        hint = Text(" [↑↓] nav  [Space] toggle  [Enter] confirm  [/] filter  [Esc] cancel", style=PICKER_HINT_DIM)
     else:
-        hint = Text(" [↑↓] nav  [Enter] select  [/] filter  [Esc] cancel", style="dim")
+        hint = Text(" [↑↓] nav  [Enter] select  [/] filter  [Esc] cancel", style=PICKER_HINT_DIM)
 
-    title = "🃏 Major Arcana"
+    title = "Major Arcana"
     if multi and selected:
         title += f" ({len(selected)} selected)"
 
     content = Group(*rows, Text(""), hint) if rows else Group(Text("  (no matches)"), Text(""), hint)
-    return Panel(content, title=title, border_style="blue")
+    return Panel(content, title=title, border_style=PICKER_BORDER)
 
 
 def _non_tty_fallback(prompt: str, multi: bool) -> list[Card]:
@@ -72,9 +85,9 @@ def _non_tty_fallback(prompt: str, multi: bool) -> list[Card]:
     console = Console()
     all_cards = registry.all()
 
-    console.print("[bold]Available cards:[/bold]")
+    console.print(eyebrow("Available cards"))
     for i, card in enumerate(all_cards, 1):
-        console.print(f"  {i:2}. {card.name:<24}  [dim]{card.id.value}[/dim]")
+        console.print(f"  {i:2}. {card.name:<24}  [{TXT3}]{card.id.value}[/]")
 
     def _resolve_one(raw: str) -> Card | None:
         raw = raw.strip()
@@ -84,7 +97,7 @@ def _non_tty_fallback(prompt: str, multi: bool) -> list[Card]:
             idx = int(raw) - 1
             if 0 <= idx < len(all_cards):
                 return all_cards[idx].id
-            console.print(f"[red]Number out of range: {raw!r}[/red]")
+            console.print(err(f"Number out of range: {raw!r}"))
             return None
         except ValueError:
             pass
@@ -93,19 +106,19 @@ def _non_tty_fallback(prompt: str, multi: bool) -> list[Card]:
         if len(matches) == 1:
             return matches[0].id
         if len(matches) > 1:
-            console.print(f"[yellow]Ambiguous '{raw}', skipping[/yellow]")
+            console.print(warn(f"Ambiguous '{raw}', skipping"))
         else:
-            console.print(f"[red]Unknown card '{raw}'[/red]")
+            console.print(err(f"Unknown card '{raw}'"))
         return None
 
     if multi:
-        console.print(f"\n[dim]{prompt}[/dim] (comma-separated #s or names, blank for none): ", end="")
+        console.print(f"\n[{TXT3}]{prompt}[/] (comma-separated #s or names, blank for none): ", end="")
         raw = sys.stdin.readline().strip()
         if not raw:
             return []
         return [c for part in raw.split(",") if (c := _resolve_one(part)) is not None]
     else:
-        console.print(f"\n[dim]{prompt}[/dim] (# or name/key, blank to cancel): ", end="")
+        console.print(f"\n[{TXT3}]{prompt}[/] (# or name/key, blank to cancel): ", end="")
         raw = sys.stdin.readline().strip()
         if not raw:
             return []
@@ -152,7 +165,7 @@ def _run_picker(
         layout["preview"].update(
             card_panel(preview_card, registry)
             if preview_card
-            else Panel("[dim]No cards match.[/dim]", border_style="dim")
+            else Panel(f"[{TXT3}]No cards match.[/]", border_style=PICKER_BORDER_PREVIEW)
         )
         return layout
 
