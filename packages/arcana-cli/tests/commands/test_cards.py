@@ -7,19 +7,20 @@ from arcana_cli.main import app
 runner = CliRunner()
 
 
-def test_cards_list_shows_all_22():
-    result = runner.invoke(app, ["cards"])
+def test_cards_browse_lists_all_22_in_non_tty():
+    # non-TTY fallback: prints card names, blank input cancels
+    result = runner.invoke(app, ["cards"], input="\n")
     assert result.exit_code == 0
     assert "The Fool" in result.output
     assert "The World" in result.output
-    assert "22" in result.output or "XXI" in result.output
 
 
-def test_cards_list_shows_archetype_and_temp():
-    result = runner.invoke(app, ["cards"])
+def test_cards_browse_selecting_card_shows_details():
+    # non-TTY fallback: selecting a card by key prints its full panel
+    result = runner.invoke(app, ["cards"], input="the-fool\n")
     assert result.exit_code == 0
-    assert "Role" in result.output or "Archetype" in result.output or "Explorer" in result.output
-    assert "0.95" in result.output  # The Fool's temperature
+    assert "Explorer" in result.output
+    assert "0.95" in result.output
 
 
 def test_cards_show_by_key():

@@ -15,6 +15,7 @@ from arcana.models.connection_store import ConnectionStore
 from arcana.types.agent import Agent as AgentRecord
 from arcana.types.card import Card
 from arcana_cli.constants import AGENTS_BASE, CONNECTIONS_PATH, ROMAN
+from arcana_cli.ui.card_picker import select_card, select_cards
 
 app = typer.Typer(help="Manage agents.")
 console = Console()
@@ -26,26 +27,6 @@ def _registry() -> AgentRegistry:
 
 def _store() -> ConnectionStore:
     return ConnectionStore(CONNECTIONS_PATH)
-
-
-def _print_card_table() -> None:
-    table = Table(title="🃏 The 22 Major Arcana", show_header=True, header_style="bold magenta")
-    table.add_column("#", style="dim", width=4)
-    table.add_column("Card", style="bold")
-    table.add_column("Archetype")
-    table.add_column("Temp", width=5)
-    table.add_column("Key", style="dim")
-    for tarot in get_registry().all():
-        if tarot.id == Card.WORLD:
-            continue
-        table.add_row(
-            ROMAN[tarot.number],
-            tarot.name,
-            tarot.archetype.role,
-            f"{tarot.archetype.default_temperature:.2f}",
-            tarot.id.value,
-        )
-    console.print(table)
 
 
 def _validate_card(raw: str) -> Card:
@@ -133,19 +114,29 @@ def create(
     if not name:
         name = typer.prompt("Agent name")
 
+    modifier_cards: list[Card] = []
+
     if not card:
-        _print_card_table()
-        card = typer.prompt("\nChoose a card (enter the key, e.g. 'the-hermit')")
-
-    try:
-        card_enum = _validate_card(card)
-    except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(1) from exc
-
-    if card_enum == Card.WORLD:
-        console.print("[red]The World is reserved and cannot be assigned.[/red]")
-        raise typer.Exit(1)
+        card_enum = select_card("Choose a primary card for this agent")
+        if card_enum is None:
+            raise typer.Exit()
+        if card_enum == Card.WORLD:
+            console.print("[red]The World is reserved and cannot be assigned.[/red]")
+            raise typer.Exit(1)
+        raw_modifiers = select_cards(
+            "Add modifier cards (optional — Space to toggle, Enter to confirm with none)",
+            initial=[],
+        )
+        modifier_cards = [m for m in raw_modifiers if m != card_enum]
+    else:
+        try:
+            card_enum = _validate_card(card)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
+        if card_enum == Card.WORLD:
+            console.print("[red]The World is reserved and cannot be assigned.[/red]")
+            raise typer.Exit(1)
 
     if model:
         conn = _store().get_by_name(model)
@@ -156,14 +147,24 @@ def create(
     else:
         conn_id, conn_name = _pick_connection()
 
-    record = _registry().create(name=name, card=card_enum, model_connection_id=conn_id)
-    tarot = get_registry().get(card_enum)
+    registry = get_registry()
+    record = _registry().create(
+        name=name,
+        card=card_enum,
+        model_connection_id=conn_id,
+        modifier_cards=modifier_cards,
+    )
+    tarot = registry.get(card_enum)
+    modifier_str = (
+        "  Modifiers: " + ", ".join(registry.get(m).name for m in modifier_cards) + "\n" if modifier_cards else ""
+    )
     console.print(
         Panel.fit(
             f"[bold green]✨ Agent '{record.name}' created![/bold green]\n\n"
             f"  ID:    [dim]{record.id}[/dim]\n"
             f"  Card:  {ROMAN[tarot.number]} · {tarot.name} — {tarot.archetype.role}\n"
-            f"  Model: {conn_name}\n"
+            + modifier_str
+            + f"  Model: {conn_name}\n"
             f"  Temp:  {record.temperature:.2f}",
             title="🤖 New Agent",
         )
@@ -245,13 +246,17 @@ def edit(
         except ValueError as exc:
             console.print(f"[red]{exc}[/red]")
             raise typer.Exit(1) from exc
+        updated_modifiers = record.modifier_cards
     else:
-        card_input = typer.prompt("Card", default=record.card.value)
-        try:
-            updated_card = _validate_card(card_input)
-        except ValueError as exc:
-            console.print(f"[red]{exc}[/red]")
-            raise typer.Exit(1) from exc
+        picked = select_card("Choose a card", initial=record.card)
+        if picked is None:
+            raise typer.Exit()
+        updated_card = picked
+        raw_modifiers = select_cards(
+            "Modifier cards (Space to toggle, Enter to confirm)",
+            initial=record.modifier_cards,
+        )
+        updated_modifiers = [m for m in raw_modifiers if m != updated_card]
 
     if model is not None:
         conn = _store().get_by_name(model)
@@ -274,11 +279,12 @@ def edit(
         "name": updated_name,
         "description": updated_desc,
         "card": updated_card,
+        "modifier_cards": updated_modifiers,
         "model_connection_id": updated_conn_id,
         "tags": updated_tags,
     }
-    if updated_card != record.card:
-        config = CardEngine(get_registry()).resolve(updated_card, record.modifier_cards)
+    if updated_card != record.card or updated_modifiers != record.modifier_cards:
+        config = CardEngine(get_registry()).resolve(updated_card, updated_modifiers)
         updates["temperature"] = config.temperature
         updates["system_prompt"] = config.system_prompt
 

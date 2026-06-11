@@ -16,64 +16,10 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 
-from arcana.cards.registry import CardRegistry, get_registry
+from arcana.cards.registry import get_registry
 from arcana.types.card import Card, TarotCard
 from arcana_cli.constants import ROMAN
-
-
-def _render_preview(card: TarotCard, registry: CardRegistry) -> Panel:
-    a = card.archetype
-    pi = a.prompt_ingredients
-    mw = a.memory_weights
-    dc = a.decay_config
-
-    def _card_names(card_list: list[Card]) -> str:
-        return ", ".join(registry.get(c).name for c in card_list) if card_list else "—"
-
-    def _half_life(days: float | None) -> str:
-        return f"{days}d" if days is not None else "system default"
-
-    lines = [
-        f"[bold]{ROMAN[card.number]} · {card.name}[/bold]  [dim]{card.id.value}[/dim]",
-        f"[cyan]Role:[/cyan]        {a.role}",
-        f"[cyan]Temperature:[/cyan] {a.default_temperature:.2f}",
-        f"[cyan]Core traits:[/cyan] {', '.join(a.core_traits)}",
-        "",
-        "[bold]Prompt Ingredients[/bold]",
-        f"  [cyan]Tone:[/cyan]       {pi.tone}",
-        f"  [cyan]Approach:[/cyan]   {pi.approach}",
-        "  [cyan]Priorities:[/cyan]",
-    ]
-    for p in pi.priorities:
-        lines.append(f"    • {p}")
-    lines.append("  [cyan]Avoid:[/cyan]")
-    for av in pi.avoid:
-        lines.append(f"    • {av}")
-    lines += [
-        "",
-        "[bold]Memory Weights[/bold]",
-        f"  episodic {mw.episodic:.2f}   semantic {mw.semantic:.2f}"
-        f"   procedural {mw.procedural:.2f}   preference {mw.preference:.2f}",
-        "",
-        "[bold]Decay Half-lives[/bold]",
-        f"  episodic {_half_life(dc.episodic_half_life_days)}"
-        f"   semantic {_half_life(dc.semantic_half_life_days)}"
-        f"   procedural {_half_life(dc.procedural_half_life_days)}"
-        f"   preference {_half_life(dc.preference_half_life_days)}",
-        "",
-        f"[cyan]Synergies:[/cyan]   {_card_names(card.synergy_cards)}",
-        f"[cyan]Tensions:[/cyan]    {_card_names(card.tension_cards)}",
-    ]
-    if a.preferred_tool_categories:
-        lines.append(f"[cyan]Tools:[/cyan]       {', '.join(a.preferred_tool_categories)}")
-    lines += [
-        "",
-        f"[cyan]Reversed:[/cyan]    {card.reversed_meaning}",
-        f"[cyan]Trigger:[/cyan]     {card.reversed_trigger}",
-        "",
-        f"[dim]{card.imagery}[/dim]",
-    ]
-    return Panel("\n".join(lines), title=f"🃏 {card.name}", border_style="magenta")
+from arcana_cli.ui.card_panel import card_panel
 
 
 def _render_list(
@@ -130,7 +76,8 @@ def _non_tty_fallback(prompt: str, multi: bool) -> list[Card]:
         console.print(f"  {ROMAN[card.number]}. {card.name}  [dim]{card.id.value}[/dim]")
 
     if multi:
-        raw = input(f"\n{prompt} (comma-separated names or keys, blank to cancel): ").strip()
+        console.print(f"\n[dim]{prompt}[/dim] (comma-separated names or keys, blank for none): ", end="")
+        raw = sys.stdin.readline().strip()
         if not raw:
             return []
         result: list[Card] = []
@@ -145,7 +92,8 @@ def _non_tty_fallback(prompt: str, multi: bool) -> list[Card]:
                 console.print(f"[red]Unknown card '{part}', skipping[/red]")
         return result
     else:
-        raw = input(f"\n{prompt} (name or key, blank to cancel): ").strip()
+        console.print(f"\n[dim]{prompt}[/dim] (name or key, blank to cancel): ", end="")
+        raw = sys.stdin.readline().strip()
         if not raw:
             return []
         part = raw.lower()
@@ -159,15 +107,23 @@ def _non_tty_fallback(prompt: str, multi: bool) -> list[Card]:
         return []
 
 
-def _run_picker(prompt: str, multi: bool) -> list[Card]:
+def _run_picker(
+    prompt: str,
+    multi: bool,
+    initial_card: Card | None = None,
+    initial_selected: list[Card] | None = None,
+) -> list[Card]:
     if not sys.stdin.isatty():
         return _non_tty_fallback(prompt, multi)
 
     registry = get_registry()
     all_cards = registry.all()
 
-    cursor = 0
-    selected: set[Card] = set()
+    # Pre-position cursor on initial_card (or first of initial_selected)
+    seed = initial_card or (initial_selected[0] if initial_selected else None)
+    cursor = next((i for i, c in enumerate(all_cards) if c.id == seed), 0)
+
+    selected: set[Card] = set(initial_selected or [])
     filter_buf = ""
     filtering = False
 
@@ -188,7 +144,7 @@ def _run_picker(prompt: str, multi: bool) -> list[Card]:
         layout["list"].update(_render_list(cards, cursor, selected, filter_buf, filtering, multi))
         preview_card = cards[cursor] if cards else None
         layout["preview"].update(
-            _render_preview(preview_card, registry)
+            card_panel(preview_card, registry)
             if preview_card
             else Panel("[dim]No cards match.[/dim]", border_style="dim")
         )
@@ -246,12 +202,26 @@ def _run_picker(prompt: str, multi: bool) -> list[Card]:
     return result
 
 
-def select_card(prompt: str = "Select a card") -> Card | None:
-    """Single-card picker. Returns the chosen Card, or None if cancelled."""
-    result = _run_picker(prompt, multi=False)
+def select_card(
+    prompt: str = "Select a card",
+    *,
+    initial: Card | None = None,
+) -> Card | None:
+    """Single-card picker. Returns the chosen Card, or None if cancelled.
+
+    Pass `initial` to pre-position the cursor on a specific card.
+    """
+    result = _run_picker(prompt, multi=False, initial_card=initial)
     return result[0] if result else None
 
 
-def select_cards(prompt: str = "Select cards") -> list[Card]:
-    """Multi-card picker. Space toggles, Enter confirms. Returns empty list if cancelled."""
-    return _run_picker(prompt, multi=True)
+def select_cards(
+    prompt: str = "Select cards",
+    *,
+    initial: list[Card] | None = None,
+) -> list[Card]:
+    """Multi-card picker. Space toggles, Enter confirms. Returns empty list if cancelled.
+
+    Pass `initial` to pre-select cards and position the cursor on the first one.
+    """
+    return _run_picker(prompt, multi=True, initial_selected=initial or [])
