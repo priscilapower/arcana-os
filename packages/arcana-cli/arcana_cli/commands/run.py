@@ -3,6 +3,7 @@
 import asyncio
 import json
 from pathlib import Path
+from uuid import UUID
 
 import typer
 from rich.console import Console
@@ -11,9 +12,32 @@ from rich.table import Table
 
 from arcana.agents.registry import AgentRegistry
 from arcana.models.connection_store import ConnectionStore
+from arcana.models.gateway import ModelGateway
+from arcana.types.agent import Agent as AgentRecord
 
 console = Console()
 ARCANA_HOME = Path.home() / ".arcana"
+
+
+def _find_agent(name_or_id: str, reg: AgentRegistry) -> AgentRecord | None:
+    """Look up an agent by UUID or exact name. Returns None if not found."""
+    try:
+        uid = UUID(name_or_id)
+        record = reg.get(uid)
+        if record is not None and not record.is_archived:
+            return record
+        return None
+    except ValueError:
+        pass
+    matches = [a for a in reg.list() if a.name == name_or_id]
+    if not matches:
+        return None
+    if len(matches) > 1:
+        console.print(f"[red]Ambiguous agent name '{name_or_id}'. Use one of these IDs:[/red]")
+        for a in matches:
+            console.print(f"  {a.id}")
+        raise typer.Exit(1)
+    return matches[0]
 
 
 def init_cmd() -> None:
@@ -69,22 +93,53 @@ def status_cmd() -> None:
 
 
 def run_cmd(
-    prompt: str = typer.Argument(..., help="The prompt to run"),
-    agent: str | None = typer.Option(None, "--agent", "-a", help="Agent name"),
-    stream: bool = typer.Option(False, "--stream", "-s", help="Stream output"),
+    prompt: str = typer.Option(..., "--prompt", "-p", help="The prompt to run"),
+    agent: str | None = typer.Option(None, "--agent", "-a", help="Agent name or UUID"),
+    stream: bool = typer.Option(False, "--stream", "-s", help="Stream output token by token"),
     no_memory: bool = typer.Option(False, "--no-memory", help="Stateless run"),
 ) -> None:
     """Run a prompt — The World routes it, or specify --agent directly."""
 
     async def _run() -> None:
-        if agent:
-            console.print(f"[dim]Running with agent: {agent}[/dim]")
-            # TODO: load agent from registry and run
+        if not prompt.strip():
+            console.print("[red]--prompt cannot be empty.[/red]")
+            raise typer.Exit(1)
+
+        if not agent:
+            console.print("[red]--agent is required. Use: arcana run <prompt> --agent <name>[/red]")
+            raise typer.Exit(1)
+
+        reg = AgentRegistry(ARCANA_HOME / "agents")
+        record = _find_agent(agent, reg)
+        if record is None:
+            console.print(f"[red]No agent '{agent}'.[/red]")
+            raise typer.Exit(1)
+
+        store = ConnectionStore(ARCANA_HOME / "connections" / "models.json")
+        conn_map = {c.id: c for c in store.all()}
+        connection = conn_map.get(record.model_connection_id)
+        if connection is None:
             console.print(
-                "[yellow]Agent registry is implemented in Epic 5. Use the Python API directly for now.[/yellow]"
+                f"[red]Model connection for agent '{record.name}' not found. Run: arcana connect model[/red]"
             )
-        else:
-            console.print("[dim]Routing via The World...[/dim]")
-            console.print("[yellow]World routing is implemented in Epic 7.[/yellow]")
+            raise typer.Exit(1)
+
+        # provider:name/model_id — gateway resolves by connection name so the API key is found
+        model_str = f"{connection.provider}:{connection.name}/{connection.model_id}"
+        console.print(f"[dim]Agent: {record.name} · {record.card.value} · {connection.name}[/dim]")
+
+        try:
+            async with ModelGateway(connections=store) as gw:
+                runtime_agent = reg.build_runtime(record, gw, model_str)
+                if stream:
+                    async for chunk in runtime_agent.stream(prompt):
+                        print(chunk, end="", flush=True)
+                    print()
+                else:
+                    response = await runtime_agent.run(prompt)
+                    console.print(response)
+        except Exception as exc:
+            console.print(f"[red]Error: {exc}[/red]")
+            raise typer.Exit(1) from exc
 
     asyncio.run(_run())
