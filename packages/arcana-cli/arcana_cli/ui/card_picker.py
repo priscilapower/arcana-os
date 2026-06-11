@@ -67,44 +67,50 @@ def _render_list(
 
 
 def _non_tty_fallback(prompt: str, multi: bool) -> list[Card]:
-    """Plain typed-prompt fallback when stdin is not a TTY."""
+    """Numbered list + typed-prompt fallback when stdin is not a TTY."""
     registry = get_registry()
     console = Console()
+    all_cards = registry.all()
 
     console.print("[bold]Available cards:[/bold]")
-    for card in registry.all():
-        console.print(f"  {ROMAN[card.number]}. {card.name}  [dim]{card.id.value}[/dim]")
+    for i, card in enumerate(all_cards, 1):
+        console.print(f"  {i:2}. {card.name:<24}  [dim]{card.id.value}[/dim]")
+
+    def _resolve_one(raw: str) -> Card | None:
+        raw = raw.strip()
+        if not raw:
+            return None
+        try:
+            idx = int(raw) - 1
+            if 0 <= idx < len(all_cards):
+                return all_cards[idx].id
+            console.print(f"[red]Number out of range: {raw!r}[/red]")
+            return None
+        except ValueError:
+            pass
+        q = raw.lower()
+        matches = [c for c in all_cards if q in c.name.lower() or q in c.id.value]
+        if len(matches) == 1:
+            return matches[0].id
+        if len(matches) > 1:
+            console.print(f"[yellow]Ambiguous '{raw}', skipping[/yellow]")
+        else:
+            console.print(f"[red]Unknown card '{raw}'[/red]")
+        return None
 
     if multi:
-        console.print(f"\n[dim]{prompt}[/dim] (comma-separated names or keys, blank for none): ", end="")
+        console.print(f"\n[dim]{prompt}[/dim] (comma-separated #s or names, blank for none): ", end="")
         raw = sys.stdin.readline().strip()
         if not raw:
             return []
-        result: list[Card] = []
-        for part in raw.split(","):
-            part = part.strip().lower()
-            matches = [c for c in registry.all() if part in c.name.lower() or part in c.id.value]
-            if len(matches) == 1:
-                result.append(matches[0].id)
-            elif len(matches) > 1:
-                console.print(f"[yellow]Ambiguous '{part}', skipping[/yellow]")
-            else:
-                console.print(f"[red]Unknown card '{part}', skipping[/red]")
-        return result
+        return [c for part in raw.split(",") if (c := _resolve_one(part)) is not None]
     else:
-        console.print(f"\n[dim]{prompt}[/dim] (name or key, blank to cancel): ", end="")
+        console.print(f"\n[dim]{prompt}[/dim] (# or name/key, blank to cancel): ", end="")
         raw = sys.stdin.readline().strip()
         if not raw:
             return []
-        part = raw.lower()
-        matches = [c for c in registry.all() if part in c.name.lower() or part in c.id.value]
-        if len(matches) == 1:
-            return [matches[0].id]
-        if len(matches) > 1:
-            console.print(f"[yellow]Ambiguous: {', '.join(c.name for c in matches)}[/yellow]")
-        else:
-            console.print(f"[red]Unknown card: {raw!r}[/red]")
-        return []
+        card_id = _resolve_one(raw)
+        return [card_id] if card_id is not None else []
 
 
 def _run_picker(
@@ -195,7 +201,7 @@ def _run_picker(
                         selected.discard(card_id)
                     else:
                         selected.add(card_id)
-            elif key == readchar.key.ESC:
+            elif key in (readchar.key.ESC, readchar.key.CTRL_C):
                 result = []
                 break
 
