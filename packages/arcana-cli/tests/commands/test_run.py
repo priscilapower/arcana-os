@@ -94,13 +94,13 @@ def test_status_with_init_exits_zero(tmp_path, monkeypatch):
 
 
 def test_run_with_empty_prompt_exits_nonzero():
-    result = runner.invoke(app, ["run", "--prompt", "", "--agent", "scout"])
+    result = runner.invoke(app, ["run", "", "--agent", "scout"])
     assert result.exit_code != 0
     assert "empty" in result.output
 
 
 def test_run_without_agent_exits_nonzero():
-    result = runner.invoke(app, ["run", "--prompt", "hello"])
+    result = runner.invoke(app, ["run", "hello"])
     assert result.exit_code != 0
     assert "--agent" in result.output
 
@@ -111,7 +111,7 @@ def test_run_without_agent_exits_nonzero():
 
 
 def test_run_with_agent_not_found(arcana_home):
-    result = runner.invoke(app, ["run", "--prompt", "hello", "--agent", "ghost"])
+    result = runner.invoke(app, ["run", "hello", "--agent", "ghost"])
     assert result.exit_code != 0
     assert "No agent" in result.output
 
@@ -122,7 +122,7 @@ def test_run_with_agent_no_connection(arcana_home):
 
     reg = AgentRegistry(arcana_home / "agents")
     reg.create(name="orphan", card=Card.HERMIT, model_connection_id=uuid4())
-    result = runner.invoke(app, ["run", "--prompt", "hello", "--agent", "orphan"])
+    result = runner.invoke(app, ["run", "hello", "--agent", "orphan"])
     assert result.exit_code != 0
     assert "connection" in result.output.lower()
 
@@ -152,7 +152,7 @@ def test_run_with_agent_success(agent_fixture, arcana_home, monkeypatch):
     monkeypatch.setattr(run_mod, "ModelGateway", _MockGateway)
     monkeypatch.setattr(AgentRegistry, "build_runtime", lambda *args, **kwargs: mock_runtime)
 
-    result = runner.invoke(app, ["run", "--prompt", "hello", "--agent", "scout"])
+    result = runner.invoke(app, ["run", "hello", "--agent", "scout"])
     assert result.exit_code == 0, result.output
     assert "The hermit speaks." in result.output
     assert "scout" in result.output
@@ -169,7 +169,7 @@ def test_run_with_agent_stream(agent_fixture, arcana_home, monkeypatch):
     monkeypatch.setattr(run_mod, "ModelGateway", _MockGateway)
     monkeypatch.setattr(AgentRegistry, "build_runtime", lambda *args, **kwargs: mock_runtime)
 
-    result = runner.invoke(app, ["run", "--agent", "scout", "--stream", "--prompt", "hello"])
+    result = runner.invoke(app, ["run", "hello", "--agent", "scout", "--stream"])
     assert result.exit_code == 0, result.output
     assert "Hello from stream" in result.output
 
@@ -181,6 +181,6 @@ def test_run_with_agent_by_uuid(agent_fixture, arcana_home, monkeypatch):
     monkeypatch.setattr(run_mod, "ModelGateway", _MockGateway)
     monkeypatch.setattr(AgentRegistry, "build_runtime", lambda *args, **kwargs: mock_runtime)
 
-    result = runner.invoke(app, ["run", "--agent", str(agent_fixture.id), "--prompt", "hello"])
+    result = runner.invoke(app, ["run", "hello", "--agent", str(agent_fixture.id)])
     assert result.exit_code == 0, result.output
     assert "UUID lookup works." in result.output

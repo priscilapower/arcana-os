@@ -91,7 +91,7 @@ def status_cmd() -> None:
 
 
 def run_cmd(
-    prompt: str = typer.Option(..., "--prompt", "-p", help="The prompt to run"),
+    prompt: str = typer.Argument(..., help="The prompt to run"),
     agent: str | None = typer.Option(None, "--agent", "-a", help="Agent name or UUID"),
     stream: bool = typer.Option(False, "--stream", "-s", help="Stream output token by token"),
     no_memory: bool = typer.Option(False, "--no-memory", help="Stateless run"),
@@ -100,7 +100,7 @@ def run_cmd(
 
     async def _run() -> None:
         if not prompt.strip():
-            console.print(err("--prompt cannot be empty."))
+            console.print(err("Prompt cannot be empty."))
             raise typer.Exit(1)
 
         if not agent:
