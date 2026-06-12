@@ -30,19 +30,17 @@ arcana status
 
 ### `arcana run`
 
-Run a prompt. The World routes it automatically, or target a specific agent with `--agent`.
+Run a prompt targeting a specific agent with `--agent`.
 
 ```bash
 arcana run "Summarise the latest on LLM evals"
 arcana run "Refactor this module" --agent my-agent --stream
-arcana run "One-shot task" --no-memory
 ```
 
 | Flag | Default | Description                           |
 |------|---------|---------------------------------------|
 | `--agent / -a` | — | Target a specific agent by name       |
 | `--stream / -s` | off | Stream output token by token          |
-| `--no-memory` | off | Stateless run, skip memory read/write |
 
 > World routing and agent persistence are Phase 1b. Use the Python API (`arcana-core`) directly for now.
 

@@ -94,9 +94,8 @@ def run_cmd(
     prompt: str = typer.Argument(..., help="The prompt to run"),
     agent: str | None = typer.Option(None, "--agent", "-a", help="Agent name or UUID"),
     stream: bool = typer.Option(False, "--stream", "-s", help="Stream output token by token"),
-    no_memory: bool = typer.Option(False, "--no-memory", help="Stateless run"),
 ) -> None:
-    """Run a prompt — The World routes it, or specify --agent directly."""
+    """Run a prompt specifying --agent directly."""
 
     async def _run() -> None:
         if not prompt.strip():
