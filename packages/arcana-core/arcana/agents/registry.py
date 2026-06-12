@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -54,6 +55,11 @@ class AgentRegistry:
         engine = CardEngine(card_registry)
         config = engine.resolve(card, modifier_cards or [])
 
+        # Prompt and temperature are denormalized: computed once here and stored
+        # on the record. build_runtime() feeds them back as overrides, so agents
+        # are stable across card definition changes. If a definition is ever
+        # revised, existing agents will keep stale prompts until re-created or
+        # explicitly edited. Acceptable for MVP given card defs are treated as final.
         record = AgentRecord(
             name=name,
             card=card,
@@ -89,8 +95,8 @@ class AgentRegistry:
                 record = AgentRecord.model_validate_json(agent_json.read_text())
                 if not record.is_archived:
                     records.append(record)
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"warning: skipping {agent_json}: {exc}", file=sys.stderr)
         return sorted(records, key=lambda r: r.name)
 
     def save(self, record: AgentRecord) -> None:
