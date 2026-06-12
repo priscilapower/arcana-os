@@ -95,7 +95,7 @@ class ConnectionStore:
         connections = list(self._load())
         idx = next((i for i, c in enumerate(connections) if c.name == conn.name), None)
         if idx is not None:
-            connections[idx] = conn
+            connections[idx] = conn.model_copy(update={"id": connections[idx].id})
         else:
             connections.append(conn)
         self._save(connections)

@@ -287,6 +287,28 @@ def test_connection_store_reload(tmp_path):
     assert len(store.all()) == 1
 
 
+def test_connection_store_upsert_insert(tmp_path):
+    store = ConnectionStore(path=tmp_path / "models.json")
+    conn = ModelConnection(name="new", provider=ModelProvider.OLLAMA, model_id="llama3")
+    store.upsert(conn)
+    assert len(store.all()) == 1
+    assert store.get_by_name("new").id == conn.id
+
+
+def test_connection_store_upsert_update_preserves_id(tmp_path):
+    store = ConnectionStore(path=tmp_path / "models.json")
+    original = ModelConnection(name="x", provider=ModelProvider.OLLAMA, model_id="llama3")
+    store.upsert(original)
+
+    updated = ModelConnection(name="x", provider=ModelProvider.OLLAMA, model_id="llama3.2")
+    store.upsert(updated)
+
+    connections = store.all()
+    assert len(connections) == 1
+    assert connections[0].id == original.id
+    assert connections[0].model_id == "llama3.2"
+
+
 # ---------------------------------------------------------------------------
 # ModelGateway.resolve()
 # ---------------------------------------------------------------------------
