@@ -86,7 +86,7 @@ def status_cmd() -> None:
     table.add_row("Home", str(ARCANA_HOME))
     table.add_row("Agents", str(agent_count))
     table.add_row("Connections", str(conn_count))
-    table.add_row("The World", f"[{GREEN}]ready[/]")
+
     console.print(table)
 
 
