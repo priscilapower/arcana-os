@@ -7,8 +7,8 @@ import typer
 from rich.console import Console
 
 from arcana.agents.registry import AgentRegistry
-from arcana.cards.engine import CardEngine
-from arcana.cards.registry import get_registry
+from arcana.cards.engine import BlendCompatibility, CardEngine
+from arcana.cards.registry import CardRegistry, get_registry
 from arcana.models.connection_store import ConnectionStore
 from arcana.types.agent import Agent as AgentRecord
 from arcana.types.card import Card
@@ -25,6 +25,7 @@ from arcana_cli.ui.theme import (
     make_table,
     ok,
     status_markup,
+    warn,
 )
 
 app = typer.Typer(help="Manage agents.")
@@ -113,6 +114,20 @@ def _pick_connection(default_name: str | None = None) -> tuple[UUID, str]:
     return conn.id, conn.name
 
 
+def _print_compat(compat: BlendCompatibility, registry: CardRegistry) -> None:
+    """Print tension/synergy warnings after modifier selection. Non-blocking."""
+    if compat.has_tensions:
+        console.print(warn(f"\n  ✦ CLASH — {len(compat.tensions)} tension(s) in this blend:"))
+        for a, b in compat.tensions:
+            console.print(warn(f"    ✗  {registry.get(a).name} ↔ {registry.get(b).name}"))
+    if compat.has_synergies:
+        console.print(dim(f"\n  ✦ SYNERGY — {len(compat.synergies)} synergy/ies in this blend:"))
+        for a, b in compat.synergies:
+            console.print(dim(f"    ✓  {registry.get(a).name} + {registry.get(b).name}"))
+    if compat.has_tensions or compat.has_synergies:
+        console.print()
+
+
 @app.command("create")
 def create(
     name: str = typer.Option(None, "--name", "-n", help="Agent name"),
@@ -137,6 +152,11 @@ def create(
             initial=[],
         )
         modifier_cards = [m for m in raw_modifiers if m != card_enum]
+        if modifier_cards:
+            _print_compat(
+                CardEngine(get_registry()).check_compatibility(card_enum, modifier_cards),
+                get_registry(),
+            )
     else:
         try:
             card_enum = _validate_card(card)
@@ -270,6 +290,11 @@ def edit(
             initial=record.modifier_cards,
         )
         updated_modifiers = [m for m in raw_modifiers if m != updated_card]
+        if updated_modifiers:
+            _print_compat(
+                CardEngine(get_registry()).check_compatibility(updated_card, updated_modifiers),
+                get_registry(),
+            )
 
     if model is not None:
         conn = _store().get_by_name(model)

@@ -4,6 +4,59 @@ from arcana.cards.engine import CardEngine
 from arcana.types.card import Card
 from arcana.types.memory import DEFAULT_DECAY_PROFILES, MemoryType
 
+# ---------------------------------------------------------------------------
+# check_compatibility
+# ---------------------------------------------------------------------------
+
+
+def test_check_compatibility_no_modifiers_returns_empty(engine: CardEngine):
+    compat = engine.check_compatibility(Card.FOOL, [])
+    assert not compat.has_tensions
+    assert not compat.has_synergies
+
+
+def test_check_compatibility_detects_known_tension(engine: CardEngine):
+    # Fool.tension_cards = [HERMIT, EMPEROR]
+    compat = engine.check_compatibility(Card.FOOL, [Card.HERMIT])
+    assert compat.has_tensions
+    assert (Card.FOOL, Card.HERMIT) in compat.tensions
+
+
+def test_check_compatibility_detects_known_synergy(engine: CardEngine):
+    # Fool.synergy_cards = [MAGICIAN, STAR]
+    compat = engine.check_compatibility(Card.FOOL, [Card.STAR])
+    assert compat.has_synergies
+    assert (Card.FOOL, Card.STAR) in compat.synergies
+
+
+def test_check_compatibility_bidirectional_tension(engine: CardEngine):
+    # Magician.tension_cards = [HIGH_PRIESTESS]; High Priestess does not list Magician
+    # Still detected because the check is bidirectional
+    compat = engine.check_compatibility(Card.MAGICIAN, [Card.HIGH_PRIESTESS])
+    assert compat.has_tensions
+
+
+def test_check_compatibility_modifier_vs_modifier_tension(engine: CardEngine):
+    # Hermit.tension_cards = [FOOL, CHARIOT]; Chariot.tension_cards = [HERMIT, HANGED_MAN]
+    # With EMPEROR primary, Hermit ↔ Chariot should still surface
+    compat = engine.check_compatibility(Card.EMPEROR, [Card.HERMIT, Card.CHARIOT])
+    tension_pairs = {frozenset(p) for p in compat.tensions}
+    assert frozenset({Card.HERMIT, Card.CHARIOT}) in tension_pairs
+
+
+def test_check_compatibility_no_duplicate_pairs(engine: CardEngine):
+    # Fool ↔ Hermit is bidirectional, but must appear only once
+    compat = engine.check_compatibility(Card.FOOL, [Card.HERMIT])
+    assert len(compat.tensions) == 1
+
+
+def test_check_compatibility_no_self_pairs(engine: CardEngine):
+    # Primary stripped from modifiers in CLI, but guard at engine level too
+    compat = engine.check_compatibility(Card.FOOL, [Card.STAR, Card.MAGICIAN])
+    all_pairs = compat.tensions + compat.synergies
+    for a, b in all_pairs:
+        assert a != b
+
 
 def test_engine_single_card_produces_config(engine: CardEngine):
     config = engine.resolve(Card.HERMIT)

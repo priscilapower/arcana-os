@@ -8,6 +8,8 @@ Blending rules:
 Produces: system_prompt, temperature, memory_weights, decay_config, suggested_skills.
 """
 
+from pydantic import BaseModel
+
 from arcana.cards.registry import CardRegistry
 from arcana.types.card import (
     AgentConfig,
@@ -17,6 +19,21 @@ from arcana.types.card import (
     TarotCard,
 )
 from arcana.types.memory import DEFAULT_DECAY_PROFILES, MemoryType
+
+
+class BlendCompatibility(BaseModel):
+    """Tension and synergy pairs detected across primary + modifier cards."""
+
+    tensions: list[tuple[Card, Card]] = []
+    synergies: list[tuple[Card, Card]] = []
+
+    @property
+    def has_tensions(self) -> bool:
+        return bool(self.tensions)
+
+    @property
+    def has_synergies(self) -> bool:
+        return bool(self.synergies)
 
 
 class CardEngine:
@@ -127,6 +144,36 @@ class CardEngine:
                 DEFAULT_DECAY_PROFILES[MemoryType.PREFERENCE].half_life_days,
             ),
         )
+
+    def check_compatibility(
+        self,
+        primary: Card,
+        modifiers: list[Card],
+    ) -> BlendCompatibility:
+        """Return tension and synergy pairs across the full card set (bidirectional)."""
+        if not modifiers:
+            return BlendCompatibility()
+
+        all_ids = [primary, *modifiers]
+        tensions: list[tuple[Card, Card]] = []
+        synergies: list[tuple[Card, Card]] = []
+        seen: set[frozenset[Card]] = set()
+
+        for i, a_id in enumerate(all_ids):
+            card_a = self._registry.get(a_id)
+            for b_id in all_ids[i + 1 :]:
+                pair: frozenset[Card] = frozenset({a_id, b_id})
+                if pair in seen:
+                    continue
+                seen.add(pair)
+                card_b = self._registry.get(b_id)
+
+                if b_id in card_a.tension_cards or a_id in card_b.tension_cards:
+                    tensions.append((a_id, b_id))
+                if b_id in card_a.synergy_cards or a_id in card_b.synergy_cards:
+                    synergies.append((a_id, b_id))
+
+        return BlendCompatibility(tensions=tensions, synergies=synergies)
 
     def _describe_blend(self, primary: TarotCard, modifiers: list[TarotCard]) -> str:
         if not modifiers:
