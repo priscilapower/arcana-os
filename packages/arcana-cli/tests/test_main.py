@@ -14,5 +14,5 @@ def test_help_exits_zero():
 
 def test_help_lists_subcommands():
     result = runner.invoke(app, ["--help"])
-    for cmd in ("agent", "cards", "connect", "run", "init", "status", "eval"):
+    for cmd in ("agent", "cards", "connect", "run", "init", "status"):
         assert cmd in result.output

@@ -43,7 +43,7 @@ from arcana.evals.types import (
 from arcana.models.connection_store import ConnectionStore
 from arcana.models.gateway import ModelGateway
 
-RESULTS_DIR = Path.home() / ".arcana" / "evals" / "results"
+_DEFAULT_RESULTS_DIR = Path.home() / ".arcana" / "evals" / "results"
 
 
 class EvalHarness:
@@ -54,7 +54,7 @@ class EvalHarness:
         - Load cases from suites
         - Run each case (skipping marked cases)
         - Score with the configured judge
-        - Store results to ~/.arcana/evals/results/
+        - Store results to ~/.arcana/evals/results/ (or results_dir if provided)
         - Optionally compare against a baseline run (regression mode)
         - Return a summary
     """
@@ -65,10 +65,12 @@ class EvalHarness:
         judge_model: str | None = None,
         default_model: str = "ollama/hermes-3",
         concurrency: int = 3,
+        results_dir: Path | None = None,
     ) -> None:
         self._use_llm = use_llm
         self._default_model = default_model
         self._concurrency = concurrency
+        self._results_dir = results_dir or _DEFAULT_RESULTS_DIR
         self._judge = CompositeJudge(
             llm_judge=LLMJudge(model=judge_model) if use_llm else None,
             use_llm=use_llm,
@@ -213,13 +215,13 @@ class EvalHarness:
     # ------------------------------------------------------------------
 
     def _save_results(self, run_id: str, results: list[EvalResult]) -> None:
-        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-        path = RESULTS_DIR / f"{run_id}.json"
+        self._results_dir.mkdir(parents=True, exist_ok=True)
+        path = self._results_dir / f"{run_id}.json"
         data = [r.model_dump(mode="json") for r in results]
         path.write_text(json.dumps(data, indent=2, default=str))
 
     def _load_results(self, run_id: str) -> list[EvalResult]:
-        path = RESULTS_DIR / f"{run_id}.json"
+        path = self._results_dir / f"{run_id}.json"
         if not path.exists():
             raise FileNotFoundError(f"No results for run: {run_id}")
         data = json.loads(path.read_text())

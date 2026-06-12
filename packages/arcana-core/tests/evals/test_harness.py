@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import arcana.evals.harness as harness_module
 from arcana.evals.harness import EvalHarness
 from arcana.evals.suites.blending import BLENDING_CASES
 from arcana.evals.suites.cards import CARD_CASES
@@ -98,7 +97,7 @@ def test_load_cases_unknown_suite_returns_empty():
 
 
 def test_compare_to_baseline_graceful_when_missing(tmp_path):
-    harness = EvalHarness(use_llm=False)
+    harness = EvalHarness(use_llm=False, results_dir=tmp_path / "results")
 
     result = EvalResult(
         case_id="c-001",
@@ -143,25 +142,20 @@ def test_compare_to_baseline_detects_regression(tmp_path):
     ]
     (results_dir / "run-old.json").write_text(json.dumps(baseline))
 
-    old_dir = harness_module.RESULTS_DIR
-    harness_module.RESULTS_DIR = results_dir
-    try:
-        harness = EvalHarness(use_llm=False)
-        current_result = EvalResult(
-            case_id="c-001",
-            run_id="run-new",
-            card=Card.HERMIT,
-            model_id="ollama/test",
-            response="new answer",
-            verdict=_verdict(passed=False, score=0.5),
-        )
-        report = harness._compare_to_baseline(
-            run_id="run-new",
-            baseline_run_id="run-old",
-            current_results=[current_result],
-        )
-    finally:
-        harness_module.RESULTS_DIR = old_dir
+    harness = EvalHarness(use_llm=False, results_dir=results_dir)
+    current_result = EvalResult(
+        case_id="c-001",
+        run_id="run-new",
+        card=Card.HERMIT,
+        model_id="ollama/test",
+        response="new answer",
+        verdict=_verdict(passed=False, score=0.5),
+    )
+    report = harness._compare_to_baseline(
+        run_id="run-new",
+        baseline_run_id="run-old",
+        current_results=[current_result],
+    )
 
     assert report.cases_regressed == 1
     assert report.has_regressions
@@ -188,25 +182,20 @@ def test_compare_to_baseline_detects_improvement(tmp_path):
     ]
     (results_dir / "run-old.json").write_text(json.dumps(baseline))
 
-    old_dir = harness_module.RESULTS_DIR
-    harness_module.RESULTS_DIR = results_dir
-    try:
-        harness = EvalHarness(use_llm=False)
-        current_result = EvalResult(
-            case_id="c-001",
-            run_id="run-new",
-            card=Card.HERMIT,
-            model_id="ollama/test",
-            response="great answer",
-            verdict=_verdict(passed=True, score=0.95),
-        )
-        report = harness._compare_to_baseline(
-            run_id="run-new",
-            baseline_run_id="run-old",
-            current_results=[current_result],
-        )
-    finally:
-        harness_module.RESULTS_DIR = old_dir
+    harness = EvalHarness(use_llm=False, results_dir=results_dir)
+    current_result = EvalResult(
+        case_id="c-001",
+        run_id="run-new",
+        card=Card.HERMIT,
+        model_id="ollama/test",
+        response="great answer",
+        verdict=_verdict(passed=True, score=0.95),
+    )
+    report = harness._compare_to_baseline(
+        run_id="run-new",
+        baseline_run_id="run-old",
+        current_results=[current_result],
+    )
 
     assert report.cases_improved == 1
     assert not report.has_regressions
@@ -219,87 +208,67 @@ def test_compare_to_baseline_detects_improvement(tmp_path):
 
 @pytest.mark.asyncio
 async def test_run_returns_summary_with_correct_counts(tmp_path):
-    old_dir = harness_module.RESULTS_DIR
-    harness_module.RESULTS_DIR = tmp_path / "results"
-    try:
-        harness = EvalHarness(use_llm=False, default_model="ollama/hermes-3")
-        cases = [
-            _simple_case("c-001", required=["answer"]),
-            _simple_case("c-002", required=[]),
-        ]
-        gw = _mock_gateway(content="answer to the question")
+    harness = EvalHarness(use_llm=False, default_model="ollama/hermes-3", results_dir=tmp_path / "results")
+    cases = [
+        _simple_case("c-001", required=["answer"]),
+        _simple_case("c-002", required=[]),
+    ]
+    gw = _mock_gateway(content="answer to the question")
 
-        with patch.object(harness, "_load_cases", return_value=cases):
-            with patch("arcana.evals.harness.ModelGateway") as MockGW:
-                with patch("arcana.evals.harness.ConnectionStore"):
-                    MockGW.return_value.__aenter__ = AsyncMock(return_value=gw)
-                    MockGW.return_value.__aexit__ = AsyncMock(return_value=False)
-                    summary = await harness.run()
+    with patch.object(harness, "_load_cases", return_value=cases):
+        with patch("arcana.evals.harness.ModelGateway") as MockGW:
+            with patch("arcana.evals.harness.ConnectionStore"):
+                MockGW.return_value.__aenter__ = AsyncMock(return_value=gw)
+                MockGW.return_value.__aexit__ = AsyncMock(return_value=False)
+                summary = await harness.run()
 
-        assert summary.cases_run == 2
-        assert summary.cases_errored == 0
-    finally:
-        harness_module.RESULTS_DIR = old_dir
+    assert summary.cases_run == 2
+    assert summary.cases_errored == 0
 
 
 @pytest.mark.asyncio
 async def test_run_saves_results_to_disk(tmp_path):
     results_dir = tmp_path / "results"
-    old_dir = harness_module.RESULTS_DIR
-    harness_module.RESULTS_DIR = results_dir
-    try:
-        harness = EvalHarness(use_llm=False, default_model="ollama/hermes-3")
-        gw = _mock_gateway()
+    harness = EvalHarness(use_llm=False, default_model="ollama/hermes-3", results_dir=results_dir)
+    gw = _mock_gateway()
 
-        with patch.object(harness, "_load_cases", return_value=[_simple_case("c-001")]):
-            with patch("arcana.evals.harness.ModelGateway") as MockGW:
-                with patch("arcana.evals.harness.ConnectionStore"):
-                    MockGW.return_value.__aenter__ = AsyncMock(return_value=gw)
-                    MockGW.return_value.__aexit__ = AsyncMock(return_value=False)
-                    summary = await harness.run()
-
-        saved_files = list(results_dir.glob("*.json"))
-        assert len(saved_files) == 1
-        assert summary.run_id in saved_files[0].name
-    finally:
-        harness_module.RESULTS_DIR = old_dir
-
-
-@pytest.mark.asyncio
-async def test_run_skipped_case_is_counted(tmp_path):
-    old_dir = harness_module.RESULTS_DIR
-    harness_module.RESULTS_DIR = tmp_path / "results"
-    try:
-        harness = EvalHarness(use_llm=False, default_model="ollama/hermes-3")
-        gw = _mock_gateway()
-
-        with patch.object(harness, "_load_cases", return_value=[_simple_case("c-001", skip=True)]):
-            with patch("arcana.evals.harness.ModelGateway") as MockGW:
-                with patch("arcana.evals.harness.ConnectionStore"):
-                    MockGW.return_value.__aenter__ = AsyncMock(return_value=gw)
-                    MockGW.return_value.__aexit__ = AsyncMock(return_value=False)
-                    summary = await harness.run()
-
-        assert summary.cases_skipped == 1
-    finally:
-        harness_module.RESULTS_DIR = old_dir
-
-
-@pytest.mark.asyncio
-async def test_run_with_suite_filter_uses_only_that_suite(tmp_path):
-    old_dir = harness_module.RESULTS_DIR
-    harness_module.RESULTS_DIR = tmp_path / "results"
-    try:
-        harness = EvalHarness(use_llm=False, default_model="ollama/hermes-3")
-        gw = _mock_gateway()
-
+    with patch.object(harness, "_load_cases", return_value=[_simple_case("c-001")]):
         with patch("arcana.evals.harness.ModelGateway") as MockGW:
             with patch("arcana.evals.harness.ConnectionStore"):
                 MockGW.return_value.__aenter__ = AsyncMock(return_value=gw)
                 MockGW.return_value.__aexit__ = AsyncMock(return_value=False)
-                summary = await harness.run(suite="cards")
+                summary = await harness.run()
 
-        assert summary.suite == "cards"
-        assert summary.cases_run == len(CARD_CASES)
-    finally:
-        harness_module.RESULTS_DIR = old_dir
+    saved_files = list(results_dir.glob("*.json"))
+    assert len(saved_files) == 1
+    assert summary.run_id in saved_files[0].name
+
+
+@pytest.mark.asyncio
+async def test_run_skipped_case_is_counted(tmp_path):
+    harness = EvalHarness(use_llm=False, default_model="ollama/hermes-3", results_dir=tmp_path / "results")
+    gw = _mock_gateway()
+
+    with patch.object(harness, "_load_cases", return_value=[_simple_case("c-001", skip=True)]):
+        with patch("arcana.evals.harness.ModelGateway") as MockGW:
+            with patch("arcana.evals.harness.ConnectionStore"):
+                MockGW.return_value.__aenter__ = AsyncMock(return_value=gw)
+                MockGW.return_value.__aexit__ = AsyncMock(return_value=False)
+                summary = await harness.run()
+
+    assert summary.cases_skipped == 1
+
+
+@pytest.mark.asyncio
+async def test_run_with_suite_filter_uses_only_that_suite(tmp_path):
+    harness = EvalHarness(use_llm=False, default_model="ollama/hermes-3", results_dir=tmp_path / "results")
+    gw = _mock_gateway()
+
+    with patch("arcana.evals.harness.ModelGateway") as MockGW:
+        with patch("arcana.evals.harness.ConnectionStore"):
+            MockGW.return_value.__aenter__ = AsyncMock(return_value=gw)
+            MockGW.return_value.__aexit__ = AsyncMock(return_value=False)
+            summary = await harness.run(suite="cards")
+
+    assert summary.suite == "cards"
+    assert summary.cases_run == len(CARD_CASES)
