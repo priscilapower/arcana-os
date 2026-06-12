@@ -30,7 +30,11 @@ dependencies = [
 vector = ["sqlite-vec>=0.1.0"]
 obsidian = ["watchdog>=4.0.0"]
 qdrant = ["qdrant-client>=1.9.0"]
-all = ["arcana-core[vector,obsidian,qdrant]"]
+observability = [
+    "opentelemetry-api>=1.20",
+    "opentelemetry-sdk>=1.20",
+]
+all = ["arcana-core[vector,obsidian,qdrant,observability]"]
 
 [dependency-groups]
 dev = [

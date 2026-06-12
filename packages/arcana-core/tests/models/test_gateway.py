@@ -508,8 +508,8 @@ async def test_retry_stops_at_total_timeout():
         retry=RetryPolicy(max_retries=3, base=0.0, total_timeout=5.0),
     )
 
-    # start=0.0, then elapsed check after first failure=6.0 → remaining=-1.0 → stop
-    time_values = iter([0.0, 6.0])
+    # start=0.0, attempt_start=0.0, latency_check=0.0, elapsed check=6.0 → remaining=-1.0 → stop
+    time_values = iter([0.0, 0.0, 0.0, 6.0])
     with patch("arcana.models.gateway.time.monotonic", side_effect=time_values):
         with patch("arcana.models.gateway.asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(ModelTransientError):
@@ -543,8 +543,9 @@ async def test_retry_after_clamped_to_remaining_budget():
     async def mock_sleep(secs: float) -> None:
         delays_slept.append(secs)
 
-    # start=0.0, elapsed check after first failure=1.0 → remaining=4.0 → clamp 60.0 to 4.0
-    time_values = iter([0.0, 1.0])
+    # start=0.0, attempt0_start=0.0, attempt0_latency=0.0, elapsed check=1.0 → remaining=4.0
+    # attempt1_start=0.0, attempt1_latency=0.0 (success)
+    time_values = iter([0.0, 0.0, 0.0, 1.0, 0.0, 0.0])
     with patch("arcana.models.gateway.time.monotonic", side_effect=time_values):
         with patch("arcana.models.gateway.asyncio.sleep", side_effect=mock_sleep):
             result = await gw.complete("ollama/hermes-3", _req())

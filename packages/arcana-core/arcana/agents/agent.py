@@ -10,6 +10,7 @@ from arcana.cards.engine import CardEngine
 from arcana.cards.registry import get_registry
 from arcana.models.adapters.base import CompletionRequest
 from arcana.models.gateway import ModelGateway
+from arcana.observability import SessionEvent, get_audit_log, get_metrics, get_tracer
 from arcana.types.card import Card
 from arcana.types.memory import MemoryAdapter, MemoryEntry, MemoryQuery, MemoryType
 from arcana.types.session import MessageRole, Session, SessionStatus, SessionTrigger
@@ -84,30 +85,41 @@ class Agent:
             session = Session(agent_id=self.id)
             session.add_message(MessageRole.USER, prompt)
 
-        memory_context = await self._retrieve_memory_context(prompt)
-        system = self._build_system(memory_context, context)
+        with get_tracer().start_as_current_span("session.run") as span:
+            span.set_attribute("arcana.agent.name", self.name)
+            span.set_attribute("arcana.card", self.card.value)
+            span.set_attribute("arcana.model", self._model)
+            span.set_attribute("arcana.session_id", str(session.id))
 
-        request = CompletionRequest(
-            system=system,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=self._temperature,
-            metadata={"session_id": str(session.id), "agent_id": str(self.id)},
-        )
-        response = await self._gateway.complete(self._model, request)
+            memory_context = await self._retrieve_memory_context(prompt)
+            system = self._build_system(memory_context, context)
 
-        if self._session_manager:
-            self._session_manager.append(session, MessageRole.ASSISTANT, response.content)
-        else:
-            session.add_message(MessageRole.ASSISTANT, response.content)
+            request = CompletionRequest(
+                system=system,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=self._temperature,
+                metadata={"session_id": str(session.id), "agent_id": str(self.id)},
+            )
+            response = await self._gateway.complete(self._model, request)
 
-        session.total_input_tokens = response.input_tokens
-        session.total_output_tokens = response.output_tokens
+            if self._session_manager:
+                self._session_manager.append(session, MessageRole.ASSISTANT, response.content)
+            else:
+                session.add_message(MessageRole.ASSISTANT, response.content)
 
-        if self._session_manager:
-            self._session_manager.close(session, SessionStatus.COMPLETED)
-        else:
-            session.close(SessionStatus.COMPLETED)
+            session.total_input_tokens = response.input_tokens
+            session.total_output_tokens = response.output_tokens
 
+            if self._session_manager:
+                self._session_manager.close(session, SessionStatus.COMPLETED)
+            else:
+                session.close(SessionStatus.COMPLETED)
+
+            span.set_attribute("arcana.input_tokens", response.input_tokens)
+            span.set_attribute("arcana.output_tokens", response.output_tokens)
+            span.set_attribute("arcana.duration_ms", session.duration_ms)
+
+        self._emit_session_event(session)
         await self._extract_memory(prompt, response.content, session)
         self._sessions.append(session)
         return response.content
@@ -158,6 +170,7 @@ class Agent:
             else:
                 session.close(SessionStatus.COMPLETED)
             self._sessions.append(session)
+            self._emit_session_event(session)
 
     @property
     def card_config(self):  # type: ignore[return]
@@ -167,6 +180,36 @@ class Agent:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _emit_session_event(self, session: Session) -> None:
+        """Append a SessionEvent to the audit log and record metrics. Non-fatal."""
+        try:
+            audit = get_audit_log()
+            if audit is not None:
+                audit.append(
+                    SessionEvent(
+                        session_id=str(session.id),
+                        agent_id=str(self.id),
+                        agent_name=self.name,
+                        card=self.card.value,
+                        modifier_cards=[c.value for c in self.modifier_cards],
+                        model=self._model,
+                        input_tokens=session.total_input_tokens,
+                        output_tokens=session.total_output_tokens,
+                        duration_ms=session.duration_ms,
+                        status=session.status.value,
+                    )
+                )
+            get_metrics().record_session(
+                card=self.card.value,
+                model=self._model,
+                status=session.status.value,
+                input_tokens=session.total_input_tokens,
+                output_tokens=session.total_output_tokens,
+                duration_ms=session.duration_ms,
+            )
+        except Exception:
+            pass
 
     def _build_system(
         self,

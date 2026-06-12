@@ -33,10 +33,43 @@ from arcana.models.errors import (
     ModelUnavailableError,
 )
 from arcana.models.pricing import DEFAULT_PRICING, CostEvent, PricingTable, Usage
+from arcana.observability import ModelCallEvent, get_audit_log, get_metrics, get_tracer
 from arcana.types.model import ModelConnection, ModelProvider
 
 _log = logging.getLogger(__name__)
 _RETRYABLE = (ModelTransientError, ModelUnavailableError)
+
+
+def _emit_model_call(
+    session_id: str,
+    model: str,
+    latency_ms: int,
+    input_tokens: int,
+    output_tokens: int,
+    attempt: int,
+    success: bool,
+    error: str | None = None,
+) -> None:
+    """Append a ModelCallEvent to the audit log and record latency metric. Non-fatal."""
+    try:
+        event = ModelCallEvent(
+            session_id=session_id,
+            model=model,
+            latency_ms=latency_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            attempt=attempt,
+            success=success,
+            error=error,
+        )
+        audit = get_audit_log()
+        if audit is not None:
+            audit.append(event)
+        get_metrics().record_model_call(model=model, latency_ms=latency_ms, success=success)
+    except Exception:
+        pass
+
+
 _UNHEALTHY_COOLDOWN: float = 30.0  # seconds before a half-open probe is allowed
 
 # ---------------------------------------------------------------------------
@@ -240,32 +273,52 @@ class ModelGateway:
             raise ModelUnavailableError(f"Connection {model!r} is in cooldown after repeated failures.")
 
         req = replace(request, model_id=conn.model_id)
-        last_exc: Exception | None = None
-        start = time.monotonic()
-        for attempt in range(self._retry.max_retries + 1):
-            try:
-                response = await entry.adapter.complete(req)
-                entry.mark_healthy()
-                await self._emit_cost(model, response, conn, req.metadata)
-                return response
-            except _RETRYABLE as exc:
-                last_exc = exc
-                if attempt == self._retry.max_retries:
-                    break
-                delay = self._retry.backoff(attempt, retry_after=getattr(exc, "retry_after", None))
-                if self._retry.total_timeout is not None:
-                    elapsed = time.monotonic() - start
-                    remaining = self._retry.total_timeout - elapsed
-                    if remaining <= 0:
-                        break
-                    delay = min(delay, remaining)
-                await asyncio.sleep(delay)
-            except ModelError:
-                raise
+        session_id = (req.metadata or {}).get("session_id", "")
 
-        if isinstance(last_exc, ModelUnavailableError):
-            entry.mark_unhealthy()
-        raise last_exc  # type: ignore[misc]
+        with get_tracer().start_as_current_span("model.complete") as span:
+            span.set_attribute("arcana.model", model)
+            if session_id:
+                span.set_attribute("arcana.session_id", session_id)
+
+            last_exc: Exception | None = None
+            start = time.monotonic()
+            for attempt in range(self._retry.max_retries + 1):
+                attempt_start = time.monotonic()
+                try:
+                    response = await entry.adapter.complete(req)
+                    entry.mark_healthy()
+                    latency_ms = int((time.monotonic() - attempt_start) * 1000)
+                    span.set_attribute("arcana.input_tokens", response.input_tokens)
+                    span.set_attribute("arcana.output_tokens", response.output_tokens)
+                    span.set_attribute("arcana.attempts", attempt + 1)
+                    await self._emit_cost(model, response, conn, req.metadata)
+                    _emit_model_call(
+                        session_id, model, latency_ms, response.input_tokens, response.output_tokens, attempt + 1, True
+                    )
+                    return response
+                except _RETRYABLE as exc:
+                    latency_ms = int((time.monotonic() - attempt_start) * 1000)
+                    _emit_model_call(session_id, model, latency_ms, 0, 0, attempt + 1, False, str(exc))
+                    last_exc = exc
+                    if attempt == self._retry.max_retries:
+                        break
+                    delay = self._retry.backoff(attempt, retry_after=getattr(exc, "retry_after", None))
+                    if self._retry.total_timeout is not None:
+                        elapsed = time.monotonic() - start
+                        remaining = self._retry.total_timeout - elapsed
+                        if remaining <= 0:
+                            break
+                        delay = min(delay, remaining)
+                    await asyncio.sleep(delay)
+                except ModelError as exc:
+                    span.record_exception(exc)
+                    raise
+
+            if last_exc is not None:
+                span.record_exception(last_exc)
+            if isinstance(last_exc, ModelUnavailableError):
+                entry.mark_unhealthy()
+            raise last_exc  # type: ignore[misc]
 
     async def stream(self, model: str, request: CompletionRequest) -> AsyncGenerator[ModelChunk, None]:
         """Stream a response as ``ModelChunk`` deltas.
@@ -394,6 +447,7 @@ class ModelGateway:
     async def _retry_stream(
         self, model: str, conn: ModelConnection, entry: _CacheEntry, request: CompletionRequest
     ) -> AsyncGenerator[ModelChunk, None]:
+        session_id = (request.metadata or {}).get("session_id", "")
         last_exc: Exception | None = None
         start = time.monotonic()
         for attempt in range(self._retry.max_retries + 1):
@@ -401,6 +455,7 @@ class ModelGateway:
             input_tokens = 0
             output_tokens = 0
             total_chars = 0
+            attempt_start = time.monotonic()
             try:
                 async with aclosing(entry.adapter.stream(request)) as gen:
                     async for chunk in gen:
@@ -410,13 +465,17 @@ class ModelGateway:
                         total_chars += len(chunk.text)
                         yield chunk
                 entry.mark_healthy()
+                latency_ms = int((time.monotonic() - attempt_start) * 1000)
                 await self._emit_cost_streaming(
                     model, conn, input_tokens, output_tokens, total_chars, request.metadata
                 )
+                _emit_model_call(session_id, model, latency_ms, input_tokens, output_tokens, attempt + 1, True)
                 return
             except _RETRYABLE as exc:
                 if started:
                     raise  # mid-stream — can't replay output
+                latency_ms = int((time.monotonic() - attempt_start) * 1000)
+                _emit_model_call(session_id, model, latency_ms, 0, 0, attempt + 1, False, str(exc))
                 last_exc = exc
                 if attempt < self._retry.max_retries:
                     delay = self._retry.backoff(attempt, retry_after=getattr(exc, "retry_after", None))
