@@ -64,7 +64,15 @@ def model_cmd(
     store = ConnectionStore(CONNECTIONS_PATH)
     existing = store.get_by_name(name)
 
-    conn_id = uuid.uuid4()
+    if existing is not None:
+        if not typer.confirm(f"Connection '{name}' already exists. Overwrite?"):
+            raise typer.Exit()
+        conn_id = existing.id
+        action = "Updated"
+    else:
+        conn_id = uuid.uuid4()
+        action = "Added"
+
     conn = ModelConnection(
         id=conn_id,
         name=name,
@@ -72,13 +80,6 @@ def model_cmd(
         model_id=model_id,
         endpoint=endpoint or "",
     )
-
-    if existing is not None:
-        if not typer.confirm(f"Connection '{name}' already exists. Overwrite?"):
-            raise typer.Exit()
-        action = "Updated"
-    else:
-        action = "Added"
 
     store.upsert(conn)
 
