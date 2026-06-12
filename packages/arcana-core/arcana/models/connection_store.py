@@ -90,6 +90,16 @@ class ConnectionStore:
     def all(self) -> list[ModelConnection]:
         return list(self._load())
 
+    def upsert(self, conn: ModelConnection) -> None:
+        """Insert conn, or replace the existing connection with the same name."""
+        connections = list(self._load())
+        idx = next((i for i, c in enumerate(connections) if c.name == conn.name), None)
+        if idx is not None:
+            connections[idx] = conn
+        else:
+            connections.append(conn)
+        self._save(connections)
+
     def reload(self) -> None:
         self._connections = None
 
@@ -105,3 +115,8 @@ class ConnectionStore:
             else:
                 self._connections = []
         return self._connections
+
+    def _save(self, connections: list[ModelConnection]) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.write_text(json.dumps([c.model_dump(mode="json") for c in connections], indent=2))
+        self._connections = connections

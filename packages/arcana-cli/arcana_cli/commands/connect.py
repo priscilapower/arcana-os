@@ -1,13 +1,12 @@
 """arcana connect — manage model connections."""
 
-import json
 import uuid
-from typing import Any
 
 import keyring
 import typer
 from rich.console import Console
 
+from arcana.models import ConnectionStore
 from arcana.types.model import ModelConnection, ModelProvider
 from arcana_cli.constants import CONNECTIONS_PATH
 from arcana_cli.ui.theme import GREEN, TXT3, dim, err, hl, make_table, ok
@@ -24,17 +23,6 @@ _DEFAULT_ENDPOINTS: dict[str, str] = {
     "custom": "",
 }
 _NEEDS_KEY = {"anthropic", "openai", "openai_compat", "custom"}
-
-
-def _load() -> list[dict[str, Any]]:
-    if CONNECTIONS_PATH.exists():
-        return json.loads(CONNECTIONS_PATH.read_text())  # type: ignore[no-any-return]
-    return []
-
-
-def _save(connections: list[dict[str, Any]]) -> None:
-    CONNECTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONNECTIONS_PATH.write_text(json.dumps(connections, indent=2))
 
 
 @app.command("model")
@@ -73,6 +61,9 @@ def model_cmd(
     if api_key is None and provider in _NEEDS_KEY:
         api_key = str(typer.prompt(f"API key for {provider}", hide_input=True, default=""))
 
+    store = ConnectionStore(CONNECTIONS_PATH)
+    existing = store.get_by_name(name)
+
     conn_id = uuid.uuid4()
     conn = ModelConnection(
         id=conn_id,
@@ -82,20 +73,14 @@ def model_cmd(
         endpoint=endpoint or "",
     )
 
-    connections = _load()
-    existing_idx = next((i for i, c in enumerate(connections) if c.get("name") == name), None)
-    conn_dict: dict[str, Any] = json.loads(conn.model_dump_json())
-
-    if existing_idx is not None:
+    if existing is not None:
         if not typer.confirm(f"Connection '{name}' already exists. Overwrite?"):
             raise typer.Exit()
-        connections[existing_idx] = conn_dict
         action = "Updated"
     else:
-        connections.append(conn_dict)
         action = "Added"
 
-    _save(connections)
+    store.upsert(conn)
 
     if api_key:
         keyring.set_password("arcana", f"{conn_id}_api_key", api_key)
@@ -112,7 +97,7 @@ def model_cmd(
 @app.command("list")
 def list_cmd() -> None:
     """List all saved model connections."""
-    connections = _load()
+    connections = ConnectionStore(CONNECTIONS_PATH).all()
     if not connections:
         console.print(dim("No connections yet. Run: arcana connect model"))
         return
@@ -122,9 +107,5 @@ def list_cmd() -> None:
     table.add_column("Model ID")
     table.add_column("Endpoint", style=TXT3)
     for c in connections:
-        name_val: str = c.get("name") or ""
-        provider_val: str = c.get("provider") or ""
-        model_val: str = c.get("model_id") or ""
-        endpoint_val: str = c.get("endpoint") or "(default)"
-        table.add_row(name_val, provider_val, model_val, endpoint_val)
+        table.add_row(c.name, str(c.provider), c.model_id, c.endpoint or "(default)")
     console.print(table)
