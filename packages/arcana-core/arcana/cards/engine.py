@@ -43,12 +43,16 @@ class CardEngine:
     def __init__(self, registry: CardRegistry) -> None:
         self._registry = registry
 
+    MAX_MODIFIERS = 2
+
     def resolve(
         self,
         primary: Card,
         modifiers: list[Card] | None = None,
     ) -> AgentConfig:
         modifiers = modifiers or []
+        if len(modifiers) > self.MAX_MODIFIERS:
+            raise ValueError(f"Too many modifier cards: {len(modifiers)} given, max is {self.MAX_MODIFIERS}.")
         primary_card = self._registry.get(primary)
         modifier_cards = [self._registry.get(m) for m in modifiers]
 

@@ -183,6 +183,16 @@ def test_engine_three_card_decay_blend(engine: CardEngine):
 # ---------------------------------------------------------------------------
 
 
+def test_engine_rejects_more_than_two_modifiers(engine: CardEngine):
+    with pytest.raises(ValueError, match="Too many modifier cards"):
+        engine.resolve(Card.FOOL, modifiers=[Card.HERMIT, Card.STAR, Card.MAGICIAN])
+
+
+def test_engine_accepts_exactly_two_modifiers(engine: CardEngine):
+    config = engine.resolve(Card.FOOL, modifiers=[Card.HERMIT, Card.STAR])
+    assert len(config.source_cards) == 3
+
+
 def test_engine_world_primary_produces_valid_config(engine: CardEngine):
     config = engine.resolve(Card.WORLD)
     assert config.source_cards == [Card.WORLD]

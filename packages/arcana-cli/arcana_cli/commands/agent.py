@@ -150,6 +150,7 @@ def create(
         raw_modifiers = select_cards(
             "Add modifier cards (optional — Space to toggle, Enter to confirm with none)",
             initial=[],
+            max_items=CardEngine.MAX_MODIFIERS,
         )
         modifier_cards = [m for m in raw_modifiers if m != card_enum]
         if modifier_cards:
@@ -288,6 +289,7 @@ def edit(
         raw_modifiers = select_cards(
             "Modifier cards (Space to toggle, Enter to confirm)",
             initial=record.modifier_cards,
+            max_items=CardEngine.MAX_MODIFIERS,
         )
         updated_modifiers = [m for m in raw_modifiers if m != updated_card]
         if updated_modifiers:
