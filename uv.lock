@@ -180,7 +180,11 @@ dev = [
 [[package]]
 name = "arcana-os"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
+dependencies = [
+    { name = "arcana-cli" },
+    { name = "arcana-core" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -195,6 +199,10 @@ docs = [
 ]
 
 [package.metadata]
+requires-dist = [
+    { name = "arcana-cli", editable = "packages/arcana-cli" },
+    { name = "arcana-core", editable = "packages/arcana-core" },
+]
 
 [package.metadata.requires-dev]
 dev = [

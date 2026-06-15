@@ -59,7 +59,7 @@ def configure_tracing(session_dir: Path) -> None:
 
         provider = TracerProvider()  # pyright: ignore[reportUnknownVariableType]
         provider.add_span_processor(  # pyright: ignore[reportUnknownMemberType]
-            SimpleSpanProcessor(FileSpanExporter(session_dir))  # pyright: ignore[reportUnknownVariableType]
+            SimpleSpanProcessor(FileSpanExporter(session_dir))  # pyright: ignore[reportUnknownVariableType,reportArgumentType]
         )
         trace.set_tracer_provider(provider)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
     except ImportError:
