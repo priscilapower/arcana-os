@@ -19,6 +19,15 @@ dev = [
     "pre-commit>=4.6.0",
 ]
 
+# Documentation site — `uv run --group docs mkdocs serve`
+# mike (versioned docs) is intentionally omitted for now; add it here when
+# released versions need to be served side by side.
+docs = [
+    "mkdocs-material>=9.5.0",
+    "mkdocstrings[python]>=0.25.0",
+    "pymdown-extensions>=10.0",
+]
+
 # ---------------------------------------------------------------------------
 # Ruff — lint + format
 # ---------------------------------------------------------------------------

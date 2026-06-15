@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" role="img" aria-label="Arcana OS">
+  <title>Arcana OS favicon — tarot card mark, cyan on deep indigo</title>
+
+  <rect x="0" y="0" width="64" height="64" rx="14" ry="14" fill="#0D0C19"></rect>
+
+  <rect x="18.3" y="8" width="27.4" height="48" rx="3" ry="3" stroke="#00BEC4" stroke-width="2.5"></rect>
+
+  <path d="M32 23 L34.65 29.35 L41 32 L34.65 34.65 L32 41 L29.35 34.65 L23 32 L29.35 29.35 Z" fill="#00BEC4"></path>
+</svg>

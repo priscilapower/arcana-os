@@ -1,0 +1,13 @@
+{#-
+  Arcana OS header lockup.
+  Renders the brand mark followed by the ARCANA^OS wordmark:
+    ARCANA  — Spectral, all caps, letter-spacing .14em
+    OS      — JetBrains Mono superscript, accent cyan, letter-spacing .18em
+  Styling lives in docs/stylesheets/arcana.css (.arcana-wordmark / .arcana-os).
+  The default text site_name is hidden via CSS so it isn't duplicated; the
+  scrolled page-title still shows.
+-#}
+{% if config.theme.logo %}
+  <img src="{{ config.theme.logo | url }}" alt="{{ config.site_name }}" class="arcana-mark">
+{% endif %}
+<span class="arcana-wordmark">Arcana<sup class="arcana-os">OS</sup></span>

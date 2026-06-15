@@ -29,3 +29,6 @@ Thumbs.db
 # AI-related files
 CLAUDE.md
 .claude
+
+# MkDocs build output
+site/
