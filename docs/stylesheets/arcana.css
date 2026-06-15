@@ -1,0 +1,187 @@
+/* ===========================================================================
+   Arcana OS — Material for MkDocs theme override
+   ---------------------------------------------------------------------------
+   Maps Material's CSS custom properties onto the Arcana design tokens.
+   Source of truth for the palette is design-system/arcana.css; the values
+   below are mirrored from it. If the brand changes, update there first, then
+   re-sync the token block in this file.
+
+   Canonical pairing: Cyan + Amber · Dark-first, light-capable.
+   Fonts: Spectral (display) · DM Sans (interface) · JetBrains Mono (code).
+   =========================================================================== */
+
+/* Spectral isn't one of Material's built-in fonts — load it for headings. */
+@import url("https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,500;0,600;1,400&display=swap");
+
+/* ---- Arcana tokens (mirrored from design-system/arcana.css) ------------- */
+:root {
+  --arcana-fd: "Spectral", Georgia, serif;
+  --arcana-r3: 11px;
+  --arcana-r2: 7px;
+}
+
+/* ===========================================================================
+   DARK — canonical (Material "slate" scheme)
+   =========================================================================== */
+[data-md-color-scheme="slate"] {
+  --arcana-bg:    oklch(8%  0.030 270);
+  --arcana-bg2:   oklch(10% 0.032 270);
+  --arcana-deep:  oklch(4%  0.020 270);
+  --arcana-surf:  oklch(13% 0.036 270);
+  --arcana-surf2: oklch(17% 0.036 270);
+  --arcana-surf3: oklch(23% 0.034 270);
+  --arcana-bdr:   oklch(28% 0.034 270);
+  --arcana-bdr-s: oklch(20% 0.030 270);
+  --arcana-txt:   oklch(93% 0.010  85);
+  --arcana-txt2:  oklch(70% 0.015 270);
+  --arcana-txt3:  oklch(50% 0.020 270);
+  --arcana-accent:       oklch(72% 0.14 198);
+  --arcana-accent-bright: oklch(82% 0.12 198);
+  --arcana-accent2:      oklch(80% 0.15 78);
+
+  /* Map onto Material */
+  --md-default-bg-color:        var(--arcana-bg);
+  --md-default-fg-color:        var(--arcana-txt);
+  --md-default-fg-color--light: var(--arcana-txt2);
+  --md-default-fg-color--lighter: var(--arcana-txt3);
+  --md-default-fg-color--lightest: var(--arcana-bdr-s);
+
+  --md-primary-fg-color:        var(--arcana-deep);
+  --md-primary-bg-color:        var(--arcana-txt);
+  --md-accent-fg-color:         var(--arcana-accent-bright);
+
+  --md-typeset-color:           var(--arcana-txt);
+  --md-typeset-a-color:         var(--arcana-accent);
+
+  --md-code-bg-color:           var(--arcana-deep);
+  --md-code-fg-color:           var(--arcana-txt);
+  --md-code-hl-color:           oklch(72% 0.14 198 / .18);
+
+  --md-footer-bg-color:         var(--arcana-deep);
+  --md-footer-bg-color--dark:   var(--arcana-deep);
+}
+
+/* ===========================================================================
+   LIGHT — capable (Material "default" scheme)
+   =========================================================================== */
+[data-md-color-scheme="default"] {
+  --arcana-bg:    oklch(97% 0.006 270);
+  --arcana-surf:  oklch(100% 0 0);
+  --arcana-bdr:   oklch(88% 0.012 270);
+  --arcana-txt:   oklch(17% 0.020 270);
+  --arcana-txt2:  oklch(40% 0.025 270);
+  --arcana-accent:       oklch(52% 0.13 205);
+  --arcana-accent-bright: oklch(44% 0.13 205);
+  --arcana-accent2:      oklch(68% 0.15 78);
+
+  --md-default-bg-color:        var(--arcana-bg);
+  --md-default-fg-color:        var(--arcana-txt);
+  --md-default-fg-color--light: var(--arcana-txt2);
+  --md-primary-fg-color:        var(--arcana-surf);
+  --md-primary-bg-color:        var(--arcana-txt);
+  --md-accent-fg-color:         var(--arcana-accent-bright);
+  --md-typeset-color:           var(--arcana-txt);
+  --md-typeset-a-color:         var(--arcana-accent);
+}
+
+/* ===========================================================================
+   Typography — headings in Spectral, the Arcana display face
+   =========================================================================== */
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-typeset h4 {
+  font-family: var(--arcana-fd);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+/* Brand wordmark in the header: ARCANA in Spectral caps. */
+.md-header__title {
+  font-family: var(--arcana-fd);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+/* ===========================================================================
+   Surfaces — cards, code, admonitions pick up the indigo panels
+   =========================================================================== */
+[data-md-color-scheme="slate"] .md-typeset pre > code,
+[data-md-color-scheme="slate"] .md-typeset code {
+  border: 1px solid var(--arcana-bdr-s);
+  border-radius: var(--arcana-r2);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .admonition,
+[data-md-color-scheme="slate"] .md-typeset details {
+  background: var(--arcana-surf);
+  border-color: var(--arcana-bdr);
+  border-radius: var(--arcana-r3);
+}
+
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) {
+  background: var(--arcana-surf);
+  border: 1px solid var(--arcana-bdr-s);
+  border-radius: var(--arcana-r3);
+}
+
+/* Amber is the secondary accent — reserve it for keyboard keys / commands. */
+.md-typeset kbd {
+  color: var(--arcana-accent2);
+  border-color: var(--arcana-bdr);
+}
+
+/* Accent bar under the header for a touch of brand. */
+[data-md-color-scheme="slate"] .md-header {
+  border-bottom: 1px solid var(--arcana-accent-line, oklch(72% 0.14 198 / .32));
+}
+
+/* ===========================================================================
+   Header lockup — ARCANA^OS (see overrides/partials/logo.html)
+   =========================================================================== */
+.md-header__button.md-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0;
+}
+
+.md-header__button.md-logo img.arcana-mark {
+  height: 1.5rem;
+  width: auto;
+}
+
+.arcana-wordmark {
+  font-family: var(--arcana-fd);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 1.05rem;
+  line-height: 1;
+  color: var(--md-primary-bg-color);
+  white-space: nowrap;
+}
+
+.arcana-wordmark .arcana-os {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-weight: 500;
+  color: var(--arcana-accent);
+  letter-spacing: 0.18em;
+  font-size: 0.52em;
+  vertical-align: super;
+  margin-left: 0.14em;
+  text-transform: uppercase;
+}
+
+/* Hide the duplicated text site name; keep the scrolled page-title topic. */
+.md-header__title .md-header__topic:first-child {
+  display: none;
+}
+
+/* On small screens, drop the wordmark and keep just the mark. */
+@media screen and (max-width: 44.9375em) {
+  .arcana-wordmark {
+    display: none;
+  }
+}

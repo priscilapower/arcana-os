@@ -1,11 +1,9 @@
 """World Engine types — RoutingRule, Spread, SpreadLayout.
 
-These types are scaffolded now so that workspace_id is baked in from the start.
-Full implementation happens in Epic 7. Having workspace_id here from day one
+These types are scaffolded now so that namespace_id is baked in from the start.
+Full implementation happens in Epic 7. Having namespace_id here from day one
 avoids a multi-table migration when Phase 3 adds multi-tenancy.
 """
-
-from __future__ import annotations
 
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -30,8 +28,8 @@ class RoutingRule(BaseModel):
     description: str = ""
     created_at: datetime = Field(default_factory=now_utc)
 
-    # Cloud — workspace scoping (always "local" in Phase 1/2)
-    workspace_id: str = "local"
+    # Cloud — namespace scoping (always "local" in Phase 1/2)
+    namespace_id: str = "local"
 
 
 class SpreadLayout(BaseModel):
@@ -57,5 +55,5 @@ class Spread(BaseModel):
     is_active: bool = False
     created_at: datetime = Field(default_factory=now_utc)
 
-    # Cloud — workspace scoping (always "local" in Phase 1/2)
-    workspace_id: str = "local"
+    # Cloud — namespace scoping (always "local" in Phase 1/2)
+    namespace_id: str = "local"

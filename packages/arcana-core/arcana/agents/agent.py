@@ -3,15 +3,24 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from typing import Any
-from uuid import UUID
+from typing import TYPE_CHECKING
+from uuid import UUID, uuid4
 
 from arcana.cards.engine import CardEngine
 from arcana.cards.registry import get_registry
-from arcana.models.adapters.base import CompletionRequest, ModelAdapter
+from arcana.models.adapters.base import CompletionRequest, MessageParam
+from arcana.models.gateway import ModelGateway
+from arcana.observability import SessionEvent, get_audit_log, get_metrics, get_tracer
 from arcana.types.card import Card
-from arcana.types.memory import MemoryEntry, MemoryType
-from arcana.types.session import MessageRole, Session, SessionStatus
+from arcana.types.memory import MemoryAdapter, MemoryEntry, MemoryQuery, MemoryType
+from arcana.types.session import MessageRole, Session, SessionStatus, SessionTrigger
+
+if TYPE_CHECKING:
+    from arcana.agents.session_manager import SessionManager
+
+# Stopgap cap — oldest turns dropped from the replayed window only; full transcript stays on disk.
+# Token-accurate trimming lands in Phase 1b (ContextBudget).
+MAX_HISTORY_TURNS = 20
 
 
 class Agent:
@@ -19,30 +28,40 @@ class Agent:
     A configured AI agent. Assign a tarot card — get a soul.
 
     Usage:
-        agent = Agent(
-            name="researcher",
-            card=Card.HERMIT,
-            model=OllamaAdapter(model="hermes-3"),
-        )
-        result = await agent.run("summarize advances in RAG")
+        async with ModelGateway(ConnectionStore()) as gw:
+            agent = Agent(
+                name="researcher",
+                card=Card.HERMIT,
+                gateway=gw,
+                model="ollama/hermes-3",
+            )
+            result = await agent.run("summarize advances in RAG")
     """
 
     def __init__(
         self,
         name: str,
         card: Card,
-        model: ModelAdapter,
+        gateway: ModelGateway,
+        model: str,
         description: str = "",
         modifier_cards: list[Card] | None = None,
-        memory: Any = None,
+        memory: MemoryAdapter | None = None,
+        soul: str | None = None,
         system_prompt_override: str | None = None,
+        id: UUID | None = None,
+        session_manager: SessionManager | None = None,
     ) -> None:
+        self.id = id or uuid4()
         self.name = name
         self.card = card
         self.modifier_cards = modifier_cards or []
-        self.model = model
+        self._gateway = gateway
+        self._model = model
         self.memory = memory
+        self.soul = soul
         self.description = description
+        self._session_manager = session_manager
 
         # Resolve config from card(s)
         registry = get_registry()
@@ -62,26 +81,61 @@ class Agent:
     async def run(
         self,
         prompt: str,
+        *,
+        session: Session | None = None,
         context: str | None = None,
     ) -> str:
-        """Run a single prompt. Returns the assistant's response."""
-        session = Session(agent_id=self._dummy_id())
+        """Run a single prompt. Returns the assistant's response.
+
+        Pass *session* to resume a prior conversation; omit to start a new one.
+        """
+        if session is None:
+            session = (
+                self._session_manager.start(self.id, SessionTrigger.USER)
+                if self._session_manager
+                else Session(agent_id=self.id)
+            )
+
         session.add_message(MessageRole.USER, prompt)
 
-        memory_context = await self._retrieve_memory_context(prompt)
-        system = self._build_system(memory_context, context)
+        history: list[MessageParam] = [
+            MessageParam(role=m.role.value, content=m.content)
+            for m in session.messages
+            if m.role in (MessageRole.USER, MessageRole.ASSISTANT)
+        ]
+        history = history[-(MAX_HISTORY_TURNS * 2) :]
 
-        request = CompletionRequest(
-            system=system,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=self._temperature,
-        )
-        response = await self.model.complete(request)
-        session.add_message(MessageRole.ASSISTANT, response.content)
-        session.total_input_tokens = response.input_tokens
-        session.total_output_tokens = response.output_tokens
-        session.close(SessionStatus.COMPLETED)
+        with get_tracer().start_as_current_span("session.run") as span:
+            span.set_attribute("arcana.agent.name", self.name)
+            span.set_attribute("arcana.card", self.card.value)
+            span.set_attribute("arcana.model", self._model)
+            span.set_attribute("arcana.session_id", str(session.id))
 
+            memory_context = await self._retrieve_memory_context(prompt)
+            system = self._build_system(memory_context, context)
+
+            request = CompletionRequest(
+                system=system,
+                messages=history,
+                temperature=self._temperature,
+                metadata={"session_id": str(session.id), "agent_id": str(self.id)},
+            )
+            response = await self._gateway.complete(self._model, request)
+
+            session.add_message(MessageRole.ASSISTANT, response.content)
+            session.total_input_tokens = response.input_tokens
+            session.total_output_tokens = response.output_tokens
+
+            if self._session_manager:
+                self._session_manager.close(session, SessionStatus.COMPLETED)
+            else:
+                session.close(SessionStatus.COMPLETED)
+
+            span.set_attribute("arcana.input_tokens", response.input_tokens)
+            span.set_attribute("arcana.output_tokens", response.output_tokens)
+            span.set_attribute("arcana.duration_ms", session.duration_ms)
+
+        self._emit_session_event(session)
         await self._extract_memory(prompt, response.content, session)
         self._sessions.append(session)
         return response.content
@@ -89,20 +143,61 @@ class Agent:
     async def stream(
         self,
         prompt: str,
+        *,
+        session: Session | None = None,
         context: str | None = None,
     ) -> AsyncGenerator[str, None]:
-        """Stream a response token by token."""
+        """Stream a response token by token. Records a session with token totals.
+
+        Pass *session* to resume a prior conversation; omit to start a new one.
+        """
+        if session is None:
+            session = (
+                self._session_manager.start(self.id, SessionTrigger.USER)
+                if self._session_manager
+                else Session(agent_id=self.id)
+            )
+
+        session.add_message(MessageRole.USER, prompt)
+
+        history: list[MessageParam] = [
+            MessageParam(role=m.role.value, content=m.content)
+            for m in session.messages
+            if m.role in (MessageRole.USER, MessageRole.ASSISTANT)
+        ]
+        history = history[-(MAX_HISTORY_TURNS * 2) :]
+
         memory_context = await self._retrieve_memory_context(prompt)
         system = self._build_system(memory_context, context)
 
         request = CompletionRequest(
             system=system,
-            messages=[{"role": "user", "content": prompt}],
+            messages=history,
             temperature=self._temperature,
             stream=True,
+            metadata={"session_id": str(session.id), "agent_id": str(self.id)},
         )
-        async for chunk in self.model.stream(request):
-            yield chunk
+
+        content_parts: list[str] = []
+        input_tokens = 0
+        output_tokens = 0
+        try:
+            async for chunk in self._gateway.stream(self._model, request):
+                content_parts.append(chunk.text)
+                input_tokens += chunk.input_tokens
+                output_tokens += chunk.output_tokens
+                yield chunk.text
+        finally:
+            full_content = "".join(content_parts)
+            session.add_message(MessageRole.ASSISTANT, full_content)
+            session.total_input_tokens = input_tokens
+            session.total_output_tokens = output_tokens
+            if self._session_manager:
+                self._session_manager.close(session, SessionStatus.COMPLETED)
+            else:
+                session.close(SessionStatus.COMPLETED)
+            self._sessions.append(session)
+            self._emit_session_event(session)
 
     @property
     def card_config(self):  # type: ignore[return]
@@ -113,12 +208,44 @@ class Agent:
     # Private helpers
     # ------------------------------------------------------------------
 
+    def _emit_session_event(self, session: Session) -> None:
+        """Append a SessionEvent to the audit log and record metrics. Non-fatal."""
+        try:
+            audit = get_audit_log()
+            if audit is not None:
+                audit.append(
+                    SessionEvent(
+                        session_id=str(session.id),
+                        agent_id=str(self.id),
+                        agent_name=self.name,
+                        card=self.card.value,
+                        modifier_cards=[c.value for c in self.modifier_cards],
+                        model=self._model,
+                        input_tokens=session.total_input_tokens,
+                        output_tokens=session.total_output_tokens,
+                        duration_ms=session.duration_ms,
+                        status=session.status.value,
+                    )
+                )
+            get_metrics().record_session(
+                card=self.card.value,
+                model=self._model,
+                status=session.status.value,
+                input_tokens=session.total_input_tokens,
+                output_tokens=session.total_output_tokens,
+                duration_ms=session.duration_ms,
+            )
+        except Exception:
+            pass
+
     def _build_system(
         self,
         memory_context: str,
         extra_context: str | None,
     ) -> str:
         parts = [self._system_prompt]
+        if self.soul:
+            parts.append(f"\n\n─── USER CONTEXT ───\n{self.soul}\n─── END USER CONTEXT ───")
         if memory_context:
             parts.append(f"\n\n## Relevant Memory\n{memory_context}")
         if extra_context:
@@ -128,8 +255,6 @@ class Agent:
     async def _retrieve_memory_context(self, prompt: str) -> str:
         if not self.memory:
             return ""
-        from arcana.types.memory import MemoryQuery
-
         query = MemoryQuery(text=prompt, limit=5)
         entries = await self.memory.search(query)
         if not entries:
@@ -141,16 +266,10 @@ class Agent:
         if not self.memory:
             return
         entry = MemoryEntry(
-            agent_id=self._dummy_id(),
+            agent_id=self.id,
             type=MemoryType.EPISODIC,
             content=f"User asked: {prompt[:200]}\nResponse summary: {response[:300]}",
             source_session_id=session.id,
             importance=0.5,
         )
         await self.memory.write(entry)
-
-    def _dummy_id(self) -> UUID:
-        """Placeholder until AgentRegistry assigns a real UUID."""
-        import uuid
-
-        return uuid.UUID("00000000-0000-0000-0000-000000000001")

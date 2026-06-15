@@ -1,15 +1,12 @@
 """Session, Message, and ToolCall types."""
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
-from arcana.types._utils import now_utc
+from arcana.types._utils import JsonValue, now_utc
 
 
 class MessageRole(StrEnum):
@@ -29,8 +26,8 @@ class Message(BaseModel):
 class ToolCall(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     tool_name: str
-    params: dict[str, Any]
-    result: dict[str, Any] | None = None
+    params: dict[str, JsonValue]
+    result: dict[str, JsonValue] | None = None
     error: str | None = None
     duration_ms: int = 0
 

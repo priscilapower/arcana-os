@@ -10,10 +10,9 @@ Architecture summary:
   Metrics:  MemoryMetrics surfaced in briefings and Phase 2 UI
 """
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Protocol, runtime_checkable
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -49,6 +48,11 @@ class ConfidenceSource(StrEnum):
     USER_CONFIRMED = "user_confirmed"  # user explicitly confirmed this fact
     INFERRED = "inferred"  # The World inferred this from patterns
     CONSOLIDATED = "consolidated"  # produced by consolidation pass
+
+
+class RetrievalMode(StrEnum):
+    semantic = "semantic"  # only semantic search
+    hybrid = "hybrid"  # semantic + BM25 keyword search
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +292,7 @@ class MemoryQuery(BaseModel):
     keywords: list[str] = []
     type: MemoryType | None = None
     scope: MemoryScope | None = None
+    retrieval_mode: RetrievalMode = RetrievalMode.semantic
     pool_name: str | None = None
     tags: list[str] = []
     time_from: datetime | None = None
@@ -371,7 +376,7 @@ class MemoryMetrics(BaseModel):
 
 
 class ConsolidationReport(BaseModel):
-    """Produced by WorldEngine.consolidate() — surfaced in morning briefing."""
+    """Produced by WorldEngine.consolidate() - surfaced in morning briefing."""
 
     agent_id: UUID
     agent_name: str
@@ -382,3 +387,16 @@ class ConsolidationReport(BaseModel):
     conflicts_detected: int = 0
     conflicts_resolved: int = 0
     ran_at: datetime = Field(default_factory=now_utc)
+
+
+# ---------------------------------------------------------------------------
+# Adapter protocol
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class MemoryAdapter(Protocol):
+    """Structural interface for any memory backend wired into an Agent."""
+
+    async def search(self, query: MemoryQuery) -> list[MemoryEntry]: ...
+    async def write(self, entry: MemoryEntry) -> None: ...

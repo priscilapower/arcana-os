@@ -22,15 +22,16 @@ Usage:
     arcana eval run --baseline <id> # regression check
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from arcana.agents.agent import Agent
 from arcana.evals.judge import CompositeJudge, LLMJudge
+from arcana.evals.suites.blending import BLENDING_CASES
+from arcana.evals.suites.cards import CARD_CASES
 from arcana.evals.types import (
     EvalCase,
     EvalResult,
@@ -39,8 +40,10 @@ from arcana.evals.types import (
     RegressionDetail,
     RegressionReport,
 )
+from arcana.models.connection_store import ConnectionStore
+from arcana.models.gateway import ModelGateway
 
-RESULTS_DIR = Path.home() / ".arcana" / "evals" / "results"
+_DEFAULT_RESULTS_DIR = Path.home() / ".arcana" / "evals" / "results"
 
 
 class EvalHarness:
@@ -51,7 +54,7 @@ class EvalHarness:
         - Load cases from suites
         - Run each case (skipping marked cases)
         - Score with the configured judge
-        - Store results to ~/.arcana/evals/results/
+        - Store results to ~/.arcana/evals/results/ (or results_dir if provided)
         - Optionally compare against a baseline run (regression mode)
         - Return a summary
     """
@@ -62,10 +65,12 @@ class EvalHarness:
         judge_model: str | None = None,
         default_model: str = "ollama/hermes-3",
         concurrency: int = 3,
+        results_dir: Path | None = None,
     ) -> None:
         self._use_llm = use_llm
         self._default_model = default_model
         self._concurrency = concurrency
+        self._results_dir = results_dir or _DEFAULT_RESULTS_DIR
         self._judge = CompositeJudge(
             llm_judge=LLMJudge(model=judge_model) if use_llm else None,
             use_llm=use_llm,
@@ -90,7 +95,10 @@ class EvalHarness:
         print(f"   Judge:   {'LLM + Rules' if self._use_llm else 'Rules only'}")
         print(f"   Suite:   {suite or 'all'}\n")
 
-        results = await self._run_cases(cases, run_id)
+        # Token usage is recorded on the session regardless. Per-call cost is emitted only if
+        # on_cost is provided at construction; without it, no CostEvent fires.
+        async with ModelGateway(ConnectionStore()) as gateway:
+            results = await self._run_cases(cases, run_id, gateway)
         self._save_results(run_id, results)
 
         regression = None
@@ -106,9 +114,6 @@ class EvalHarness:
     # ------------------------------------------------------------------
 
     def _load_cases(self, suite: str | None = None) -> list[EvalCase]:
-        from arcana.evals.suites.blending import BLENDING_CASES
-        from arcana.evals.suites.cards import CARD_CASES
-
         all_cases = [*CARD_CASES, *BLENDING_CASES]
         if suite:
             all_cases = [c for c in all_cases if c.suite == suite]
@@ -118,9 +123,9 @@ class EvalHarness:
     # Running
     # ------------------------------------------------------------------
 
-    async def _run_cases(self, cases: list[EvalCase], run_id: str) -> list[EvalResult]:
+    async def _run_cases(self, cases: list[EvalCase], run_id: str, gateway: ModelGateway) -> list[EvalResult]:
         sem = asyncio.Semaphore(self._concurrency)
-        tasks = [self._run_one(case, run_id, sem) for case in cases]
+        tasks = [self._run_one(case, run_id, sem, gateway) for case in cases]
         return await asyncio.gather(*tasks)
 
     async def _run_one(
@@ -128,6 +133,7 @@ class EvalHarness:
         case: EvalCase,
         run_id: str,
         sem: asyncio.Semaphore,
+        gateway: ModelGateway,
     ) -> EvalResult:
         if case.skip:
             print(f"  ⏭  [{case.id}] Skipped: {case.skip_reason}")
@@ -149,7 +155,7 @@ class EvalHarness:
         async with sem:
             start = time.monotonic()
             try:
-                result = await self._execute_case(case, run_id)
+                result = await self._execute_case(case, run_id, gateway)
             except Exception as e:
                 result = EvalResult(
                     case_id=case.id,
@@ -168,33 +174,22 @@ class EvalHarness:
             print(f"  {status} [{case.id}] score={result.overall_score:.3f} ({result.latency_ms}ms)")
             return result
 
-    async def _execute_case(self, case: EvalCase, run_id: str) -> EvalResult:
+    async def _execute_case(self, case: EvalCase, run_id: str, gateway: ModelGateway) -> EvalResult:
         """
         Run the agent for this eval case and collect outputs.
 
         TODO: Wire to real AgentRegistry in Epic 5.
         Currently uses Agent directly with the card config.
         """
-        from arcana.agents.agent import Agent
-        from arcana.models.adapters.anthropic import AnthropicAdapter
-        from arcana.models.adapters.ollama import OllamaAdapter
-
         start = time.monotonic()
 
-        # Resolve model
         model_str = case.model_override or self._default_model
-        if model_str.startswith("ollama/"):
-            model = OllamaAdapter(model=model_str.split("/", 1)[1])
-        elif model_str.startswith("claude"):
-            model = AnthropicAdapter(model=model_str)
-        else:
-            model = OllamaAdapter(model=model_str)
-
         agent = Agent(
             name=f"eval-{case.card.value}",
             card=case.card,
             modifier_cards=case.modifier_cards,
-            model=model,
+            gateway=gateway,
+            model=model_str,
         )
 
         # Seed memory if provided
@@ -220,13 +215,13 @@ class EvalHarness:
     # ------------------------------------------------------------------
 
     def _save_results(self, run_id: str, results: list[EvalResult]) -> None:
-        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-        path = RESULTS_DIR / f"{run_id}.json"
+        self._results_dir.mkdir(parents=True, exist_ok=True)
+        path = self._results_dir / f"{run_id}.json"
         data = [r.model_dump(mode="json") for r in results]
         path.write_text(json.dumps(data, indent=2, default=str))
 
     def _load_results(self, run_id: str) -> list[EvalResult]:
-        path = RESULTS_DIR / f"{run_id}.json"
+        path = self._results_dir / f"{run_id}.json"
         if not path.exists():
             raise FileNotFoundError(f"No results for run: {run_id}")
         data = json.loads(path.read_text())

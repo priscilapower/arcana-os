@@ -8,7 +8,7 @@ Blending rules:
 Produces: system_prompt, temperature, memory_weights, decay_config, suggested_skills.
 """
 
-from __future__ import annotations
+from pydantic import BaseModel
 
 from arcana.cards.registry import CardRegistry
 from arcana.types.card import (
@@ -21,6 +21,21 @@ from arcana.types.card import (
 from arcana.types.memory import DEFAULT_DECAY_PROFILES, MemoryType
 
 
+class BlendCompatibility(BaseModel):
+    """Tension and synergy pairs detected across primary + modifier cards."""
+
+    tensions: list[tuple[Card, Card]] = []
+    synergies: list[tuple[Card, Card]] = []
+
+    @property
+    def has_tensions(self) -> bool:
+        return bool(self.tensions)
+
+    @property
+    def has_synergies(self) -> bool:
+        return bool(self.synergies)
+
+
 class CardEngine:
     PRIMARY_WEIGHT = 0.7
     MODIFIER_TOTAL_WEIGHT = 0.3
@@ -28,12 +43,16 @@ class CardEngine:
     def __init__(self, registry: CardRegistry) -> None:
         self._registry = registry
 
+    MAX_MODIFIERS = 2
+
     def resolve(
         self,
         primary: Card,
         modifiers: list[Card] | None = None,
     ) -> AgentConfig:
         modifiers = modifiers or []
+        if len(modifiers) > self.MAX_MODIFIERS:
+            raise ValueError(f"Too many modifier cards: {len(modifiers)} given, max is {self.MAX_MODIFIERS}.")
         primary_card = self._registry.get(primary)
         modifier_cards = [self._registry.get(m) for m in modifiers]
 
@@ -129,6 +148,36 @@ class CardEngine:
                 DEFAULT_DECAY_PROFILES[MemoryType.PREFERENCE].half_life_days,
             ),
         )
+
+    def check_compatibility(
+        self,
+        primary: Card,
+        modifiers: list[Card],
+    ) -> BlendCompatibility:
+        """Return tension and synergy pairs across the full card set (bidirectional)."""
+        if not modifiers:
+            return BlendCompatibility()
+
+        all_ids = [primary, *modifiers]
+        tensions: list[tuple[Card, Card]] = []
+        synergies: list[tuple[Card, Card]] = []
+        seen: set[frozenset[Card]] = set()
+
+        for i, a_id in enumerate(all_ids):
+            card_a = self._registry.get(a_id)
+            for b_id in all_ids[i + 1 :]:
+                pair: frozenset[Card] = frozenset({a_id, b_id})
+                if pair in seen:
+                    continue
+                seen.add(pair)
+                card_b = self._registry.get(b_id)
+
+                if b_id in card_a.tension_cards or a_id in card_b.tension_cards:
+                    tensions.append((a_id, b_id))
+                if b_id in card_a.synergy_cards or a_id in card_b.synergy_cards:
+                    synergies.append((a_id, b_id))
+
+        return BlendCompatibility(tensions=tensions, synergies=synergies)
 
     def _describe_blend(self, primary: TarotCard, modifiers: list[TarotCard]) -> str:
         if not modifiers:

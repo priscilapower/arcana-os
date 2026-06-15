@@ -1,10 +1,43 @@
 [project]
 name = "arcana-os"
 version = "0.1.0"
+description = "The OS that gives your agents a soul — the batteries-included install (core + CLI)"
+readme = "README.md"
 requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+keywords = ["ai", "agents", "llm", "tarot", "cli"]
+
+# arcana-os is a meta-package: it installs the recommended local bundle
+# (the core library + the CLI) and nothing else. Keep this lean — future
+# components like the server or UI ship as their own packages or extras,
+# they are never auto-pulled in here.
+dependencies = [
+    "arcana-core==0.1.0",
+    "arcana-cli==0.1.0",
+]
+
+# Re-declare the CLI's console script on the meta-package itself. `uv tool
+# install` / pipx only expose entry points of the *named* package, not its
+# dependencies — so without this, `uv tool install arcana-os` would install
+# everything but expose no `arcana` command. The wrapper imports arcana_cli
+# at runtime, which is present via the dependency above.
+[project.scripts]
+arcana = "arcana_cli.main:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# This distribution ships no Python modules of its own — it only aggregates
+# dependencies and exposes the entry point. Tell hatchling to build an empty
+# wheel rather than searching for a package directory.
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
 
 [tool.uv.sources]
 arcana-core = { workspace = true }
+arcana-cli = { workspace = true }
 
 [tool.uv.workspace]
 members = ["packages/*"]
@@ -17,6 +50,15 @@ dev = [
     "ruff>=0.4.0",
     "pyright>=1.1.0",
     "pre-commit>=4.6.0",
+]
+
+# Documentation site — `uv run --group docs mkdocs serve`
+# mike (versioned docs) is intentionally omitted for now; add it here when
+# released versions need to be served side by side.
+docs = [
+    "mkdocs-material>=9.5.0",
+    "mkdocstrings[python]>=0.25.0",
+    "pymdown-extensions>=10.0",
 ]
 
 # ---------------------------------------------------------------------------
@@ -52,6 +94,12 @@ pythonVersion = "3.11"
 typeCheckingMode = "strict"
 venvPath = "."
 venv = ".venv"
+# Editable installs are registered via .pth files that some Pyright versions don't follow;
+# listing them explicitly ensures IDE resolution matches `uv run pyright`.
+extraPaths = [
+    "packages/arcana-core",
+    "packages/arcana-cli",
+]
 exclude = [
     "**/examples/**",
     "**/tests/**",

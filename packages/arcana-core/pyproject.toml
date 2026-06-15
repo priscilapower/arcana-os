@@ -4,14 +4,16 @@ version = "0.1.0"
 description = "The OS that gives your agents a soul — core library"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 keywords = ["ai", "agents", "llm", "tarot", "mcp", "ollama"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 
 dependencies = [
@@ -30,7 +32,11 @@ dependencies = [
 vector = ["sqlite-vec>=0.1.0"]
 obsidian = ["watchdog>=4.0.0"]
 qdrant = ["qdrant-client>=1.9.0"]
-all = ["arcana-core[vector,obsidian,qdrant]"]
+observability = [
+    "opentelemetry-api>=1.20",
+    "opentelemetry-sdk>=1.20",
+]
+all = ["arcana-core[vector,obsidian,qdrant,observability]"]
 
 [dependency-groups]
 dev = [

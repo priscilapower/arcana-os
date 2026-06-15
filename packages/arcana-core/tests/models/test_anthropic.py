@@ -1,0 +1,375 @@
+"""Tests for AnthropicAdapter."""
+
+import json
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from anthropic.types import TextBlock, ToolUseBlock
+
+from arcana.models.adapters.anthropic import AnthropicAdapter
+from arcana.models.adapters.base import CompletionRequest
+
+
+def _req(**kw) -> CompletionRequest:
+    return CompletionRequest(
+        system=kw.get("system", "You are helpful."),
+        messages=kw.get("messages", [{"role": "user", "content": "Hello"}]),
+        temperature=kw.get("temperature", 0.7),
+        max_tokens=kw.get("max_tokens", 1024),
+    )
+
+
+def _text_block(text: str) -> MagicMock:
+    block = MagicMock(spec=TextBlock)
+    block.text = text
+    return block
+
+
+def _mock_sdk_client(
+    text: str = "response", input_tokens: int = 5, output_tokens: int = 10, stop_reason: str | None = "end_turn"
+) -> MagicMock:
+    """Build a minimal mock of anthropic.AsyncAnthropic."""
+    client = MagicMock()
+    client.messages = MagicMock()
+
+    msg = MagicMock()
+    msg.content = [_text_block(text)]
+    msg.usage = MagicMock(input_tokens=input_tokens, output_tokens=output_tokens)
+    msg.stop_reason = stop_reason
+    client.messages.create = AsyncMock(return_value=msg)
+
+    return client
+
+
+# ---------------------------------------------------------------------------
+# Key resolution
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_key_reads_env_var(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "env-key-123")
+    adapter = AnthropicAdapter()
+    assert adapter._resolve_key() == "env-key-123"
+
+
+def test_resolve_key_falls_back_to_keyring(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with patch("arcana.models.connection_store.keyring.get_password", return_value="keyring-key"):
+        adapter = AnthropicAdapter()
+        assert adapter._resolve_key() == "keyring-key"
+
+
+def test_resolve_key_raises_when_no_key_found(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with patch("arcana.models.connection_store.keyring.get_password", return_value=None):
+        adapter = AnthropicAdapter()
+        with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
+            adapter._resolve_key()
+
+
+def test_api_key_resolution_precedence(monkeypatch):
+    """resolve_api_key follows: direct → connection-id keyring → env var → provider keyring."""
+    from uuid import UUID
+
+    from arcana.models.connection_store import resolve_api_key
+
+    conn_id = UUID("12345678-1234-1234-1234-123456789abc")
+    env_var = "TEST_ARCANA_API_KEY_XYZ_UNIQUE"
+    provider_key = "test_provider_arcana_key"
+    monkeypatch.delenv(env_var, raising=False)
+
+    # Step 1: direct wins over everything
+    with patch("arcana.models.connection_store.keyring.get_password", return_value="kr-key"):
+        monkeypatch.setenv(env_var, "env-key")
+        assert resolve_api_key(conn_id, env_var, provider_key, direct="direct-key") == "direct-key"
+    monkeypatch.delenv(env_var, raising=False)
+
+    # Step 2: connection-id keyring entry wins over env and provider keyring
+    def _kr_conn(service: str, key: str) -> str | None:
+        return "conn-key" if key == f"{conn_id}_api_key" else "provider-key"
+
+    with patch("arcana.models.connection_store.keyring.get_password", side_effect=_kr_conn):
+        monkeypatch.setenv(env_var, "env-key")
+        assert resolve_api_key(conn_id, env_var, provider_key) == "conn-key"
+    monkeypatch.delenv(env_var, raising=False)
+
+    # Step 3: env var wins over provider keyring when connection-id entry is absent
+    def _kr_none(service: str, key: str) -> None:
+        return None
+
+    with patch("arcana.models.connection_store.keyring.get_password", side_effect=_kr_none):
+        monkeypatch.setenv(env_var, "env-key")
+        assert resolve_api_key(conn_id, env_var, provider_key) == "env-key"
+    monkeypatch.delenv(env_var, raising=False)
+
+    # Step 4: provider keyring is the last resort when nothing else matches
+    def _kr_provider(service: str, key: str) -> str | None:
+        return "provider-key" if key == provider_key else None
+
+    with patch("arcana.models.connection_store.keyring.get_password", side_effect=_kr_provider):
+        assert resolve_api_key(conn_id, env_var, provider_key) == "provider-key"
+
+    # None when all steps miss
+    with patch("arcana.models.connection_store.keyring.get_password", return_value=None):
+        assert resolve_api_key(conn_id, env_var, provider_key) is None
+
+
+# ---------------------------------------------------------------------------
+# complete()
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_complete_maps_response_fields():
+    sdk = _mock_sdk_client(text="Hello!", input_tokens=8, output_tokens=3, stop_reason="end_turn")
+    with patch("arcana.models.adapters.anthropic.AsyncAnthropic", return_value=sdk):
+        adapter = AnthropicAdapter(api_key="test-key")
+        result = await adapter.complete(_req())
+
+    assert result.content == "Hello!"
+    assert result.input_tokens == 8
+    assert result.output_tokens == 3
+    assert result.stop_reason == "end_turn"
+
+
+@pytest.mark.asyncio
+async def test_complete_passes_system_and_messages():
+    sdk = _mock_sdk_client()
+    with patch("arcana.models.adapters.anthropic.AsyncAnthropic", return_value=sdk):
+        adapter = AnthropicAdapter(api_key="test-key")
+        await adapter.complete(_req(system="Be brief.", messages=[{"role": "user", "content": "Hi"}]))
+
+    call_kwargs = sdk.messages.create.call_args.kwargs
+    assert call_kwargs["system"] == "Be brief."
+    assert call_kwargs["messages"] == [{"role": "user", "content": "Hi"}]
+
+
+@pytest.mark.asyncio
+async def test_complete_passes_temperature_and_max_tokens():
+    sdk = _mock_sdk_client()
+    with patch("arcana.models.adapters.anthropic.AsyncAnthropic", return_value=sdk):
+        adapter = AnthropicAdapter(model="claude-haiku-4-5-20251001", api_key="test-key")
+        await adapter.complete(_req(temperature=0.2, max_tokens=512))
+
+    call_kwargs = sdk.messages.create.call_args.kwargs
+    assert call_kwargs["temperature"] == 0.2
+    assert call_kwargs["max_tokens"] == 512
+    assert call_kwargs["model"] == "claude-haiku-4-5-20251001"
+
+
+@pytest.mark.asyncio
+async def test_complete_passes_multi_turn_messages():
+    sdk = _mock_sdk_client()
+    conversation = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi"},
+        {"role": "user", "content": "Tell me more"},
+    ]
+    with patch("arcana.models.adapters.anthropic.AsyncAnthropic", return_value=sdk):
+        adapter = AnthropicAdapter(api_key="test-key")
+        await adapter.complete(_req(system="", messages=conversation))
+
+    call_kwargs = sdk.messages.create.call_args.kwargs
+    msgs = call_kwargs["messages"]
+    assert len(msgs) == 3
+    assert msgs[0] == {"role": "user", "content": "Hello"}
+    assert msgs[1] == {"role": "assistant", "content": "Hi"}
+    assert msgs[2] == {"role": "user", "content": "Tell me more"}
+
+
+@pytest.mark.asyncio
+async def test_complete_filters_unknown_role():
+    sdk = _mock_sdk_client()
+    with patch("arcana.models.adapters.anthropic.AsyncAnthropic", return_value=sdk):
+        adapter = AnthropicAdapter(api_key="test-key")
+        await adapter.complete(
+            _req(
+                messages=[
+                    {"role": "user", "content": "Hello"},
+                    {"role": "tool", "content": "result"},
+                    {"role": "user", "content": "Thanks"},
+                ]
+            )
+        )
+
+    msgs = sdk.messages.create.call_args.kwargs["messages"]
+    assert len(msgs) == 2
+    assert all(m["role"] in ("user", "assistant", "system") for m in msgs)
+
+
+@pytest.mark.asyncio
+async def test_complete_returns_empty_string_when_no_text_block():
+    sdk = _mock_sdk_client()
+    sdk.messages.create.return_value.content = [MagicMock()]  # no TextBlock spec
+    with patch("arcana.models.adapters.anthropic.AsyncAnthropic", return_value=sdk):
+        adapter = AnthropicAdapter(api_key="test-key")
+        result = await adapter.complete(_req())
+
+    assert result.content == ""
+
+
+@pytest.mark.asyncio
+async def test_complete_extracts_first_text_block_from_mixed_content():
+    sdk = _mock_sdk_client()
+    sdk.messages.create.return_value.content = [
+        MagicMock(),  # non-TextBlock (tool_use, thinking, etc.)
+        _text_block("found"),
+        _text_block("second"),
+    ]
+    with patch("arcana.models.adapters.anthropic.AsyncAnthropic", return_value=sdk):
+        adapter = AnthropicAdapter(api_key="test-key")
+        result = await adapter.complete(_req())
+
+    assert result.content == "found"
+
+
+@pytest.mark.asyncio
+async def test_complete_stop_reason_none_becomes_end_turn():
+    sdk = _mock_sdk_client(stop_reason=None)
+    sdk.messages.create.return_value.stop_reason = None
+    with patch("arcana.models.adapters.anthropic.AsyncAnthropic", return_value=sdk):
+        adapter = AnthropicAdapter(api_key="test-key")
+        result = await adapter.complete(_req())
+
+    assert result.stop_reason == "end_turn"
+
+
+# ---------------------------------------------------------------------------
+# stream()
+# ---------------------------------------------------------------------------
+
+
+async def _text_chunks(*texts):
+    for t in texts:
+        yield t
+
+
+def _mock_stream_inner(texts=(), input_tokens: int = 10, output_tokens: int = 5) -> MagicMock:
+    """Build a mock Anthropic stream inner object with text_stream and get_final_message."""
+    final_message = MagicMock()
+    final_message.usage = MagicMock(input_tokens=input_tokens, output_tokens=output_tokens)
+
+    stream_inner = MagicMock()
+    stream_inner.text_stream = _text_chunks(*texts)
+    stream_inner.get_final_message = AsyncMock(return_value=final_message)
+    return stream_inner
+
+
+@pytest.mark.asyncio
+async def test_stream_yields_text_chunks():
+    sdk = MagicMock()
+    sdk.messages = MagicMock()
+
+    stream_cm = AsyncMock()
+    stream_cm.__aenter__.return_value = _mock_stream_inner(("Hello", " world"))
+    sdk.messages.stream.return_value = stream_cm
+
+    with patch("arcana.models.adapters.anthropic.AsyncAnthropic", return_value=sdk):
+        adapter = AnthropicAdapter(api_key="test-key")
+        collected = [chunk async for chunk in adapter.stream(_req())]
+
+    assert [c.text for c in collected if c.text] == ["Hello", " world"]
+    # Final chunk carries usage
+    assert collected[-1].input_tokens == 10
+    assert collected[-1].output_tokens == 5
+
+
+@pytest.mark.asyncio
+async def test_stream_passes_correct_kwargs():
+    sdk = MagicMock()
+    sdk.messages = MagicMock()
+
+    stream_cm = AsyncMock()
+    stream_cm.__aenter__.return_value = _mock_stream_inner()
+    sdk.messages.stream.return_value = stream_cm
+
+    with patch("arcana.models.adapters.anthropic.AsyncAnthropic", return_value=sdk):
+        adapter = AnthropicAdapter(model="claude-sonnet-4-6", api_key="test-key")
+        _ = [chunk async for chunk in adapter.stream(_req(system="Sys", temperature=0.5, max_tokens=256))]
+
+    call_kwargs = sdk.messages.stream.call_args.kwargs
+    assert call_kwargs["model"] == "claude-sonnet-4-6"
+    assert call_kwargs["system"] == "Sys"
+    assert call_kwargs["temperature"] == 0.5
+    assert call_kwargs["max_tokens"] == 256
+
+
+# ---------------------------------------------------------------------------
+# health_check()
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_health_check_healthy_when_key_available(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "valid-key")
+    adapter = AnthropicAdapter()
+
+    health = await adapter.health_check()
+
+    assert health.healthy is True
+    assert health.message == ""
+
+
+@pytest.mark.asyncio
+async def test_health_check_unhealthy_when_key_missing(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with patch("arcana.models.connection_store.keyring.get_password", return_value=None):
+        adapter = AnthropicAdapter()
+        health = await adapter.health_check()
+
+    assert health.healthy is False
+    assert "ANTHROPIC_API_KEY" in health.message
+
+
+# ---------------------------------------------------------------------------
+# Tool support
+# ---------------------------------------------------------------------------
+
+
+def _tool_use_block(id: str, name: str, input: dict) -> MagicMock:
+    block = MagicMock(spec=ToolUseBlock)
+    block.id = id
+    block.name = name
+    block.input = input
+    return block
+
+
+@pytest.mark.asyncio
+async def test_anthropic_passes_tools_and_parses_tool_calls():
+    sdk = MagicMock()
+    sdk.messages = MagicMock()
+
+    tool_block = _tool_use_block("tc_1", "get_weather", {"city": "London"})
+    msg = MagicMock()
+    msg.content = [tool_block]
+    msg.usage = MagicMock(input_tokens=10, output_tokens=5)
+    msg.stop_reason = "tool_use"
+    sdk.messages.create = AsyncMock(return_value=msg)
+
+    tools = [
+        {"name": "get_weather", "description": "Get weather", "input_schema": {"type": "object", "properties": {}}}
+    ]
+    request = CompletionRequest(
+        system="You are helpful.",
+        messages=[{"role": "user", "content": "What's the weather?"}],
+        tools=tools,
+    )
+
+    with patch("arcana.models.adapters.anthropic.AsyncAnthropic", return_value=sdk):
+        adapter = AnthropicAdapter(api_key="test-key")
+        result = await adapter.complete(request)
+
+    call_kwargs = sdk.messages.create.call_args.kwargs
+    assert "tools" in call_kwargs
+    sent_tool = call_kwargs["tools"][0]
+    assert sent_tool["name"] == "get_weather"
+    assert sent_tool["description"] == "Get weather"
+
+    assert result.tool_calls is not None
+    assert len(result.tool_calls) == 1
+    tc = result.tool_calls[0]
+    assert tc["id"] == "tc_1"
+    assert tc["type"] == "function"
+    assert tc["function"]["name"] == "get_weather"
+    assert json.loads(tc["function"]["arguments"]) == {"city": "London"}
+    assert result.stop_reason == "tool_use"
