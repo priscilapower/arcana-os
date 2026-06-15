@@ -296,3 +296,90 @@ async def test_agent_run_cost_event_has_session_id():
     session = ag._sessions[0]
     assert ev.metadata["session_id"] == str(session.id)
     assert ev.metadata["agent_id"] == str(ag.id)
+
+
+# ---------------------------------------------------------------------------
+# Conversation continuity — history replay
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_with_session_replays_prior_messages(gateway):
+    """Passing a pre-populated session sends full history to the model."""
+    from arcana.types.session import Session
+
+    ag = Agent(name="x", card=Card.HERMIT, gateway=gateway, model="ollama/test")
+    session = Session(agent_id=ag.id)
+    session.add_message(MessageRole.USER, "first turn")
+    session.add_message(MessageRole.ASSISTANT, "first response")
+
+    await ag.run("second turn", session=session)
+
+    call_args: CompletionRequest = gateway.complete.call_args[0][1]
+    roles = [m["role"] for m in call_args.messages]
+    assert roles == ["user", "assistant", "user"]
+    assert call_args.messages[0]["content"] == "first turn"
+    assert call_args.messages[2]["content"] == "second turn"
+
+
+@pytest.mark.asyncio
+async def test_run_session_persisted_and_resumed(gateway, tmp_path):
+    """Running, then loading and resuming a session sends both turns to the model."""
+    from arcana.agents.session_manager import SessionManager
+
+    sm = SessionManager(base_dir=tmp_path / "agents")
+    agent_id = uuid4()
+    ag = Agent(name="x", card=Card.HERMIT, gateway=gateway, model="ollama/test", id=agent_id, session_manager=sm)
+
+    await ag.run("first prompt")
+
+    persisted = sm.list_sessions(agent_id)
+    assert len(persisted) == 1
+    loaded_session = sm.load(agent_id, persisted[0].id)
+    assert loaded_session is not None
+
+    # Reset call tracking so we only inspect the second call
+    gateway.complete.reset_mock()
+    await ag.run("second prompt", session=loaded_session)
+
+    call_args: CompletionRequest = gateway.complete.call_args[0][1]
+    roles = [m["role"] for m in call_args.messages]
+    assert "user" in roles
+    assert "assistant" in roles
+    assert call_args.messages[-1]["content"] == "second prompt"
+
+    # Both turns persisted under the same session id
+    sessions_after = sm.list_sessions(agent_id)
+    assert len(sessions_after) == 2 or (len(sessions_after) == 1 and len(sessions_after[0].messages) >= 4)
+
+
+@pytest.mark.asyncio
+async def test_history_cap_trims_request_but_not_disk(gateway, tmp_path):
+    """Messages beyond MAX_HISTORY_TURNS * 2 are dropped from the request, not from disk."""
+    from arcana.agents.agent import MAX_HISTORY_TURNS
+    from arcana.agents.session_manager import SessionManager
+    from arcana.types.session import Session
+
+    sm = SessionManager(base_dir=tmp_path / "agents")
+    agent_id = uuid4()
+    ag = Agent(name="x", card=Card.HERMIT, gateway=gateway, model="ollama/test", id=agent_id, session_manager=sm)
+
+    # Build a session with MAX_HISTORY_TURNS full turns already in it
+    session = Session(agent_id=agent_id)
+    for i in range(MAX_HISTORY_TURNS):
+        session.add_message(MessageRole.USER, f"old user {i}")
+        session.add_message(MessageRole.ASSISTANT, f"old assistant {i}")
+
+    # Now run — this adds one more user message (total 41 messages for the cap window)
+    await ag.run("new prompt", session=session)
+
+    call_args: CompletionRequest = gateway.complete.call_args[0][1]
+    # Request is capped at MAX_HISTORY_TURNS * 2 messages
+    assert len(call_args.messages) <= MAX_HISTORY_TURNS * 2
+
+    # But all messages are on disk
+    # (MAX_HISTORY_TURNS user + MAX_HISTORY_TURNS assistant + 1 new user + 1 new assistant)
+    persisted = sm.list_sessions(agent_id)
+    assert len(persisted) == 1
+    total_msg_count = MAX_HISTORY_TURNS * 2 + 2  # old turns + new user + new assistant
+    assert len(persisted[0].messages) == total_msg_count

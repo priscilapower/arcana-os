@@ -6,13 +6,28 @@ from uuid import UUID
 
 import typer
 from rich.console import Console
+from rich.live import Live
+from rich.spinner import Spinner
 
 from arcana.agents.registry import AgentRegistry
+from arcana.agents.session_manager import SessionManager
 from arcana.models.connection_store import ConnectionStore
 from arcana.models.gateway import ModelGateway
 from arcana.types.agent import Agent as AgentRecord
 from arcana_cli.constants import ARCANA_HOME
-from arcana_cli.ui.theme import ACCENT, GREEN, cmd, dim, err, make_panel_fit, make_table, warn
+from arcana_cli.ui.theme import (
+    ACCENT,
+    GREEN,
+    PROMPT,
+    card_color,
+    cmd,
+    dim,
+    err,
+    make_panel,
+    make_panel_fit,
+    make_table,
+    warn,
+)
 
 console = Console()
 
@@ -94,6 +109,8 @@ def run_cmd(
     prompt: str = typer.Argument(..., help="The prompt to run"),
     agent: str | None = typer.Option(None, "--agent", "-a", help="Agent name or UUID"),
     stream: bool = typer.Option(False, "--stream", "-s", help="Stream output token by token"),
+    session_id: str | None = typer.Option(None, "--session", help="Resume a specific session by UUID"),
+    continue_: bool = typer.Option(False, "--continue", help="Resume the agent's most recent session"),
 ) -> None:
     """Run a prompt specifying --agent directly."""
 
@@ -104,6 +121,10 @@ def run_cmd(
 
         if not agent:
             console.print(err("--agent is required. Use: arcana run <prompt> --agent <name>"))
+            raise typer.Exit(1)
+
+        if session_id and continue_:
+            console.print(err("--session and --continue are mutually exclusive."))
             raise typer.Exit(1)
 
         reg = AgentRegistry(ARCANA_HOME / "agents")
@@ -121,20 +142,64 @@ def run_cmd(
 
         # provider:name/model_id — gateway resolves by connection name so the API key is found
         model_str = f"{connection.provider}:{connection.name}/{connection.model_id}"
+        accent = card_color(record.card)
         console.print(dim(f"Agent: {record.name} · {record.card.value} · {connection.name}"))
+
+        sm = SessionManager(ARCANA_HOME / "agents")
+
+        if session_id:
+            try:
+                sid = UUID(session_id)
+            except ValueError as e:
+                console.print(err(f"Invalid session id: '{session_id}'"))
+                raise typer.Exit(1) from e
+            session = sm.load(record.id, sid)
+            if session is None:
+                console.print(err(f"Session '{session_id}' not found for agent '{record.name}'."))
+                raise typer.Exit(1)
+        elif continue_:
+            prior = sm.list_sessions(record.id)
+            if prior:
+                session = prior[-1]
+                console.print(dim(f"Resuming session {str(session.id)[:8]}…"))
+            else:
+                session = sm.start(record.id)
+                console.print(dim("No prior sessions found — starting a new one."))
+        else:
+            session = sm.start(record.id)
 
         try:
             async with ModelGateway(connections=store) as gw:
-                runtime_agent = reg.build_runtime(record, gw, model_str)
+                runtime_agent = reg.build_runtime(record, gw, model_str, session_manager=sm)
                 if stream:
-                    async for chunk in runtime_agent.stream(prompt):
+                    live = Live(
+                        Spinner("dots", text=f"[bold {accent}]{PROMPT} thinking...[/]"),
+                        console=console,
+                        transient=True,
+                    )
+                    live.start()
+                    first = True
+                    async for chunk in runtime_agent.stream(prompt, session=session):
+                        if first:
+                            live.stop()
+                            first = False
                         print(chunk, end="", flush=True)
+                    if first:
+                        live.stop()
                     print()
                 else:
-                    response = await runtime_agent.run(prompt)
-                    console.print(response)
+                    with console.status(
+                        f"[bold {accent}]{PROMPT} thinking...[/]",
+                        spinner="dots",
+                        spinner_style=f"bold {accent}",
+                    ):
+                        response = await runtime_agent.run(prompt, session=session)
+                    console.print(make_panel(response, card=record.card))
         except Exception as exc:
             console.print(err(f"Error: {exc}"))
             raise typer.Exit(1) from exc
+
+        short_id = str(session.id)[:8]
+        console.print(dim(f"session: {short_id}  ·  continue with  --session {session.id}  (or --continue)"))
 
     asyncio.run(_run())

@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 
 from arcana.cards.engine import CardEngine
 from arcana.cards.registry import get_registry
-from arcana.models.adapters.base import CompletionRequest
+from arcana.models.adapters.base import CompletionRequest, MessageParam
 from arcana.models.gateway import ModelGateway
 from arcana.observability import SessionEvent, get_audit_log, get_metrics, get_tracer
 from arcana.types.card import Card
@@ -17,6 +17,10 @@ from arcana.types.session import MessageRole, Session, SessionStatus, SessionTri
 
 if TYPE_CHECKING:
     from arcana.agents.session_manager import SessionManager
+
+# Stopgap cap — oldest turns dropped from the replayed window only; full transcript stays on disk.
+# Token-accurate trimming lands in Phase 1b (ContextBudget).
+MAX_HISTORY_TURNS = 20
 
 
 class Agent:
@@ -77,15 +81,29 @@ class Agent:
     async def run(
         self,
         prompt: str,
+        *,
+        session: Session | None = None,
         context: str | None = None,
     ) -> str:
-        """Run a single prompt. Returns the assistant's response."""
-        if self._session_manager:
-            session = self._session_manager.start(self.id, SessionTrigger.USER)
-            self._session_manager.append(session, MessageRole.USER, prompt)
-        else:
-            session = Session(agent_id=self.id)
-            session.add_message(MessageRole.USER, prompt)
+        """Run a single prompt. Returns the assistant's response.
+
+        Pass *session* to resume a prior conversation; omit to start a new one.
+        """
+        if session is None:
+            session = (
+                self._session_manager.start(self.id, SessionTrigger.USER)
+                if self._session_manager
+                else Session(agent_id=self.id)
+            )
+
+        session.add_message(MessageRole.USER, prompt)
+
+        history: list[MessageParam] = [
+            MessageParam(role=m.role.value, content=m.content)
+            for m in session.messages
+            if m.role in (MessageRole.USER, MessageRole.ASSISTANT)
+        ]
+        history = history[-(MAX_HISTORY_TURNS * 2) :]
 
         with get_tracer().start_as_current_span("session.run") as span:
             span.set_attribute("arcana.agent.name", self.name)
@@ -98,17 +116,13 @@ class Agent:
 
             request = CompletionRequest(
                 system=system,
-                messages=[{"role": "user", "content": prompt}],
+                messages=history,
                 temperature=self._temperature,
                 metadata={"session_id": str(session.id), "agent_id": str(self.id)},
             )
             response = await self._gateway.complete(self._model, request)
 
-            if self._session_manager:
-                self._session_manager.append(session, MessageRole.ASSISTANT, response.content)
-            else:
-                session.add_message(MessageRole.ASSISTANT, response.content)
-
+            session.add_message(MessageRole.ASSISTANT, response.content)
             session.total_input_tokens = response.input_tokens
             session.total_output_tokens = response.output_tokens
 
@@ -129,22 +143,36 @@ class Agent:
     async def stream(
         self,
         prompt: str,
+        *,
+        session: Session | None = None,
         context: str | None = None,
     ) -> AsyncGenerator[str, None]:
-        """Stream a response token by token. Records a session with token totals."""
-        if self._session_manager:
-            session = self._session_manager.start(self.id, SessionTrigger.USER)
-            self._session_manager.append(session, MessageRole.USER, prompt)
-        else:
-            session = Session(agent_id=self.id)
-            session.add_message(MessageRole.USER, prompt)
+        """Stream a response token by token. Records a session with token totals.
+
+        Pass *session* to resume a prior conversation; omit to start a new one.
+        """
+        if session is None:
+            session = (
+                self._session_manager.start(self.id, SessionTrigger.USER)
+                if self._session_manager
+                else Session(agent_id=self.id)
+            )
+
+        session.add_message(MessageRole.USER, prompt)
+
+        history: list[MessageParam] = [
+            MessageParam(role=m.role.value, content=m.content)
+            for m in session.messages
+            if m.role in (MessageRole.USER, MessageRole.ASSISTANT)
+        ]
+        history = history[-(MAX_HISTORY_TURNS * 2) :]
 
         memory_context = await self._retrieve_memory_context(prompt)
         system = self._build_system(memory_context, context)
 
         request = CompletionRequest(
             system=system,
-            messages=[{"role": "user", "content": prompt}],
+            messages=history,
             temperature=self._temperature,
             stream=True,
             metadata={"session_id": str(session.id), "agent_id": str(self.id)},
@@ -161,10 +189,7 @@ class Agent:
                 yield chunk.text
         finally:
             full_content = "".join(content_parts)
-            if self._session_manager:
-                self._session_manager.append(session, MessageRole.ASSISTANT, full_content)
-            else:
-                session.add_message(MessageRole.ASSISTANT, full_content)
+            session.add_message(MessageRole.ASSISTANT, full_content)
             session.total_input_tokens = input_tokens
             session.total_output_tokens = output_tokens
             if self._session_manager:

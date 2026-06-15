@@ -8,8 +8,10 @@ from typer.testing import CliRunner
 
 import arcana_cli.commands.run as run_mod
 from arcana.agents.registry import AgentRegistry
+from arcana.agents.session_manager import SessionManager
 from arcana.types.card import Card
 from arcana.types.model import ModelConnection, ModelProvider
+from arcana.types.session import MessageRole
 from arcana_cli.main import app
 
 runner = CliRunner()
@@ -159,7 +161,7 @@ def test_run_with_agent_success(agent_fixture, arcana_home, monkeypatch):
 
 
 def test_run_with_agent_stream(agent_fixture, arcana_home, monkeypatch):
-    async def _fake_stream(prompt: str, context: str | None = None):
+    async def _fake_stream(prompt: str, *, session=None, context: str | None = None):
         for chunk in ["Hello", " from", " stream"]:
             yield chunk
 
@@ -184,3 +186,88 @@ def test_run_with_agent_by_uuid(agent_fixture, arcana_home, monkeypatch):
     result = runner.invoke(app, ["run", "hello", "--agent", str(agent_fixture.id)])
     assert result.exit_code == 0, result.output
     assert "UUID lookup works." in result.output
+
+
+# ---------------------------------------------------------------------------
+# arcana run — session footer
+# ---------------------------------------------------------------------------
+
+
+def test_run_prints_session_id_footer(agent_fixture, arcana_home, monkeypatch):
+    mock_runtime = MagicMock()
+    mock_runtime.run = AsyncMock(return_value="response")
+
+    monkeypatch.setattr(run_mod, "ModelGateway", _MockGateway)
+    monkeypatch.setattr(AgentRegistry, "build_runtime", lambda *args, **kwargs: mock_runtime)
+
+    result = runner.invoke(app, ["run", "hello", "--agent", "scout"])
+    assert result.exit_code == 0, result.output
+    assert "session:" in result.output
+    assert "--session" in result.output
+    assert "--continue" in result.output
+
+
+# ---------------------------------------------------------------------------
+# arcana run --session / --continue flags
+# ---------------------------------------------------------------------------
+
+
+def test_run_session_and_continue_mutually_exclusive(agent_fixture, arcana_home):
+    result = runner.invoke(app, ["run", "hello", "--agent", "scout", "--session", "abc", "--continue"])
+    assert result.exit_code != 0
+    assert "mutually exclusive" in result.output
+
+
+def test_run_session_unknown_id_exits_nonzero(agent_fixture, arcana_home, monkeypatch):
+    from uuid import uuid4
+
+    unknown_id = str(uuid4())
+    monkeypatch.setattr(run_mod, "ModelGateway", _MockGateway)
+    monkeypatch.setattr(AgentRegistry, "build_runtime", lambda *args, **kwargs: MagicMock())
+
+    result = runner.invoke(app, ["run", "hello", "--agent", "scout", "--session", unknown_id])
+    assert result.exit_code != 0
+    assert "not found" in result.output
+
+
+def test_run_session_invalid_uuid_exits_nonzero(agent_fixture, arcana_home, monkeypatch):
+    monkeypatch.setattr(run_mod, "ModelGateway", _MockGateway)
+
+    result = runner.invoke(app, ["run", "hello", "--agent", "scout", "--session", "not-a-uuid"])
+    assert result.exit_code != 0
+    assert "Invalid session id" in result.output
+
+
+def test_run_continue_with_no_prior_sessions_starts_new(agent_fixture, arcana_home, monkeypatch):
+    mock_runtime = MagicMock()
+    mock_runtime.run = AsyncMock(return_value="fresh start")
+
+    monkeypatch.setattr(run_mod, "ModelGateway", _MockGateway)
+    monkeypatch.setattr(AgentRegistry, "build_runtime", lambda *args, **kwargs: mock_runtime)
+
+    result = runner.invoke(app, ["run", "hello", "--agent", "scout", "--continue"])
+    assert result.exit_code == 0, result.output
+    assert "No prior sessions" in result.output
+
+
+def test_run_session_roundtrip(agent_fixture, arcana_home, monkeypatch):
+    """session id printed in footer round-trips into --session for a successful resume."""
+    sm = SessionManager(arcana_home / "agents")
+
+    # Pre-create a persisted session for the agent
+    session = sm.start(agent_fixture.id)
+    session.add_message(MessageRole.USER, "prior turn")
+    session.add_message(MessageRole.ASSISTANT, "prior answer")
+    sm.close(session)
+    prior_id = str(session.id)
+
+    mock_runtime = MagicMock()
+    mock_runtime.run = AsyncMock(return_value="resumed")
+
+    monkeypatch.setattr(run_mod, "ModelGateway", _MockGateway)
+    monkeypatch.setattr(AgentRegistry, "build_runtime", lambda *args, **kwargs: mock_runtime)
+
+    # Resume the session by id
+    result = runner.invoke(app, ["run", "hello", "--agent", "scout", "--session", prior_id])
+    assert result.exit_code == 0, result.output
+    assert "resumed" in result.output
