@@ -10,6 +10,7 @@ from uuid import UUID
 from arcana.agents.agent import Agent as RuntimeAgent
 from arcana.cards.engine import CardEngine
 from arcana.cards.registry import get_registry
+from arcana.context.soul import read_soul
 from arcana.models.gateway import ModelGateway
 from arcana.types.agent import Agent as AgentRecord
 from arcana.types.card import Card
@@ -124,6 +125,7 @@ class AgentRegistry:
         *,
         memory: MemoryAdapter | None = None,
         session_manager: SessionManager | None = None,
+        soul: str | None = None,
     ) -> RuntimeAgent:
         """Reconstruct a runtime Agent from a stored record, gateway, and model routing key."""
         return RuntimeAgent(
@@ -135,6 +137,7 @@ class AgentRegistry:
             description=record.description,
             modifier_cards=record.modifier_cards,
             memory=memory,
+            soul=soul if soul is not None else read_soul(),
             system_prompt_override=record.system_prompt,
             session_manager=session_manager,
         )

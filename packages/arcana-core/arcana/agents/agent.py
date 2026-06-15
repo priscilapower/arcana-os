@@ -43,6 +43,7 @@ class Agent:
         description: str = "",
         modifier_cards: list[Card] | None = None,
         memory: MemoryAdapter | None = None,
+        soul: str | None = None,
         system_prompt_override: str | None = None,
         id: UUID | None = None,
         session_manager: SessionManager | None = None,
@@ -54,6 +55,7 @@ class Agent:
         self._gateway = gateway
         self._model = model
         self.memory = memory
+        self.soul = soul
         self.description = description
         self._session_manager = session_manager
 
@@ -217,6 +219,8 @@ class Agent:
         extra_context: str | None,
     ) -> str:
         parts = [self._system_prompt]
+        if self.soul:
+            parts.append(f"\n\n─── USER CONTEXT ───\n{self.soul}\n─── END USER CONTEXT ───")
         if memory_context:
             parts.append(f"\n\n## Relevant Memory\n{memory_context}")
         if extra_context:

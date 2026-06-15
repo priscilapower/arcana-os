@@ -71,6 +71,34 @@ async def test_run_extra_context_appended_to_system(agent, gateway):
     assert "extra facts here" in call_args.system
 
 
+# ---------------------------------------------------------------------------
+# _build_system — soul injection
+# ---------------------------------------------------------------------------
+
+
+def test_build_system_includes_user_context_block_when_soul_set(gateway):
+    ag = Agent(name="x", card=Card.HERMIT, gateway=gateway, model="ollama/test", soul="## Preferences\n- concise")
+    system = ag._build_system("", None)
+    assert "─── USER CONTEXT ───" in system
+    assert "## Preferences\n- concise" in system
+    assert "─── END USER CONTEXT ───" in system
+
+
+def test_build_system_omits_user_context_block_when_soul_none(gateway):
+    ag = Agent(name="x", card=Card.HERMIT, gateway=gateway, model="ollama/test", soul=None)
+    system = ag._build_system("", None)
+    assert "USER CONTEXT" not in system
+
+
+def test_build_system_ordering_card_soul_memory_extra(gateway):
+    ag = Agent(name="x", card=Card.HERMIT, gateway=gateway, model="ollama/test", soul="soul content")
+    system = ag._build_system("memory content", "extra content")
+    soul_pos = system.index("soul content")
+    memory_pos = system.index("memory content")
+    extra_pos = system.index("extra content")
+    assert soul_pos < memory_pos < extra_pos
+
+
 @pytest.mark.asyncio
 async def test_run_uses_card_temperature(agent, gateway):
     await agent.run("question")
