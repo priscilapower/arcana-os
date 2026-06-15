@@ -11,7 +11,7 @@ The project ships as two packages: a Python library you build agents with, and a
 CLI that wraps it for everyday use.
 
 ```bash
-uv tool install arcana-cli
+uv tool install arcana-os
 
 arcana init
 arcana connect model -p ollama -m hermes-3 -n local

@@ -11,7 +11,7 @@
 === "As a CLI tool"
 
     ```bash
-    uv tool install arcana-cli
+    uv tool install arcana-os
     ```
 
 === "As a library"

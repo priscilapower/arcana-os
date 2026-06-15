@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 70" width="220" height="70" fill="none" role="img" aria-label="Arcana OS">
+  <title>Arcana OS — Cyan + Amber, light</title>
+
+  <rect width="220" height="70" fill="#F3F5F9" rx="4"></rect>
+
+  <rect x="16.75" y="0.75" width="38.5" height="68.5" rx="2.5" ry="2.5" stroke="#007C8C" stroke-width="1.5"></rect>
+
+  <path d="M36 23 L39.54 31.46 L48 35 L39.54 38.54 L36 47 L32.46 38.54 L24 35 L32.46 31.46 Z" fill="#007C8C"></path>
+
+  <text x="68" y="32" font-family="Georgia, &#39;Times New Roman&#39;, serif" font-size="17" font-weight="400" fill="#171A24" letter-spacing="3">ARCANA</text>
+  <text x="69" y="50" font-family="Georgia, &#39;Times New Roman&#39;, serif" font-size="10" fill="#007C8C" letter-spacing="8">OS</text>
+</svg>

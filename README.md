@@ -1,49 +1,61 @@
-# 🌌 Arcana OS
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/priscilapower/arcana-os/main/docs/assets/arcana-logo-cyan-dark.svg">
+    <img alt="Arcana OS" src="https://raw.githubusercontent.com/priscilapower/arcana-os/main/docs/assets/arcana-logo-cyan-light.svg" width="340">
+  </picture>
+</p>
 
-> The OS that gives your agents a soul.
+<p align="center"><em>The OS that gives your agents a soul.</em></p>
 
-Arcana OS is a multi-agent management system where each AI agent is assigned a **tarot card archetype** that defines its personality, behaviour, memory profile, and tool preferences.
+<p align="center">
+  <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache_2.0-0FB5C9?style=flat-square"></a>
+  <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-0FB5C9?style=flat-square">
+  <a href="https://docs.arcanaos.cloud"><img alt="Docs" src="https://img.shields.io/badge/docs-arcanaos.cloud-E8A23D?style=flat-square"></a>
+</p>
+
+---
+
+Arcana OS is a multi-agent system where each AI agent is assigned a **tarot card archetype** that defines its personality, behaviour, and defaults. The card is not cosmetic — it generates the agent's system prompt and sets its temperature. Blend a primary card with modifier cards to tune the mix.
+
+The project ships as two packages — a Python library you build agents with, and a CLI that wraps it for everyday use — plus `arcana-os`, a meta-package that installs both.
 
 ```bash
 uv tool install arcana-os
 
 arcana init
-arcana agent create --name researcher --card hermit --model ollama/hermes-3
+arcana connect model -p ollama -m hermes-3 -n local
+arcana agent create --name researcher --card hermit --model local
 arcana run "what are the tradeoffs between RAG and fine-tuning?" --agent researcher --stream
 ```
 
 ---
 
-## The Idea
+## The two packages
 
-Every agent you create gets a **tarot card**. The card is not cosmetic — it generates a system prompt, sets a temperature, configures memory weights, and suggests tools.
+### [`arcana-core`](packages/arcana-core/README.md) — the Python library
+
+The real product. Card-configured agents that run through a model gateway.
 
 ```python
 from arcana import Agent, Card
-from arcana.models import OllamaAdapter
+from arcana.models import ConnectionStore, ModelGateway
 
-agent = Agent(
-    name="researcher",
-    card=Card.HERMIT,          # IX · The Hermit — Researcher / Deep Analyst
-    model=OllamaAdapter(model="hermes-3"),
-)
-
-result = await agent.run("summarize recent advances in RAG")
+async with ModelGateway(ConnectionStore()) as gw:
+    agent = Agent(
+        name="researcher",
+        card=Card.HERMIT,               # IX · The Hermit — Researcher / Deep Analyst
+        modifier_cards=[Card.EMPRESS],  # blend in the Empress's warmth
+        gateway=gw,
+        model="ollama/hermes-3",
+    )
+    result = await agent.run("summarize recent advances in RAG")
 ```
 
-You can blend cards:
+It includes the card engine and all 22 Major Arcana, the model gateway with adapters for Ollama, Anthropic, and OpenAI-compatible providers, and agent + session persistence. See the [`arcana-core` README](packages/arcana-core/README.md) for the full module map.
 
-```python
-agent = Agent(
-    name="creative-researcher",
-    card=Card.HERMIT,
-    modifier_cards=[Card.EMPRESS],  # depth of Hermit + warmth of Empress
-    model=OllamaAdapter(model="hermes-3"),
-)
-# Temperature blends: 0.35 * 0.7 + 0.85 * 0.3 = 0.50
-```
+### [`arcana-cli`](packages/arcana-cli/README.md) — the command line
 
-**The World** (`Card.WORLD`) is the meta-agent — it sees all other agents, routes tasks, generates briefings, and detects when agents enter error states (reversed cards).
+A thin Typer wrapper around the library: `init`, `status`, `connect`, `agent`, `run`, and `cards`. Create and manage agents, connect models, and run prompts without writing Python. See the [`arcana-cli` README](packages/arcana-cli/README.md) for every command.
 
 ---
 
@@ -72,82 +84,30 @@ agent = Agent(
 | XVIII | The Moon | Interpreter / Ambiguity | 0.80 |
 | XIX | The Sun | Amplifier / Output Agent | 0.75 |
 | XX | Judgement | Reviewer / Reflection | 0.45 |
-| XXI | The World | Meta-Agent | 0.50 |
-
----
-
-## Memory Federation
-
-Each agent has a **MemoryFederation** — a unified interface over multiple memory backends. Agents don't know which backends are underneath.
-
-```python
-from arcana.memory import MemoryFederation, SQLiteAdapter
-
-federation = MemoryFederation(adapters=[
-    SQLiteAdapter(path="~/.arcana/agents/researcher/memory.db"),
-    # ObsidianAdapter(vault_path="~/Documents/MyVault"),  # coming soon
-])
-```
-
-| Backend | Purpose |
-|---|---|
-| SQLite | Always-on structured memory + FTS |
-| sqlite-vec | Semantic / vector similarity search |
-| Obsidian | Read/write to your vault as .md files |
-| Qdrant | Power mode for large memory stores |
+| XXI | The World | Meta-Agent *(reserved)* | 0.50 |
 
 ---
 
 ## Installation
 
 ```bash
-# As a CLI tool
+# As a CLI tool (installs core + CLI)
 uv tool install arcana-os
 
 # As a library
 uv add arcana-core
 ```
 
-Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/)
-
-For local models: [Ollama](https://ollama.ai) with your preferred model.
-
----
-
-## Project Structure
-
-```
-arcana/
-├── packages/
-│   ├── arcana-core/     ← Python library (the real product)
-│   └── arcana-cli/      ← Typer CLI wrapping core
-├── examples/            ← Working examples
-├── tests/               ← Test suite
-└── docs/                ← Documentation
-```
+Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/). For local models, [Ollama](https://ollama.ai) with your preferred model.
 
 ---
 
 ## Roadmap
 
-Arcana is and will always be free and open source. A hosted version is planned for teams and multi-device sync.
-
-| Phase | What | Status |
-|---|---|---|
-| Phase 1 | arcana-core + arcana-cli | 🚧 In progress |
-| Phase 2 | arcana-server + arcana-ui (React) | Planned |
-| Phase 3 | arcana.cloud hosted product | Planned |
-
-See [build roadmap](https://notion.so) for the full 16-week Epic breakdown.
-
----
-
-## Contributing
-
-This project is in early development. See `CONTRIBUTING.md` (coming soon).
+This is the **Phase 1a MVP** — card-configured agents that run statelessly today. The next phase adds federated memory, a tool/MCP gateway, and **The World**, a meta-agent (card XXI) that routes work across agents; their type systems are already modelled in `arcana-core`, ready to be wired up.
 
 ---
 
 ## License
 
-MIT
+[Apache License 2.0](LICENSE). Arcana OS is open source and will stay that way; the Apache license also lets us offer a hosted edition in the future.

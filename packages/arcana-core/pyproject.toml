@@ -4,12 +4,12 @@ version = "0.1.0"
 description = "The OS that gives your agents a soul — core library"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 keywords = ["ai", "agents", "llm", "tarot", "mcp", "ollama"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
