@@ -1,0 +1,96 @@
+name: Release
+
+# Publishes ONE package at a time to PyPI using Trusted Publishing (OIDC),
+# Each package versions and releases independently.
+#
+#   • Publish a GitHub Release whose tag is prefixed with the package name
+#     → uploads that package to PyPI. Tag format:
+#         arcana-core-vX.Y.Z
+#         arcana-cli-vX.Y.Z
+#         arcana-os-vX.Y.Z
+#
+#   • Run manually (Actions → Release → Run workflow) → pick a package and
+#     publish it to TestPyPI (or PyPI) as a dry run.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Package to publish
+        type: choice
+        options:
+          - arcana-core
+          - arcana-cli
+          - arcana-os
+        required: true
+      target:
+        description: Index to publish to
+        type: choice
+        options:
+          - testpypi
+          - pypi
+        default: testpypi
+        required: true
+
+jobs:
+  release:
+    name: Build & publish
+    runs-on: ubuntu-latest
+    # On a Release we always target PyPI; on manual runs, honour the input.
+    environment: ${{ (github.event_name == 'workflow_dispatch' && inputs.target) || 'pypi' }}
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Resolve package and target
+        id: cfg
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            pkg="${{ inputs.package }}"
+            target="${{ inputs.target }}"
+          else
+            tag="${{ github.event.release.tag_name }}"
+            # Strip the trailing version: "arcana-cli-v1.2.3" -> "arcana-cli"
+            pkg="${tag%-v*}"
+            target="pypi"
+          fi
+          case "$pkg" in
+            arcana-core|arcana-cli|arcana-os) ;;
+            *)
+              echo "::error::Release tag must be 'arcana-core-vX.Y.Z', 'arcana-cli-vX.Y.Z', or 'arcana-os-vX.Y.Z' (got '${tag:-$pkg}')."
+              exit 1 ;;
+          esac
+          echo "package=$pkg" >> "$GITHUB_OUTPUT"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "Publishing $pkg to $target"
+
+      - name: Build ${{ steps.cfg.outputs.package }}
+        run: |
+          if [ "${{ steps.cfg.outputs.package }}" = "arcana-os" ]; then
+            uv build --out-dir dist
+          else
+            uv build --package "${{ steps.cfg.outputs.package }}" --out-dir dist
+          fi
+          ls -l dist
+
+      - name: Validate metadata
+        run: uvx twine check dist/*
+
+      - name: Publish to PyPI
+        if: steps.cfg.outputs.target == 'pypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Publish to TestPyPI
+        if: steps.cfg.outputs.target == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/

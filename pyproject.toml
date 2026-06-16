@@ -13,8 +13,8 @@ keywords = ["ai", "agents", "llm", "tarot", "cli"]
 # components like the server or UI ship as their own packages or extras,
 # they are never auto-pulled in here.
 dependencies = [
-    "arcana-core==0.1.0",
-    "arcana-cli==0.1.0",
+    "arcana-core>=0.1.0",
+    "arcana-cli>=0.1.0",
 ]
 
 # Re-declare the CLI's console script on the meta-package itself. `uv tool
