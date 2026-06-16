@@ -147,17 +147,19 @@ def create(
         if card_enum == Card.WORLD:
             console.print(err("The World is reserved and cannot be assigned."))
             raise typer.Exit(1)
-        raw_modifiers = select_cards(
-            "Add modifier cards (optional — Space to toggle, Enter to confirm with none)",
-            initial=[],
-            max_items=CardEngine.MAX_MODIFIERS,
-        )
-        modifier_cards = [m for m in raw_modifiers if m != card_enum]
-        if modifier_cards:
-            _print_compat(
-                CardEngine(get_registry()).check_compatibility(card_enum, modifier_cards),
-                get_registry(),
+        if typer.confirm("Blend with modifier cards?", default=False):
+            raw_modifiers = select_cards(
+                "Select modifier cards (Space to toggle, Enter to confirm)",
+                initial=[],
+                max_items=CardEngine.MAX_MODIFIERS,
+                exclude={card_enum, Card.WORLD},
             )
+            modifier_cards = [m for m in raw_modifiers if m != card_enum]
+            if modifier_cards:
+                _print_compat(
+                    CardEngine(get_registry()).check_compatibility(card_enum, modifier_cards),
+                    get_registry(),
+                )
     else:
         try:
             card_enum = _validate_card(card)
@@ -286,17 +288,20 @@ def edit(
         if picked is None:
             raise typer.Exit()
         updated_card = picked
-        raw_modifiers = select_cards(
-            "Modifier cards (Space to toggle, Enter to confirm)",
-            initial=record.modifier_cards,
-            max_items=CardEngine.MAX_MODIFIERS,
-        )
-        updated_modifiers = [m for m in raw_modifiers if m != updated_card]
-        if updated_modifiers:
-            _print_compat(
-                CardEngine(get_registry()).check_compatibility(updated_card, updated_modifiers),
-                get_registry(),
+        updated_modifiers = record.modifier_cards
+        if typer.confirm("Edit modifier cards?", default=bool(record.modifier_cards)):
+            raw_modifiers = select_cards(
+                "Modifier cards (Space to toggle, Enter to confirm)",
+                initial=record.modifier_cards,
+                max_items=CardEngine.MAX_MODIFIERS,
+                exclude={updated_card, Card.WORLD},
             )
+            updated_modifiers = [m for m in raw_modifiers if m != updated_card]
+            if updated_modifiers:
+                _print_compat(
+                    CardEngine(get_registry()).check_compatibility(updated_card, updated_modifiers),
+                    get_registry(),
+                )
 
     if model is not None:
         conn = _store().get_by_name(model)

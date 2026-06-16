@@ -96,11 +96,11 @@ def _render_list(
     return Panel(content, title=title, border_style=PICKER_BORDER)
 
 
-def _non_tty_fallback(prompt: str, multi: bool) -> list[Card]:
+def _non_tty_fallback(prompt: str, multi: bool, exclude: set[Card] | None = None) -> list[Card]:
     """Numbered list + typed-prompt fallback when stdin is not a TTY."""
     registry = get_registry()
     console = Console()
-    all_cards = registry.all()
+    all_cards = [c for c in registry.all() if not exclude or c.id not in exclude]
 
     console.print(eyebrow("Available cards"))
     for i, card in enumerate(all_cards, 1):
@@ -149,12 +149,13 @@ def _run_picker(
     initial_card: Card | None = None,
     initial_selected: list[Card] | None = None,
     max_items: int | None = None,
+    exclude: set[Card] | None = None,
 ) -> list[Card]:
     if not sys.stdin.isatty():
-        return _non_tty_fallback(prompt, multi)
+        return _non_tty_fallback(prompt, multi, exclude)
 
     registry = get_registry()
-    all_cards = registry.all()
+    all_cards = [c for c in registry.all() if not exclude or c.id not in exclude]
 
     # Pre-position cursor on initial_card (or first of initial_selected)
     seed = initial_card or (initial_selected[0] if initial_selected else None)
@@ -257,10 +258,12 @@ def select_cards(
     *,
     initial: list[Card] | None = None,
     max_items: int | None = None,
+    exclude: set[Card] | None = None,
 ) -> list[Card]:
     """Multi-card picker. Space toggles, Enter confirms. Returns empty list if cancelled.
 
     Pass `initial` to pre-select cards and position the cursor on the first one.
     Pass `max_items` to cap how many cards can be selected simultaneously.
+    Pass `exclude` to hide specific cards from the picker (e.g. the primary card, Card.WORLD).
     """
-    return _run_picker(prompt, multi=True, initial_selected=initial or [], max_items=max_items)
+    return _run_picker(prompt, multi=True, initial_selected=initial or [], max_items=max_items, exclude=exclude)

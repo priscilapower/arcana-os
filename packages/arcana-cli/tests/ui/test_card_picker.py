@@ -207,3 +207,23 @@ def test_tty_multi_initial_preselected(monkeypatch):
     with patch("readchar.readkey", side_effect=iter([readchar.key.ENTER])), patch("arcana_cli.ui.card_picker.Live"):
         result = select_cards("Test", initial=[Card.FOOL, Card.STAR])
     assert set(result) == {Card.FOOL, Card.STAR}
+
+
+# ─────────────────────────── exclude parameter ───────────────────────
+
+
+def test_non_tty_select_cards_exclude_hides_card(monkeypatch):
+    """Excluded card is not offered in the non-TTY fallback."""
+    monkeypatch.setattr(sys, "stdin", _FakeStdin("the-fool\n"))
+    result = select_cards("Pick", exclude={Card.FOOL})
+    assert Card.FOOL not in result
+    assert result == []
+
+
+def test_tty_select_cards_exclude_removes_from_list(monkeypatch):
+    """With FOOL excluded, cursor 0 lands on MAGICIAN; Space+Enter selects it."""
+    monkeypatch.setattr(sys, "stdin", _FakeTTY())
+    keys = iter([readchar.key.SPACE, readchar.key.ENTER])
+    with patch("readchar.readkey", side_effect=keys), patch("arcana_cli.ui.card_picker.Live"):
+        result = select_cards("Test", exclude={Card.FOOL})
+    assert result == [Card.MAGICIAN]
