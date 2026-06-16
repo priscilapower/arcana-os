@@ -8,7 +8,15 @@
 
 ## Install
 
-=== "As a CLI tool"
+=== "Quick install"
+
+    No Python or uv needed first — the installer bootstraps both:
+
+    ```bash
+    curl -LsSf https://arcanaos.cloud/install.sh | sh
+    ```
+
+=== "With uv"
 
     ```bash
     uv tool install arcana-os
@@ -18,6 +26,14 @@
 
     ```bash
     uv add arcana-core
+    ```
+
+=== "Windows"
+
+    In PowerShell — also bootstraps uv + Python:
+
+    ```powershell
+    irm https://arcanaos.cloud/install.ps1 | iex
     ```
 
 ## Your first agent (CLI)

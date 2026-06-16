@@ -90,6 +90,14 @@ A thin Typer wrapper around the library: `init`, `status`, `connect`, `agent`, `
 
 ## Installation
 
+The quickest way — no Python or uv required first (the installer bootstraps both):
+
+```bash
+curl -LsSf https://arcanaos.cloud/install.sh | sh
+```
+
+Already have [uv](https://docs.astral.sh/uv/)? Install directly:
+
 ```bash
 # As a CLI tool (installs core + CLI)
 uv tool install arcana-os
@@ -98,7 +106,7 @@ uv tool install arcana-os
 uv add arcana-core
 ```
 
-Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/). For local models, [Ollama](https://ollama.ai) with your preferred model.
+Requirements: Python 3.11+ (the curl installer fetches a managed one for you). For local models, [Ollama](https://ollama.ai) with your preferred model.
 
 ---
 
