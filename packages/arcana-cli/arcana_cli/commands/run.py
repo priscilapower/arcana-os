@@ -80,7 +80,7 @@ def init_cmd() -> None:
         make_panel_fit(
             f"[bold {GREEN}]Arcana OS initialised.[/]\n\n"
             f"Home: [{ACCENT}]{ARCANA_HOME}[/]\n\n"
-            f"Next step: {cmd('arcana agent create')}",
+            f"Next step: {cmd('arcana connect model')}",
             title="Arcana OS",
         )
     )
