@@ -2,7 +2,6 @@
 
 import uuid
 
-import keyring
 import typer
 from rich.console import Console
 
@@ -84,6 +83,8 @@ def model_cmd(
     store.upsert(conn)
 
     if api_key:
+        import keyring
+
         keyring.set_password("arcana", f"{conn_id}_api_key", api_key)
 
     key_note = f"  {hl('API key:')}  [{GREEN}]saved to OS keyring[/]\n" if api_key else ""

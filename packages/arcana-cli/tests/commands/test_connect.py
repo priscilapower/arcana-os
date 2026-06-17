@@ -65,7 +65,7 @@ def test_connect_model_overwrite_preserves_id_and_keys_to_same_id(tmp_path, monk
     def fake_set_password(service, key, value):
         keyring_store[key] = value
 
-    with patch.object(connect_mod.keyring, "set_password", side_effect=fake_set_password):
+    with patch("keyring.set_password", side_effect=fake_set_password):
         runner.invoke(
             app,
             [
