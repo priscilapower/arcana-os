@@ -5,8 +5,6 @@ import os
 from pathlib import Path
 from uuid import UUID
 
-import keyring
-
 from arcana.types.model import ModelConnection, ModelProvider
 
 
@@ -29,6 +27,8 @@ def resolve_api_key(
     """
     if direct:
         return direct
+    import keyring
+
     if connection_id is not None:
         try:
             key = keyring.get_password("arcana", f"{connection_id}_api_key")
@@ -82,6 +82,8 @@ class ConnectionStore:
         return next((c for c in self._load() if c.name == name), None)
 
     def get_api_key(self, connection_id: UUID) -> str | None:
+        import keyring
+
         try:
             return keyring.get_password("arcana", f"{connection_id}_api_key")
         except Exception:

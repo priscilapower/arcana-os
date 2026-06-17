@@ -1,6 +1,5 @@
 """Model gateway, adapters, and supporting types."""
 
-from arcana.models.adapters.anthropic import AnthropicAdapter
 from arcana.models.adapters.base import (
     CompletionRequest,
     CompletionResponse,
@@ -11,9 +10,6 @@ from arcana.models.adapters.base import (
     ToolCallResult,
     ToolParam,
 )
-from arcana.models.adapters.custom_api import CustomAPIAdapter
-from arcana.models.adapters.ollama import OllamaAdapter
-from arcana.models.adapters.openai_compat import OpenAICompatAdapter
 from arcana.models.connection_store import ConnectionStore
 from arcana.models.errors import (
     ModelAuthError,
@@ -38,11 +34,7 @@ from arcana.models.pricing import (
 )
 
 __all__ = [
-    # Adapters
-    "AnthropicAdapter",
-    "CustomAPIAdapter",
-    "OllamaAdapter",
-    "OpenAICompatAdapter",
+    # Base adapter type
     "ModelAdapter",
     # Base types
     "CompletionRequest",

@@ -1,28 +1,32 @@
 """OpenAICompatAdapter — any OpenAI-compatible endpoint (LM Studio, vLLM, LocalAI, etc.)."""
 
+from __future__ import annotations
+
 import os
 from collections.abc import AsyncGenerator, Sequence
+from typing import TYPE_CHECKING
 
-from openai.types.chat import (
-    ChatCompletionAssistantMessageParam,
-    ChatCompletionMessageParam,
-    ChatCompletionSystemMessageParam,
-    ChatCompletionToolParam,
-    ChatCompletionUserMessageParam,
-)
-from openai.types.chat.chat_completion_message_function_tool_call import (
-    ChatCompletionMessageFunctionToolCall,
-)
-from openai.types.chat.completion_create_params import (
-    CompletionCreateParamsNonStreaming,
-    CompletionCreateParamsStreaming,
-)
-from openai.types.shared_params import FunctionDefinition
+if TYPE_CHECKING:
+    from openai.types.chat import ChatCompletionMessageParam
+    from openai.types.chat.completion_create_params import (
+        CompletionCreateParamsNonStreaming,
+        CompletionCreateParamsStreaming,
+    )
 
 try:
     import openai as _openai_mod
     from openai import AsyncOpenAI, AsyncStream
-    from openai.types.chat import ChatCompletionChunk
+    from openai.types.chat import (
+        ChatCompletionAssistantMessageParam,
+        ChatCompletionChunk,
+        ChatCompletionSystemMessageParam,
+        ChatCompletionToolParam,
+        ChatCompletionUserMessageParam,
+    )
+    from openai.types.chat.chat_completion_message_function_tool_call import (
+        ChatCompletionMessageFunctionToolCall,
+    )
+    from openai.types.shared_params import FunctionDefinition
 except ImportError as e:
     raise ImportError("Install arcana-core[openai] to use OpenAICompatAdapter") from e
 

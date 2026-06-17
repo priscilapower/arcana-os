@@ -15,7 +15,6 @@ from contextlib import aclosing
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from arcana.models.adapters.anthropic import AnthropicAdapter
 from arcana.models.adapters.base import (
     CompletionRequest,
     CompletionResponse,
@@ -23,9 +22,6 @@ from arcana.models.adapters.base import (
     ModelChunk,
     ModelHealth,
 )
-from arcana.models.adapters.custom_api import CustomAPIAdapter
-from arcana.models.adapters.ollama import OllamaAdapter
-from arcana.models.adapters.openai_compat import OpenAICompatAdapter
 from arcana.models.connection_store import ConnectionStore
 from arcana.models.errors import (
     ModelError,
@@ -111,6 +107,8 @@ class ProviderEntry:
 
 
 def _ollama_factory(conn: ModelConnection, _api_key: str | None) -> ModelAdapter:
+    from arcana.models.adapters.ollama import OllamaAdapter
+
     return OllamaAdapter(
         model=conn.model_id,
         endpoint=conn.endpoint or "http://localhost:11434",
@@ -118,10 +116,14 @@ def _ollama_factory(conn: ModelConnection, _api_key: str | None) -> ModelAdapter
 
 
 def _anthropic_factory(conn: ModelConnection, api_key: str | None) -> ModelAdapter:
+    from arcana.models.adapters.anthropic import AnthropicAdapter
+
     return AnthropicAdapter(model=conn.model_id, api_key=api_key, connection_id=conn.id)
 
 
 def _openai_compat_factory(conn: ModelConnection, api_key: str | None) -> ModelAdapter:
+    from arcana.models.adapters.openai_compat import OpenAICompatAdapter
+
     return OpenAICompatAdapter(
         model=conn.model_id,
         base_url=conn.endpoint or "https://api.openai.com/v1",
@@ -130,6 +132,8 @@ def _openai_compat_factory(conn: ModelConnection, api_key: str | None) -> ModelA
 
 
 def _custom_factory(conn: ModelConnection, api_key: str | None) -> ModelAdapter:
+    from arcana.models.adapters.custom_api import CustomAPIAdapter
+
     return CustomAPIAdapter(
         model=conn.model_id,
         base_url=conn.endpoint,
