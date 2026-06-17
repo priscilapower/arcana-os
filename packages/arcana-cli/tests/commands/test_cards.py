@@ -7,12 +7,30 @@ from arcana_cli.main import app
 runner = CliRunner()
 
 
-def test_cards_browse_lists_all_22_in_non_tty():
+def test_cards_browse_lists_all_21_in_non_tty():
     # non-TTY fallback: prints card names, blank input cancels
     result = runner.invoke(app, ["cards"], input="\n")
     assert result.exit_code == 0
     assert "The Fool" in result.output
-    assert "The World" in result.output
+    assert "The Magician" in result.output
+    assert "The High Priestess" in result.output
+    assert "The Empress" in result.output
+    assert "The Emperor" in result.output
+    assert "The Hierophant" in result.output
+    assert "The Lovers" in result.output
+    assert "The Chariot" in result.output
+    assert "Strength" in result.output
+    assert "The Hermit" in result.output
+    assert "Wheel of Fortune" in result.output
+    assert "Justice" in result.output
+    assert "The Hanged Man" in result.output
+    assert "Death" in result.output
+    assert "Temperance" in result.output
+    assert "The Devil" in result.output
+    assert "The Star" in result.output
+    assert "The Moon" in result.output
+    assert "The Sun" in result.output
+    assert "Judgement" in result.output
 
 
 def test_cards_browse_selecting_card_shows_details():
