@@ -248,8 +248,9 @@ def select_card(
     """Single-card picker. Returns the chosen Card, or None if cancelled.
 
     Pass `initial` to pre-position the cursor on a specific card.
+    Removes THE WORLD card since it's exclusive for the meta-agent.
     """
-    result = _run_picker(prompt, multi=False, initial_card=initial)
+    result = _run_picker(prompt, multi=False, initial_card=initial, exclude={Card.WORLD})
     return result[0] if result else None
 
 
