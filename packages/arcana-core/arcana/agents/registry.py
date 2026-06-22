@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json as _json
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -18,6 +19,7 @@ from arcana.types.memory import MemoryAdapter
 
 if TYPE_CHECKING:
     from arcana.agents.session_manager import SessionManager
+    from arcana.models.connection_store import ConnectionStore
 
 
 def _default_base() -> Path:
@@ -33,8 +35,16 @@ class AgentRegistry:
     use build_runtime() to reconstruct one from a stored record and an adapter.
     """
 
-    def __init__(self, base_dir: Path | None = None) -> None:
+    def __init__(self, base_dir: Path | None = None, connections: ConnectionStore | None = None) -> None:
         self._base = base_dir or _default_base()
+        self._connections = connections
+
+    def _connection_store(self) -> ConnectionStore:
+        if self._connections is None:
+            from arcana.models.connection_store import ConnectionStore
+
+            self._connections = ConnectionStore()
+        return self._connections
 
     # ------------------------------------------------------------------
     # CRUD
@@ -44,7 +54,7 @@ class AgentRegistry:
         self,
         name: str,
         card: Card,
-        model_connection_id: UUID,
+        model: str = "",
         *,
         description: str = "",
         modifier_cards: list[Card] | None = None,
@@ -65,7 +75,7 @@ class AgentRegistry:
             name=name,
             card=card,
             modifier_cards=modifier_cards or [],
-            model_connection_id=model_connection_id,
+            model=model,
             description=description,
             system_prompt=system_prompt_override or config.system_prompt,
             temperature=config.temperature,
@@ -79,7 +89,7 @@ class AgentRegistry:
         path = self._agent_path(agent_id)
         if not path.exists():
             return None
-        return AgentRecord.model_validate_json(path.read_text())
+        return self._load_record(path)
 
     def list(self) -> list[AgentRecord]:
         """Return all non-archived agent records, sorted by name."""
@@ -93,7 +103,7 @@ class AgentRegistry:
             if not agent_json.exists():
                 continue
             try:
-                record = AgentRecord.model_validate_json(agent_json.read_text())
+                record = self._load_record(agent_json)
                 if not record.is_archived:
                     records.append(record)
             except Exception as exc:
@@ -121,19 +131,18 @@ class AgentRegistry:
         self,
         record: AgentRecord,
         gateway: ModelGateway,
-        model: str,
         *,
         memory: MemoryAdapter | None = None,
         session_manager: SessionManager | None = None,
         soul: str | None = None,
     ) -> RuntimeAgent:
-        """Reconstruct a runtime Agent from a stored record, gateway, and model routing key."""
+        """Reconstruct a runtime Agent from a stored record and gateway."""
         return RuntimeAgent(
             id=record.id,
             name=record.name,
             card=record.card,
             gateway=gateway,
-            model=model,
+            model=record.model,
             description=record.description,
             modifier_cards=record.modifier_cards,
             memory=memory,
@@ -148,3 +157,31 @@ class AgentRegistry:
 
     def _agent_path(self, agent_id: UUID) -> Path:
         return self._base / str(agent_id) / "agent.json"
+
+    def _load_record(self, path: Path) -> AgentRecord:
+        """Load an agent record, migrating legacy model_connection_id if present."""
+        raw: dict[str, object] = _json.loads(path.read_text())
+        if "model_connection_id" in raw and not raw.get("model"):
+            raw = self._migrate_legacy_model(raw)
+            try:
+                path.write_text(_json.dumps(raw, indent=2, default=str))
+            except Exception:
+                pass
+        return AgentRecord.model_validate(raw)
+
+    def _migrate_legacy_model(self, raw: dict[str, object]) -> dict[str, object]:
+        """Convert a model_connection_id UUID FK to a provider:name/default_model string."""
+        out: dict[str, object] = dict(raw)
+        try:
+            conn_id = UUID(str(out["model_connection_id"]))
+            conn = self._connection_store().get_by_id(conn_id)
+            if conn is not None:
+                if conn.default_model:
+                    out["model"] = f"{conn.provider}:{conn.name}/{conn.default_model}"
+                else:
+                    out["model"] = f"{conn.provider}:{conn.name}"
+            else:
+                out["model"] = ""
+        except Exception:
+            out["model"] = ""
+        return out

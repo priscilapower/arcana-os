@@ -37,7 +37,7 @@ class Agent(BaseModel):
     modifier_cards: list[Card] = []
 
     # Brain — set by CardEngine, user can override system_prompt
-    model_connection_id: UUID
+    model: str = ""  # provider[:name]/model_id reference, e.g. "anthropic/claude-sonnet-4-6"
     system_prompt: str
     temperature: float
 

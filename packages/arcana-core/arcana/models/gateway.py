@@ -25,6 +25,7 @@ from arcana.models.adapters.base import (
 from arcana.models.connection_store import ConnectionStore
 from arcana.models.errors import (
     ModelError,
+    ModelNotConfiguredError,
     ModelTransientError,
     ModelUnavailableError,
 )
@@ -110,7 +111,7 @@ def _ollama_factory(conn: ModelConnection, _api_key: str | None) -> ModelAdapter
     from arcana.models.adapters.ollama import OllamaAdapter
 
     return OllamaAdapter(
-        model=conn.model_id,
+        model=conn.default_model or "",
         endpoint=conn.endpoint or "http://localhost:11434",
     )
 
@@ -118,14 +119,14 @@ def _ollama_factory(conn: ModelConnection, _api_key: str | None) -> ModelAdapter
 def _anthropic_factory(conn: ModelConnection, api_key: str | None) -> ModelAdapter:
     from arcana.models.adapters.anthropic import AnthropicAdapter
 
-    return AnthropicAdapter(model=conn.model_id, api_key=api_key, connection_id=conn.id)
+    return AnthropicAdapter(model=conn.default_model or "", api_key=api_key, connection_id=conn.id)
 
 
 def _openai_compat_factory(conn: ModelConnection, api_key: str | None) -> ModelAdapter:
     from arcana.models.adapters.openai_compat import OpenAICompatAdapter
 
     return OpenAICompatAdapter(
-        model=conn.model_id,
+        model=conn.default_model or "",
         base_url=conn.endpoint or "https://api.openai.com/v1",
         api_key=api_key,
     )
@@ -135,7 +136,7 @@ def _custom_factory(conn: ModelConnection, api_key: str | None) -> ModelAdapter:
     from arcana.models.adapters.custom_api import CustomAPIAdapter
 
     return CustomAPIAdapter(
-        model=conn.model_id,
+        model=conn.default_model or "",
         base_url=conn.endpoint,
         api_key=api_key,
     )
@@ -174,12 +175,12 @@ class ProviderRegistry:
         if not entry:
             raise ValueError(
                 f"Unknown provider: {provider!r}. "
-                f"Register it via ProviderRegistry.register() or add a connection with `arcana connect model`."
+                f"Register it via ProviderRegistry.register() or add a connection with `arcana providers add`."
             )
         return ModelConnection(
             name=f"{provider}/{model_id}",
             provider=entry.provider,
-            model_id=model_id,
+            default_model=model_id,
             endpoint=entry.default_endpoint,
         )
 
@@ -276,7 +277,7 @@ class ModelGateway:
         if entry.is_open(self._unhealthy_cooldown):
             raise ModelUnavailableError(f"Connection {model!r} is in cooldown after repeated failures.")
 
-        req = replace(request, model_id=conn.model_id)
+        req = replace(request, model_id=conn.default_model or "")
         session_id = (req.metadata or {}).get("session_id", "")
 
         with get_tracer().start_as_current_span("model.complete") as span:
@@ -337,7 +338,7 @@ class ModelGateway:
         if entry.is_open(self._unhealthy_cooldown):
             raise ModelUnavailableError(f"Connection {model!r} is in cooldown after repeated failures.")
 
-        req = replace(request, model_id=conn.model_id)
+        req = replace(request, model_id=conn.default_model or "")
         async with aclosing(self._retry_stream(model, conn, entry, req)) as gen:
             async for chunk in gen:
                 yield chunk
@@ -365,11 +366,17 @@ class ModelGateway:
         return results
 
     def resolve(self, model: str) -> ModelConnection:
-        """Parse ``provider/model_id`` or ``provider:connection_name/model_id`` and return a ``ModelConnection``.
+        """Parse a model reference and return a ModelConnection with default_model set.
 
-        When a connection name is given, looks it up by name in ``ConnectionStore`` and raises
-        ``ValueError`` if it doesn't exist.  Without a name, checks by provider first then falls
-        back to ``ProviderRegistry`` defaults so out-of-the-box usage requires no config file.
+        Accepted forms:
+        - ``provider/model_id``
+        - ``provider:connection_name/model_id``
+        - ``provider`` (bare — uses connection's default_model)
+        - ``provider:connection_name`` (bare named — uses connection's default_model)
+
+        When a connection name is given, looks it up by name in ConnectionStore and raises
+        ValueError if it doesn't exist. Without a name, checks by provider first then falls
+        back to ProviderRegistry defaults so out-of-the-box usage requires no config file.
         """
         provider, conn_name, model_id = self._parse_model_string(model)
 
@@ -378,16 +385,33 @@ class ModelGateway:
             if conn is None:
                 raise ValueError(
                     f"No connection named {conn_name!r} found. "
-                    f"Add it with `arcana connect model` or check your connections file."
+                    f"Add it with `arcana providers add` or check your connections file."
                 )
-            return conn.model_copy(update={"model_id": model_id})
+            effective = model_id or conn.default_model
+            if not effective:
+                raise ModelNotConfiguredError(
+                    f"Connection {conn_name!r} has no default_model and the reference omits model_id. "
+                    f"Set a default or use '{provider}:{conn_name}/<model_id>'."
+                )
+            return conn.model_copy(update={"default_model": effective})
 
         entry = self._providers.get(provider)
         if entry is not None:
             conn = self._connections.get_by_provider(entry.provider)
             if conn is not None:
-                return conn.model_copy(update={"model_id": model_id})
+                effective = model_id or conn.default_model
+                if not effective:
+                    raise ModelNotConfiguredError(
+                        f"Connection for {provider!r} has no default_model. "
+                        f"Specify: '{provider}/<model_id>' or set a default with `arcana providers edit`."
+                    )
+                return conn.model_copy(update={"default_model": effective})
 
+        if model_id is None:
+            raise ModelNotConfiguredError(
+                f"No configured connection for {provider!r} and no model_id in reference {model!r}. "
+                f"Add a connection with `arcana providers add` or specify: '{provider}/<model_id>'."
+            )
         return self._providers.build_default_connection(provider, model_id)
 
     async def aclose(self) -> None:
@@ -408,17 +432,29 @@ class ModelGateway:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _parse_model_string(model: str) -> tuple[str, str | None, str]:
-        """Return ``(provider, connection_name_or_None, model_id)``."""
+    def _parse_model_string(model: str) -> tuple[str, str | None, str | None]:
+        """Return ``(provider, connection_name_or_None, model_id_or_None)``.
+
+        Accepts:
+        - ``provider/model_id``
+        - ``provider:name/model_id``
+        - ``provider`` (bare — no model_id; resolved from connection's default_model)
+        - ``provider:name`` (bare named — no model_id)
+        """
         _invalid = (
             f"Invalid model string: {model!r}. "
-            f"Expected 'provider/model_id' or 'provider:connection_name/model_id' "
-            f"(e.g. 'ollama/hermes-3', 'openai:groq/llama-3')."
+            f"Expected 'provider/model_id', 'provider:name/model_id', "
+            f"'provider', or 'provider:name'."
         )
-        parts = model.split("/", 1)
-        if len(parts) != 2 or not parts[0] or not parts[1]:
+        if not model:
             raise ValueError(_invalid)
-        left, model_id = parts
+        parts = model.split("/", 1)
+        left = parts[0]
+        model_id: str | None = parts[1] if len(parts) == 2 else None
+        if not left:
+            raise ValueError(_invalid)
+        if model_id is not None and not model_id:
+            raise ValueError(_invalid)
         if ":" in left:
             provider, conn_name = left.split(":", 1)
             if not provider or not conn_name:
@@ -440,8 +476,8 @@ class ModelGateway:
                 entry = self._providers.get(provider)
                 if entry is None:
                     raise ValueError(f"No adapter registered for provider: {provider!r}")
-                # Build with empty model_id — request.model_id carries the actual model.
-                conn_for_factory = conn.model_copy(update={"model_id": ""})
+                # Build with empty default_model — request.model_id carries the actual model.
+                conn_for_factory = conn.model_copy(update={"default_model": ""})
                 adapter = entry.factory(conn_for_factory, api_key)
                 await adapter.connect()
                 self._cache[key] = _CacheEntry(adapter=adapter)

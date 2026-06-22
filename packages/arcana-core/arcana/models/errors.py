@@ -34,3 +34,7 @@ class ModelNotFoundError(ModelError):
 
     The message should tell the user how to fix it (e.g. `ollama pull <model>`).
     """
+
+
+class ModelNotConfiguredError(ModelError):
+    """No effective model_id: the reference omitted it and no default_model is set on the connection."""

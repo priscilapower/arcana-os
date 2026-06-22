@@ -42,29 +42,49 @@ arcana status
 
 ---
 
-### `arcana connect`
+### `arcana providers`
 
-Manage model connections.
+Full lifecycle management for model provider connections.
 
 ```bash
-arcana connect model                                   # interactive
-arcana connect model -p ollama -m hermes-3 -n local
-arcana connect model -p anthropic -m claude-sonnet-4-6 -n claude -k sk-...
-arcana connect list
+arcana providers list
+arcana providers add                                          # interactive
+arcana providers add -p ollama -m hermes-3 -n local
+arcana providers add -p anthropic -m claude-sonnet-4-6 -n claude -k sk-...
+arcana providers show local
+arcana providers edit local --base-url http://gpu-box:11434
+arcana providers edit claude --rotate-key
+arcana providers remove local
 ```
 
 | Subcommand | Description |
 |-----------|-------------|
-| `model` | Add a model connection (interactive or via flags) |
-| `list` | List configured connections |
+| `list` | List all saved connections |
+| `add` | Add a connection (interactive or via flags) |
+| `show <name>` | Show a connection's details (secrets redacted) |
+| `edit <name>` | Edit base URL, API key, or custom headers |
+| `remove <name>` | Remove a connection and its stored credential |
 
-| `connect model` flag | Description |
+| `providers add` flag | Description |
 |------|-------------|
 | `--provider / -p` | `ollama`, `anthropic`, `openai`, `openai_compat`, or `custom` |
 | `--model-id / -m` | Model ID (e.g. `hermes-3`, `claude-sonnet-4-6`) |
 | `--name / -n` | Connection name |
 | `--endpoint / -e` | Custom base URL |
 | `--api-key / -k` | API key (stored in the OS keyring, never in plaintext) |
+
+| `providers edit` flag | Description |
+|------|-------------|
+| `--base-url` | New base URL / endpoint |
+| `--rotate-key` | Rotate the stored API key (interactive hidden prompt) |
+| `--api-key-env VAR` | Read new API key from an environment variable |
+| `--header "Key: Value"` | Set a custom header (repeatable; `custom` adapter only) |
+| `--no-verify` | Skip the post-edit health check |
+
+| `providers remove` flag | Description |
+|------|-------------|
+| `--yes / -y` | Skip confirmation prompt |
+| `--force` | Remove even if dependent agents exist |
 
 ---
 
@@ -92,7 +112,7 @@ arcana agent delete my-agent --yes           # skip confirmation
 | `edit <name>` | Update name, description, card, model, or tags |
 | `delete <name>` | Delete an agent |
 
-The `--model` flag refers to a connection **name** created with `arcana connect model`.
+The `--model` flag refers to a connection **name** created with `arcana providers add`.
 
 ---
 
@@ -161,4 +181,4 @@ uv run pytest packages/arcana-cli/tests/ -v
 
 ## Roadmap
 
-This is the **Phase 1a MVP** command set. Phase 1b adds the commands whose backends land later — `arcana memory`, `arcana world`, `arcana spread`, `arcana connect mcp`, and an interactive `arcana chat` REPL.
+This is the **Phase 1a MVP** command set. Phase 1b adds the commands whose backends land later — `arcana memory`, `arcana world`, `arcana spread`, `arcana mcp`, and an interactive `arcana chat` REPL.

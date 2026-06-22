@@ -23,7 +23,7 @@ The project ships as two packages — a Python library you build agents with, an
 uv tool install arcana-os
 
 arcana init
-arcana connect model -p ollama -m hermes-3 -n local
+arcana providers add -p ollama -m hermes-3 -n local
 arcana agent create --name researcher --card hermit --model local
 arcana run "what are the tradeoffs between RAG and fine-tuning?" --agent researcher --stream
 ```
@@ -55,7 +55,7 @@ It includes the card engine and all 22 Major Arcana, the model gateway with adap
 
 ### [`arcana-cli`](packages/arcana-cli/README.md) — the command line
 
-A thin Typer wrapper around the library: `init`, `status`, `connect`, `agent`, `run`, and `cards`. Create and manage agents, connect models, and run prompts without writing Python. See the [`arcana-cli` README](packages/arcana-cli/README.md) for every command.
+A thin Typer wrapper around the library: `init`, `status`, `providers`, `agent`, `run`, and `cards`. Create and manage agents, connect models, and run prompts without writing Python. See the [`arcana-cli` README](packages/arcana-cli/README.md) for every command.
 
 ---
 

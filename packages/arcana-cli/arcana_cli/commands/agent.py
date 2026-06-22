@@ -76,42 +76,53 @@ def _resolve_agent(name_or_id: str) -> AgentRecord:
     return matches[0]
 
 
-def _pick_connection(default_name: str | None = None) -> tuple[UUID, str]:
-    """Show available connections and prompt the user to pick one."""
+def _pick_model() -> str:
+    """Interactive model picker — returns a provider[:name][/model_id] string."""
     store = _store()
     connections = store.all()
     if not connections:
-        console.print(err("No model connections configured. Run: arcana connect model"))
+        console.print(err("No provider connections configured. Run: arcana providers add"))
         raise typer.Exit(1)
 
     table = make_table("Model Connections")
     table.add_column("#", style=TXT3, width=4)
     table.add_column("Name", style="bold")
     table.add_column("Provider")
-    table.add_column("Model ID")
+    table.add_column("Default Model")
     for i, c in enumerate(connections, 1):
-        table.add_row(str(i), c.name, str(c.provider), c.model_id)
+        table.add_row(str(i), c.name, str(c.provider), c.default_model or "(none)")
     console.print(table)
 
-    prompt_default = default_name or connections[0].name
+    prompt_default = connections[0].name
     choice = typer.prompt("Choose a connection (name or #)", default=prompt_default)
 
     try:
         idx = int(choice) - 1
         if 0 <= idx < len(connections):
             conn = connections[idx]
-            return conn.id, conn.name
-        msg = f"Invalid selection. Enter a number between 1 and {len(connections)}, or a connection name."
-        console.print(err(msg))
-        raise typer.Exit(1)
-    except ValueError:
-        pass
+        else:
+            console.print(
+                err(f"Invalid selection. Enter a number between 1 and {len(connections)}, or a connection name.")
+            )
+            raise typer.Exit(1)
+    except ValueError as e:
+        found = store.get_by_name(choice)
+        if found is None:
+            console.print(err(f"No connection named '{choice}'."))
+            raise typer.Exit(1) from e
+        conn = found
 
-    conn = store.get_by_name(choice)
-    if conn is None:
-        console.print(err(f"No connection named '{choice}'."))
-        raise typer.Exit(1)
-    return conn.id, conn.name
+    model_id = typer.prompt(
+        "Model ID (blank to use connection default)",
+        default=conn.default_model or "",
+    ).strip()
+
+    if model_id:
+        return f"{conn.provider}:{conn.name}/{model_id}"
+    elif conn.default_model:
+        return f"{conn.provider}:{conn.name}"
+    else:
+        return str(conn.provider)
 
 
 def _print_compat(compat: BlendCompatibility, registry: CardRegistry) -> None:
@@ -132,7 +143,12 @@ def _print_compat(compat: BlendCompatibility, registry: CardRegistry) -> None:
 def create(
     name: str = typer.Option(None, "--name", "-n", help="Agent name"),
     card: str = typer.Option(None, "--card", "-c", help="Card id (e.g. 'hermit')"),
-    model: str = typer.Option(None, "--model", "-m", help="Model connection name"),
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        "-m",
+        help="Model reference (e.g. 'anthropic/claude-sonnet-4-6', 'anthropic:work/claude-sonnet-4-6', 'anthropic')",
+    ),
 ) -> None:
     """Create a new agent. Interactive if no flags provided."""
     if not name:
@@ -170,20 +186,19 @@ def create(
             console.print(err("The World is reserved and cannot be assigned."))
             raise typer.Exit(1)
 
-    if model:
-        conn = _store().get_by_name(model)
-        if conn is None:
-            console.print(err(f"No connection named '{model}'. Run: arcana connect list"))
+    if model is not None:
+        model_str = model.strip()
+        if not model_str or " " in model_str:
+            console.print(err("--model must be non-empty with no whitespace."))
             raise typer.Exit(1)
-        conn_id, conn_name = conn.id, conn.name
     else:
-        conn_id, conn_name = _pick_connection()
+        model_str = _pick_model()
 
     registry = get_registry()
     record = _registry().create(
         name=name,
         card=card_enum,
-        model_connection_id=conn_id,
+        model=model_str,
         modifier_cards=modifier_cards,
     )
     tarot = registry.get(card_enum)
@@ -198,7 +213,7 @@ def create(
             f"  {hl('ID:')}    [{TXT3}]{record.id}[/]\n"
             f"  {hl('Card:')}  {ROMAN[tarot.number]} · {tarot.name} — {tarot.archetype.role}\n"
             + modifier_str
-            + f"  {hl('Model:')} {conn_name}\n"
+            + f"  {hl('Model:')} {record.model or '(unset)'}\n"
             f"  {hl('Temp:')}  {record.temperature:.2f}",
             title="New Agent",
             card=card_enum,
@@ -214,7 +229,6 @@ def list_agents() -> None:
         console.print(dim("No agents yet. Run: arcana agent create"))
         return
 
-    conn_map = {c.id: c for c in _store().all()}
     table = make_table("Agents")
     table.add_column("Name", style="bold")
     table.add_column("Card")
@@ -222,9 +236,8 @@ def list_agents() -> None:
     table.add_column("Status")
     table.add_column("ID", style=TXT3)
     for r in records:
-        conn = conn_map.get(r.model_connection_id)
-        model_name = conn.name if conn else str(r.model_connection_id)[:8] + "…"
-        table.add_row(r.name, r.card.value, model_name, status_markup(r.status.value), str(r.id)[:8] + "…")
+        model_label = r.model if r.model else dim("(unset)")
+        table.add_row(r.name, r.card.value, model_label, status_markup(r.status.value), str(r.id)[:8] + "…")
     console.print(table)
 
 
@@ -232,9 +245,7 @@ def list_agents() -> None:
 def show(name: str = typer.Argument(..., help="Agent name or UUID")) -> None:
     """Show full config for an agent."""
     record = _resolve_agent(name)
-    conn_map = {c.id: c for c in _store().all()}
-    conn = conn_map.get(record.model_connection_id)
-    model_label = conn.name if conn else str(record.model_connection_id)
+    model_label = record.model if record.model else "unset — re-assign with: arcana agent edit"
 
     modifier_str = ", ".join(c.value for c in record.modifier_cards) or "none"
     tags_str = ", ".join(record.tags) or "none"
@@ -265,7 +276,9 @@ def edit(
     new_name: str | None = typer.Option(None, "--name", "-n", help="New name"),
     description: str | None = typer.Option(None, "--description", "-d", help="Description"),
     card: str | None = typer.Option(None, "--card", "-c", help="Card id"),
-    model: str | None = typer.Option(None, "--model", "-m", help="Connection name"),
+    model: str | None = typer.Option(
+        None, "--model", "-m", help="Model reference (e.g. 'anthropic/claude-sonnet-4-6')"
+    ),
     tags: str | None = typer.Option(None, "--tags", "-t", help="Comma-separated tags"),
 ) -> None:
     """Edit an agent's name, description, card, model, or tags."""
@@ -304,15 +317,14 @@ def edit(
                 )
 
     if model is not None:
-        conn = _store().get_by_name(model)
-        if conn is None:
-            console.print(err(f"No connection named '{model}'."))
+        updated_model = model.strip()
+        if not updated_model or " " in updated_model:
+            console.print(err("--model must be non-empty with no whitespace."))
             raise typer.Exit(1)
-        updated_conn_id = conn.id
     else:
-        conn_map = {c.id: c for c in _store().all()}
-        current_conn = conn_map.get(record.model_connection_id)
-        updated_conn_id, _ = _pick_connection(default_name=current_conn.name if current_conn else None)
+        updated_model = typer.prompt("Model (provider[:name]/model_id)", default=record.model or "").strip()
+        if not updated_model:
+            updated_model = record.model or ""
 
     if tags is not None:
         updated_tags = [t.strip() for t in tags.split(",") if t.strip()]
@@ -325,7 +337,7 @@ def edit(
         "description": updated_desc,
         "card": updated_card,
         "modifier_cards": updated_modifiers,
-        "model_connection_id": updated_conn_id,
+        "model": updated_model,
         "tags": updated_tags,
     }
     if updated_card != record.card or updated_modifiers != record.modifier_cards:

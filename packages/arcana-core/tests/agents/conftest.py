@@ -3,7 +3,6 @@
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
 
 import pytest
 
@@ -53,8 +52,3 @@ def tmp_registry(tmp_path: Path) -> AgentRegistry:
 @pytest.fixture
 def tmp_session_manager(tmp_path: Path) -> SessionManager:
     return SessionManager(base_dir=tmp_path / "agents")
-
-
-@pytest.fixture
-def model_connection_id():
-    return uuid4()
