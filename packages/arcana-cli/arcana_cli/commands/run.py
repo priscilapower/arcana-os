@@ -133,17 +133,19 @@ def run_cmd(
             console.print(err(f"No agent '{agent}'."))
             raise typer.Exit(1)
 
-        store = ConnectionStore(ARCANA_HOME / "connections" / "models.json")
-        conn_map = {c.id: c for c in store.all()}
-        connection = conn_map.get(record.model_connection_id)
-        if connection is None:
-            console.print(err(f"Model connection for agent '{record.name}' not found. Run: arcana connect model"))
+        model_str = record.model
+        if not model_str:
+            console.print(
+                err(
+                    f"No model configured for agent '{record.name}'. "
+                    f"Run: arcana agent edit {record.name} --model <provider/model_id>"
+                )
+            )
             raise typer.Exit(1)
 
-        # provider:name/model_id — gateway resolves by connection name so the API key is found
-        model_str = f"{connection.provider}:{connection.name}/{connection.model_id}"
+        store = ConnectionStore(ARCANA_HOME / "connections" / "models.json")
         accent = card_color(record.card)
-        console.print(dim(f"Agent: {record.name} · {record.card.value} · {connection.name}"))
+        console.print(dim(f"Agent: {record.name} · {record.card.value} · {model_str}"))
 
         sm = SessionManager(ARCANA_HOME / "agents")
 
@@ -170,7 +172,7 @@ def run_cmd(
 
         try:
             async with ModelGateway(connections=store) as gw:
-                runtime_agent = reg.build_runtime(record, gw, model_str, session_manager=sm)
+                runtime_agent = reg.build_runtime(record, gw, session_manager=sm)
                 if stream:
                     live = Live(
                         Spinner("dots", text=f"[bold {accent}]{PROMPT} thinking...[/]"),

@@ -32,7 +32,7 @@ def conn_fixture(arcana_home):
     conn = ModelConnection(
         name="ollama/hermes-3",
         provider=ModelProvider.OLLAMA,
-        model_id="hermes-3",
+        default_model="hermes-3",
         endpoint="http://localhost:11434",
     )
     path = arcana_home / "connections" / "models.json"
@@ -43,7 +43,7 @@ def conn_fixture(arcana_home):
 @pytest.fixture()
 def agent_fixture(arcana_home, conn_fixture):
     reg = AgentRegistry(arcana_home / "agents")
-    return reg.create(name="scout", card=Card.HERMIT, model_connection_id=conn_fixture.id)
+    return reg.create(name="scout", card=Card.HERMIT, model="ollama/hermes-3")
 
 
 # ---------------------------------------------------------------------------
@@ -118,15 +118,13 @@ def test_run_with_agent_not_found(arcana_home):
     assert "No agent" in result.output
 
 
-def test_run_with_agent_no_connection(arcana_home):
-    """Agent record exists but its connection was deleted from the store."""
-    from uuid import uuid4
-
+def test_run_with_agent_no_model(arcana_home):
+    """Agent record exists but has no model configured."""
     reg = AgentRegistry(arcana_home / "agents")
-    reg.create(name="orphan", card=Card.HERMIT, model_connection_id=uuid4())
+    reg.create(name="orphan", card=Card.HERMIT, model="")
     result = runner.invoke(app, ["run", "hello", "--agent", "orphan"])
     assert result.exit_code != 0
-    assert "connection" in result.output.lower()
+    assert "model" in result.output.lower()
 
 
 # ---------------------------------------------------------------------------

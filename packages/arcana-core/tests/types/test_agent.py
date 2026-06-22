@@ -8,7 +8,7 @@ def _make_agent(**kwargs) -> Agent:
     defaults = dict(
         name="test-agent",
         card=Card.HERMIT,
-        model_connection_id=UUID("00000000-0000-0000-0000-000000000001"),
+        model="anthropic/claude-test",
         system_prompt="You are a researcher.",
         temperature=0.35,
     )

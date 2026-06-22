@@ -77,6 +77,6 @@ def _make_connection(**kwargs) -> ModelConnection:
     defaults = dict(
         name="test-model",
         provider=ModelProvider.OLLAMA,
-        model_id="hermes-3",
+        default_model="hermes-3",
     )
     return ModelConnection(**{**defaults, **kwargs})

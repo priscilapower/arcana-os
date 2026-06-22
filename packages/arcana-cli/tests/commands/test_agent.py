@@ -31,7 +31,7 @@ def conn_fixture(arcana_home):
     conn = ModelConnection(
         name="ollama/hermes-3",
         provider=ModelProvider.OLLAMA,
-        model_id="hermes-3",
+        default_model="hermes-3",
         endpoint="http://localhost:11434",
     )
     path = arcana_home / "connections" / "models.json"
@@ -42,7 +42,7 @@ def conn_fixture(arcana_home):
 @pytest.fixture()
 def agent_fixture(arcana_home, conn_fixture):
     reg = AgentRegistry(arcana_home / "agents")
-    return reg.create(name="scout", card=Card.HERMIT, model_connection_id=conn_fixture.id)
+    return reg.create(name="scout", card=Card.HERMIT, model="ollama:ollama/hermes-3/hermes-3")
 
 
 # ---------------------------------------------------------------------------
@@ -79,21 +79,37 @@ def test_agent_create_with_flags(conn_fixture, arcana_home):
     assert any(a.name == "scout" for a in agents)
 
 
+def test_agent_create_stores_model_verbatim(conn_fixture, arcana_home):
+    result = runner.invoke(
+        app,
+        ["agent", "create", "--name", "scout", "--card", "the-hermit", "--model", "anthropic/claude-sonnet-4-6"],
+    )
+    assert result.exit_code == 0, result.output
+    agents = AgentRegistry(arcana_home / "agents").list()
+    created = next((a for a in agents if a.name == "scout"), None)
+    assert created is not None
+    assert created.model == "anthropic/claude-sonnet-4-6"
+
+
+def test_agent_create_bare_provider_accepted(conn_fixture, arcana_home):
+    """Bare provider reference (no /model_id) is valid and stored verbatim."""
+    result = runner.invoke(
+        app,
+        ["agent", "create", "--name", "scout", "--card", "the-hermit", "--model", "anthropic"],
+    )
+    assert result.exit_code == 0, result.output
+    agents = AgentRegistry(arcana_home / "agents").list()
+    created = next((a for a in agents if a.name == "scout"), None)
+    assert created is not None
+    assert created.model == "anthropic"
+
+
 def test_agent_create_unknown_card_exits_nonzero(conn_fixture, arcana_home):
     result = runner.invoke(
         app,
         ["agent", "create", "--name", "scout", "--card", "not-a-real-card", "--model", "ollama/hermes-3"],
     )
     assert result.exit_code != 0
-
-
-def test_agent_create_missing_connection_exits_nonzero(arcana_home):
-    result = runner.invoke(
-        app,
-        ["agent", "create", "--name", "scout", "--card", "the-hermit", "--model", "missing"],
-    )
-    assert result.exit_code != 0
-    assert "No connection" in result.output
 
 
 def test_agent_create_world_card_exits_nonzero(conn_fixture, arcana_home):
@@ -212,7 +228,7 @@ def test_agent_create_interactive_decline_blend(conn_fixture, arcana_home):
         patch("arcana_cli.commands.agent.select_cards") as mock_select_cards,
         patch("typer.confirm", return_value=False),
     ):
-        result = runner.invoke(app, ["agent", "create"], input="scout\n1\n")
+        result = runner.invoke(app, ["agent", "create"], input="scout\n1\n\n")
     assert result.exit_code == 0, result.output
     mock_select_cards.assert_not_called()
     agents = AgentRegistry(arcana_home / "agents").list()
@@ -228,7 +244,7 @@ def test_agent_create_interactive_accept_blend(conn_fixture, arcana_home):
         patch("arcana_cli.commands.agent.select_cards", return_value=[Card.FOOL]) as mock_select_cards,
         patch("typer.confirm", return_value=True),
     ):
-        result = runner.invoke(app, ["agent", "create"], input="scout\n1\n")
+        result = runner.invoke(app, ["agent", "create"], input="scout\n1\n\n")
     assert result.exit_code == 0, result.output
     mock_select_cards.assert_called_once()
     agents = AgentRegistry(arcana_home / "agents").list()
@@ -244,7 +260,7 @@ def test_agent_create_modifier_excludes_primary_and_world(conn_fixture, arcana_h
         patch("arcana_cli.commands.agent.select_cards", return_value=[]) as mock_select_cards,
         patch("typer.confirm", return_value=True),
     ):
-        runner.invoke(app, ["agent", "create"], input="scout\n1\n")
+        runner.invoke(app, ["agent", "create"], input="scout\n1\n\n")
     _, kwargs = mock_select_cards.call_args
     assert kwargs["exclude"] == {Card.STAR, Card.WORLD}
 
@@ -261,7 +277,7 @@ def test_agent_edit_interactive_decline_modifier_edit(agent_fixture, conn_fixtur
         patch("arcana_cli.commands.agent.select_cards") as mock_select_cards,
         patch("typer.confirm", return_value=False),
     ):
-        result = runner.invoke(app, ["agent", "edit", "scout"], input="scout\n\n1\n\n")
+        result = runner.invoke(app, ["agent", "edit", "scout"], input="scout\n\n\n\n")
     assert result.exit_code == 0, result.output
     mock_select_cards.assert_not_called()
 
@@ -273,6 +289,6 @@ def test_agent_edit_modifier_excludes_primary_and_world(agent_fixture, conn_fixt
         patch("arcana_cli.commands.agent.select_cards", return_value=[]) as mock_select_cards,
         patch("typer.confirm", return_value=True),
     ):
-        runner.invoke(app, ["agent", "edit", "scout"], input="scout\n\n1\n\n")
+        runner.invoke(app, ["agent", "edit", "scout"], input="scout\n\n\n\n")
     _, kwargs = mock_select_cards.call_args
     assert kwargs["exclude"] == {Card.FOOL, Card.WORLD}

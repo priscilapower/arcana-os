@@ -173,7 +173,7 @@ async def test_pricing_connection_override_wins():
     conn = ModelConnection(
         name="my-custom-claude",
         provider=ModelProvider.ANTHROPIC,
-        model_id="claude-sonnet-4-6",
+        default_model="claude-sonnet-4-6",
         cost_per_1k_input_tokens=0.001,
         cost_per_1k_output_tokens=0.002,
     )
@@ -234,7 +234,7 @@ def test_connection_store_loads_connections(tmp_path):
     conn = ModelConnection(
         name="my-ollama",
         provider=ModelProvider.OLLAMA,
-        model_id="llama3",
+        default_model="llama3",
     )
     conn_path.write_text(f"[{conn.model_dump_json()}]")
 
@@ -248,14 +248,14 @@ def test_connection_store_get_by_provider(tmp_path):
     conn = ModelConnection(
         name="claude",
         provider=ModelProvider.ANTHROPIC,
-        model_id="claude-sonnet-4-6",
+        default_model="claude-sonnet-4-6",
     )
     conn_path.write_text(f"[{conn.model_dump_json()}]")
 
     store = ConnectionStore(path=conn_path)
     found = store.get_by_provider(ModelProvider.ANTHROPIC)
     assert found is not None
-    assert found.model_id == "claude-sonnet-4-6"
+    assert found.default_model == "claude-sonnet-4-6"
 
 
 def test_connection_store_get_by_provider_missing(tmp_path):
@@ -265,7 +265,7 @@ def test_connection_store_get_by_provider_missing(tmp_path):
 
 def test_connection_store_get_by_name(tmp_path):
     conn_path = tmp_path / "models.json"
-    conn = ModelConnection(name="my-model", provider=ModelProvider.OLLAMA, model_id="llama3")
+    conn = ModelConnection(name="my-model", provider=ModelProvider.OLLAMA, default_model="llama3")
     conn_path.write_text(f"[{conn.model_dump_json()}]")
 
     store = ConnectionStore(path=conn_path)
@@ -280,7 +280,7 @@ def test_connection_store_reload(tmp_path):
     store = ConnectionStore(path=conn_path)
     assert store.all() == []
 
-    conn = ModelConnection(name="x", provider=ModelProvider.OLLAMA, model_id="llama3")
+    conn = ModelConnection(name="x", provider=ModelProvider.OLLAMA, default_model="llama3")
     conn_path.write_text(f"[{conn.model_dump_json()}]")
 
     store.reload()
@@ -289,7 +289,7 @@ def test_connection_store_reload(tmp_path):
 
 def test_connection_store_upsert_insert(tmp_path):
     store = ConnectionStore(path=tmp_path / "models.json")
-    conn = ModelConnection(name="new", provider=ModelProvider.OLLAMA, model_id="llama3")
+    conn = ModelConnection(name="new", provider=ModelProvider.OLLAMA, default_model="llama3")
     store.upsert(conn)
     assert len(store.all()) == 1
     assert store.get_by_name("new").id == conn.id
@@ -297,16 +297,16 @@ def test_connection_store_upsert_insert(tmp_path):
 
 def test_connection_store_upsert_update_preserves_id(tmp_path):
     store = ConnectionStore(path=tmp_path / "models.json")
-    original = ModelConnection(name="x", provider=ModelProvider.OLLAMA, model_id="llama3")
+    original = ModelConnection(name="x", provider=ModelProvider.OLLAMA, default_model="llama3")
     store.upsert(original)
 
-    updated = ModelConnection(name="x", provider=ModelProvider.OLLAMA, model_id="llama3.2")
+    updated = ModelConnection(name="x", provider=ModelProvider.OLLAMA, default_model="llama3.2")
     store.upsert(updated)
 
     connections = store.all()
     assert len(connections) == 1
     assert connections[0].id == original.id
-    assert connections[0].model_id == "llama3.2"
+    assert connections[0].default_model == "llama3.2"
 
 
 # ---------------------------------------------------------------------------
@@ -322,7 +322,7 @@ async def test_resolve_valid_string():
     gw = ModelGateway(connections=store, providers=registry)
 
     conn = gw.resolve("ollama/hermes-3")
-    assert conn.model_id == "hermes-3"
+    assert conn.default_model == "hermes-3"
 
 
 def test_resolve_invalid_string_raises():
@@ -330,7 +330,7 @@ def test_resolve_invalid_string_raises():
     gw = ModelGateway(connections=store)
 
     with pytest.raises(ValueError, match="Invalid model string"):
-        gw.resolve("no-slash-here")
+        gw.resolve("")
 
     with pytest.raises(ValueError, match="Invalid model string"):
         gw.resolve("/missing-provider")
@@ -344,7 +344,7 @@ def test_resolve_uses_stored_connection(tmp_path):
     conn = ModelConnection(
         name="my-anthropic",
         provider=ModelProvider.ANTHROPIC,
-        model_id="claude-opus-4-8",
+        default_model="claude-opus-4-8",
         endpoint="",
     )
     conn_path.write_text(f"[{conn.model_dump_json()}]")
@@ -353,8 +353,8 @@ def test_resolve_uses_stored_connection(tmp_path):
     gw = ModelGateway(connections=store)
 
     resolved = gw.resolve("anthropic/claude-sonnet-4-6")
-    # model_id overridden from the string, not the stored connection
-    assert resolved.model_id == "claude-sonnet-4-6"
+    # default_model overridden from the string, not the stored connection
+    assert resolved.default_model == "claude-sonnet-4-6"
     assert resolved.provider == ModelProvider.ANTHROPIC
 
 
@@ -365,7 +365,7 @@ def test_resolve_falls_back_to_defaults_when_no_stored_connection():
     conn = gw.resolve("ollama/llama3")
     assert conn.provider == ModelProvider.OLLAMA
     assert conn.endpoint == "http://localhost:11434"
-    assert conn.model_id == "llama3"
+    assert conn.default_model == "llama3"
 
 
 def test_resolve_lmstudio_alias():
@@ -379,7 +379,7 @@ def test_resolve_selects_named_connection():
     conn = ModelConnection(
         name="groq",
         provider=ModelProvider.OPENAI_COMPAT,
-        model_id="some-default",
+        default_model="some-default",
         endpoint="https://api.groq.com/v1",
     )
     store = MagicMock(spec=ConnectionStore)
@@ -389,7 +389,7 @@ def test_resolve_selects_named_connection():
 
     resolved = gw.resolve("openai:groq/llama-3")
     assert resolved.name == "groq"
-    assert resolved.model_id == "llama-3"
+    assert resolved.default_model == "llama-3"
     assert resolved.endpoint == "https://api.groq.com/v1"
     store.get_by_name.assert_called_once_with("groq")
 
@@ -399,7 +399,7 @@ def test_resolve_unnamed_falls_back_to_provider():
     gw = ModelGateway(connections=store)
 
     conn = gw.resolve("ollama/llama3")
-    assert conn.model_id == "llama3"
+    assert conn.default_model == "llama3"
     store.get_by_name.assert_not_called()
     store.get_by_provider.assert_called_once()
 

@@ -1,30 +1,30 @@
-"""Tests for arcana connect commands."""
+"""Tests for arcana providers add / list."""
 
 from unittest.mock import patch
 
 from typer.testing import CliRunner
 
-import arcana_cli.commands.connect as connect_mod
+import arcana_cli.commands.providers as providers_mod
 from arcana.models import ConnectionStore
 from arcana_cli.main import app
 
 runner = CliRunner()
 
 
-def test_connect_list_no_connections(tmp_path, monkeypatch):
-    monkeypatch.setattr(connect_mod, "CONNECTIONS_PATH", tmp_path / "models.json")
-    result = runner.invoke(app, ["connect", "list"])
+def test_providers_list_no_connections(tmp_path, monkeypatch):
+    monkeypatch.setattr(providers_mod, "CONNECTIONS_PATH", tmp_path / "models.json")
+    result = runner.invoke(app, ["providers", "list"])
     assert result.exit_code == 0
     assert "No connections" in result.output
 
 
-def test_connect_model_with_flags(tmp_path, monkeypatch):
-    monkeypatch.setattr(connect_mod, "CONNECTIONS_PATH", tmp_path / "models.json")
+def test_providers_add_with_flags(tmp_path, monkeypatch):
+    monkeypatch.setattr(providers_mod, "CONNECTIONS_PATH", tmp_path / "models.json")
     result = runner.invoke(
         app,
         [
-            "connect",
-            "model",
+            "providers",
+            "add",
             "--provider",
             "ollama",
             "--model-id",
@@ -40,13 +40,13 @@ def test_connect_model_with_flags(tmp_path, monkeypatch):
     assert (tmp_path / "models.json").exists()
 
 
-def test_connect_model_unknown_provider_exits_nonzero(tmp_path, monkeypatch):
-    monkeypatch.setattr(connect_mod, "CONNECTIONS_PATH", tmp_path / "models.json")
+def test_providers_add_unknown_provider_exits_nonzero(tmp_path, monkeypatch):
+    monkeypatch.setattr(providers_mod, "CONNECTIONS_PATH", tmp_path / "models.json")
     result = runner.invoke(
         app,
         [
-            "connect",
-            "model",
+            "providers",
+            "add",
             "--provider",
             "unknown-provider",
             "--model-id",
@@ -58,8 +58,8 @@ def test_connect_model_unknown_provider_exits_nonzero(tmp_path, monkeypatch):
     assert result.exit_code != 0
 
 
-def test_connect_model_overwrite_preserves_id_and_keys_to_same_id(tmp_path, monkeypatch):
-    monkeypatch.setattr(connect_mod, "CONNECTIONS_PATH", tmp_path / "models.json")
+def test_providers_add_overwrite_preserves_id_and_keys_to_same_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(providers_mod, "CONNECTIONS_PATH", tmp_path / "models.json")
     keyring_store: dict[str, str] = {}
 
     def fake_set_password(service, key, value):
@@ -69,8 +69,8 @@ def test_connect_model_overwrite_preserves_id_and_keys_to_same_id(tmp_path, monk
         runner.invoke(
             app,
             [
-                "connect",
-                "model",
+                "providers",
+                "add",
                 "--provider",
                 "anthropic",
                 "--model-id",
@@ -87,8 +87,8 @@ def test_connect_model_overwrite_preserves_id_and_keys_to_same_id(tmp_path, monk
         runner.invoke(
             app,
             [
-                "connect",
-                "model",
+                "providers",
+                "add",
                 "--provider",
                 "anthropic",
                 "--model-id",
@@ -106,18 +106,18 @@ def test_connect_model_overwrite_preserves_id_and_keys_to_same_id(tmp_path, monk
     assert len(connections) == 1
     updated = connections[0]
     assert updated.id == first_id, "ID must be preserved on overwrite"
-    assert updated.model_id == "claude-opus-4-8"
+    assert updated.default_model == "claude-opus-4-8"
     assert f"{first_id}_api_key" in keyring_store, "API key must be stored under the original ID"
     assert keyring_store[f"{first_id}_api_key"] == "key-v2"
 
 
-def test_connect_list_shows_saved_connection(tmp_path, monkeypatch):
-    monkeypatch.setattr(connect_mod, "CONNECTIONS_PATH", tmp_path / "models.json")
+def test_providers_list_shows_saved_connection(tmp_path, monkeypatch):
+    monkeypatch.setattr(providers_mod, "CONNECTIONS_PATH", tmp_path / "models.json")
     runner.invoke(
         app,
         [
-            "connect",
-            "model",
+            "providers",
+            "add",
             "--provider",
             "ollama",
             "--model-id",
@@ -128,6 +128,6 @@ def test_connect_list_shows_saved_connection(tmp_path, monkeypatch):
             "http://localhost:11434",
         ],
     )
-    result = runner.invoke(app, ["connect", "list"])
+    result = runner.invoke(app, ["providers", "list"])
     assert result.exit_code == 0
     assert "my-local" in result.output
