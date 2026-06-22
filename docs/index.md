@@ -14,7 +14,7 @@ CLI that wraps it for everyday use.
 uv tool install arcana-os
 
 arcana init
-arcana connect model -p ollama -m hermes-3 -n local
+arcana providers add -p ollama -m hermes-3 -n local
 arcana agent create --name researcher --card hermit --model local
 arcana run "what are the tradeoffs between RAG and fine-tuning?" --agent researcher --stream
 ```
@@ -30,7 +30,7 @@ arcana run "what are the tradeoffs between RAG and fine-tuning?" --agent researc
 
 -   __`arcana-cli`__ — the command line
 
-    A thin Typer wrapper: `init`, `status`, `connect`, `agent`, `run`, `cards`.
+    A thin Typer wrapper: `init`, `status`, `providers`, `agent`, `run`, `cards`.
     See the [CLI reference](cli.md).
 
 </div>
