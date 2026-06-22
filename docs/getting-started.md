@@ -40,7 +40,7 @@
 
 ```bash
 arcana init
-arcana connect model -p ollama -m hermes-3 -n local
+arcana providers add -p ollama -m hermes-3 -n local
 arcana agent create --name researcher --card hermit --model local
 arcana run "summarize recent advances in RAG" --agent researcher --stream
 ```
