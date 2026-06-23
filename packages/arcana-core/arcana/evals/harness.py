@@ -175,12 +175,7 @@ class EvalHarness:
             return result
 
     async def _execute_case(self, case: EvalCase, run_id: str, gateway: ModelGateway) -> EvalResult:
-        """
-        Run the agent for this eval case and collect outputs.
-
-        TODO: Wire to real AgentRegistry in Epic 5.
-        Currently uses Agent directly with the card config.
-        """
+        """Run the agent for this eval case and collect outputs."""
         start = time.monotonic()
 
         model_str = case.model_override or self._default_model
@@ -192,10 +187,8 @@ class EvalHarness:
             model=model_str,
         )
 
-        # Seed memory if provided
         if case.memory_state:
-            # TODO: Epic 5 — seed via AgentRegistry + MemoryFederation
-            pass
+            pass  # memory seeding not yet implemented
 
         response = await agent.run(case.prompt, context=case.context)
         latency_ms = int((time.monotonic() - start) * 1000)

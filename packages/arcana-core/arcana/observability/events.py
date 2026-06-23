@@ -1,8 +1,4 @@
-"""Typed audit log event dataclasses.
-
-Phase 1 (implemented): SessionEvent, ModelCallEvent
-Phase 1b stubs (not yet wired): RoutingEvent, MemoryReadEvent, MemoryWriteEvent
-"""
+"""Typed audit log event dataclasses."""
 
 import dataclasses
 from dataclasses import dataclass, field
@@ -49,14 +45,9 @@ class ModelCallEvent:
     error: str | None = None
 
 
-# ---------------------------------------------------------------------------
-# Phase 1b stubs — defined but not yet wired (World Engine / Memory not built)
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class RoutingEvent:
-    """Emitted by World Engine before routing each prompt. Not yet wired."""
+    """Emitted by the World Engine before routing each prompt."""
 
     session_id: str
     prompt_preview: str
@@ -75,7 +66,7 @@ class RoutingEvent:
 
 @dataclass
 class MemoryReadEvent:
-    """Emitted by MemoryFederation on each retrieval. Not yet wired."""
+    """Emitted on each memory retrieval."""
 
     session_id: str
     agent_id: str
@@ -88,7 +79,7 @@ class MemoryReadEvent:
 
 @dataclass
 class MemoryWriteEvent:
-    """Emitted by MemoryFederation on each write. Not yet wired."""
+    """Emitted on each memory write."""
 
     session_id: str
     agent_id: str

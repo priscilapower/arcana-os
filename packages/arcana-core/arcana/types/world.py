@@ -1,9 +1,4 @@
-"""World Engine types — RoutingRule, Spread, SpreadLayout.
-
-These types are scaffolded now so that namespace_id is baked in from the start.
-Full implementation happens in Epic 7. Having namespace_id here from day one
-avoids a multi-table migration when Phase 3 adds multi-tenancy.
-"""
+"""World Engine types — RoutingRule, Spread, SpreadLayout."""
 
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -14,11 +9,10 @@ from arcana.types._utils import now_utc
 
 
 class RoutingRule(BaseModel):
-    """
-    A rule that tells The World which agent to route a task to.
-    Written in natural language; interpreted by The World at routing time.
+    """A rule that tells The World which agent to route a task to.
 
-    Epic 7: The World evaluates rules in priority order and picks the first match.
+    Written in natural language; rules are evaluated in priority order and the
+    first match wins.
     """
 
     id: UUID = Field(default_factory=uuid4)
@@ -28,7 +22,6 @@ class RoutingRule(BaseModel):
     description: str = ""
     created_at: datetime = Field(default_factory=now_utc)
 
-    # Cloud — namespace scoping (always "local" in Phase 1/2)
     namespace_id: str = "local"
 
 
@@ -55,5 +48,4 @@ class Spread(BaseModel):
     is_active: bool = False
     created_at: datetime = Field(default_factory=now_utc)
 
-    # Cloud — namespace scoping (always "local" in Phase 1/2)
     namespace_id: str = "local"
