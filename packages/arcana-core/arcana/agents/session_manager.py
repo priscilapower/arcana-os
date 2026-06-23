@@ -14,10 +14,7 @@ class SessionManager:
     """
     Manages agent sessions on disk.
 
-    Sessions are persisted at ~/.arcana/agents/{agent_id}/sessions/{session_id}.json.
-
-    Phase 1a: stateless — no memory extraction on close. Sessions are written to disk
-    for audit and future memory wiring. Memory extraction lands in Phase 1b.
+    Sessions are persisted at ``~/.arcana/agents/{agent_id}/sessions/{session_id}.json``.
     """
 
     def __init__(self, base_dir: Path | None = None) -> None:

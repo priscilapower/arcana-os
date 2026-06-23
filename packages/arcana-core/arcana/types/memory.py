@@ -1,14 +1,4 @@
-"""
-Memory types — three-tier scope + decay + quality architecture.
-
-Architecture summary:
-  Tiers:    PRIVATE (per-agent) / SHARED (cross-agent pools) / GLOBAL (The World)
-  Decay:    Soft (score at retrieval) / Consolidation (World summarises) / Hard prune
-  Quality:  confidence field guards against context poisoning
-  Conflicts: detected on shared writes, routed to The World for resolution
-  Whiteboard: ephemeral workspace for automation runs / spread activations
-  Metrics:  MemoryMetrics surfaced in briefings and Phase 2 UI
-"""
+"""Memory types — scope, decay, and quality architecture."""
 
 from datetime import UTC, datetime
 from enum import StrEnum

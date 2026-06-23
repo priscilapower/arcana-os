@@ -18,15 +18,7 @@ class AgentStatus(StrEnum):
 
 
 class Agent(BaseModel):
-    """
-    An agent definition. Persisted to ~/.arcana/agents/{id}/agent.json.
-
-    Tools:
-      Agents do NOT own MCP connections. They subscribe to tools from
-      the OS-level MCPRegistry via qualified names ("notion-mcp/search_pages").
-      MCP servers are registered once via `arcana connect mcp` and shared
-      across all agents. No duplicated configuration.
-    """
+    """An agent definition. Persisted to ``~/.arcana/agents/{id}/agent.json``."""
 
     id: UUID = Field(default_factory=uuid4)
     name: str
@@ -41,16 +33,11 @@ class Agent(BaseModel):
     system_prompt: str
     temperature: float
 
-    # Tools — subscriptions to OS-level MCPRegistry tools
-    # Format: "server_name/tool_name" or "builtin/tool_name"
-    # e.g. ["notion-mcp/search_pages", "builtin/web_search"]
+    # Tool subscriptions — format: "server_name/tool_name" or "builtin/tool_name"
     tool_subscriptions: list[str] = []
 
-    # Skills
     skill_ids: list[str] = []
-
-    # Memory config (resolved at runtime by MemoryFederation)
-    shared_pool_names: list[str] = []  # which SharedMemoryPools to join
+    shared_pool_names: list[str] = []
 
     # State
     status: AgentStatus = AgentStatus.IDLE
@@ -61,6 +48,4 @@ class Agent(BaseModel):
     created_at: datetime = Field(default_factory=now_utc)
     tags: list[str] = []
     is_archived: bool = False
-
-    # Cloud — namespace scoping (always "local" in Phase 1/2)
     namespace_id: str = "local"

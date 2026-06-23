@@ -18,8 +18,7 @@ from arcana.types.session import MessageRole, Session, SessionStatus, SessionTri
 if TYPE_CHECKING:
     from arcana.agents.session_manager import SessionManager
 
-# Stopgap cap — oldest turns dropped from the replayed window only; full transcript stays on disk.
-# Token-accurate trimming lands in Phase 1b (ContextBudget).
+# Oldest turns are dropped from the replayed context window only; full transcript stays on disk.
 MAX_HISTORY_TURNS = 20
 
 

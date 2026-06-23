@@ -74,6 +74,7 @@ markdown_extensions:
 
 plugins:
   - search
+  - mkdocs-typer2
   - mkdocstrings:
       handlers:
         python:
@@ -102,4 +103,7 @@ nav:
       - Overview: api/index.md
       - Agent: api/agent.md
       - Cards: api/cards.md
+      - Types: api/types.md
       - Models: api/models.md
+      - Evals: api/evals.md
+      - Observability: api/observability.md
