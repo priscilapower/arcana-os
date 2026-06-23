@@ -74,6 +74,7 @@ markdown_extensions:
 
 plugins:
   - search
+  - mkdocs-typer2
   - mkdocstrings:
       handlers:
         python:
