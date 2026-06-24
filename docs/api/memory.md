@@ -34,6 +34,36 @@ results = await memory.search(MemoryQuery(agent_id=agent_id, limit=5))
 await memory.aclose()
 ```
 
+## Keyword search
+
+When a query carries `text`, `search()` ranks results by full-text relevance
+(BM25) using a SQLite FTS5 index over each entry's `content` and `tags`. The
+usual metadata filters — scope, type, confidence, time range, conflict
+exclusion — still apply on top of the text match. A query with no text falls
+back to filter-and-order: pinned first, then importance, then recency.
+
+```python
+from arcana.types import MemoryQuery, RetrievalMode
+
+results = await memory.search(
+    MemoryQuery(
+        agent_id=agent_id,
+        text="metric units preference",
+        retrieval_mode=RetrievalMode.keyword,
+        limit=5,
+    )
+)
+```
+
+Arbitrary user text is safe to pass directly: it is sanitized into a valid FTS5
+`MATCH` expression (operator characters stripped, tokens quoted and OR-joined),
+so it can never raise a syntax error. The index is kept in lockstep with the
+entries table by database triggers, so writes, upserts, and deletes need no
+extra bookkeeping.
+
+FTS5 must be compiled into SQLite — `connect()` raises `MemoryStorageError` if
+the build lacks it.
+
 ## Importance-based promotion
 
 When an adapter is constructed with a `global_store`, writing a `PRIVATE` entry
@@ -50,14 +80,21 @@ agent_memory = SQLiteAdapter.for_agent(agent_id, global_store=global_store)
 
 Schema is versioned with SQLite's built-in `PRAGMA user_version` — deliberately
 **no Alembic or SQLAlchemy**, to keep `arcana-core` dependency-light.
-`connect()` brings the database to the latest version automatically. Migrations
-are an append-only list: never edit a shipped migration, add a new one.
+`connect()` brings the database to the latest version automatically.
+
+The `arcana.memory.migrations` package separates the runner (`runner.py`, the
+forward-only engine that applies migrations) from the definitions
+(`versions/`, one module per schema version). Definitions are append-only:
+never edit a shipped migration — add a new `versions/vNNN_*.py` module and
+register it. Each migration's DDL and its `user_version` bump share a
+transaction, so a partial failure rolls back atomically.
 
 ## What `SQLiteAdapter` does *not* do yet
 
-`search()` is filter-and-order only. Keyword/BM25 relevance, vector similarity
-(the `embedding` column is stored but not searched), hybrid score fusion, and
-cross-tier federation arrive in later building blocks of Memory Federation.
+`search()` covers keyword (BM25) relevance and metadata filtering. Vector
+similarity (the `embedding` column is stored but not searched), hybrid score
+fusion, and cross-tier federation arrive in later building blocks of Memory
+Federation.
 
 ## Adapter
 

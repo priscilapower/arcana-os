@@ -18,6 +18,7 @@ from arcana.types.memory import (
     MemoryQuery,
     MemoryScope,
     MemoryType,
+    RetrievalMode,
 )
 from arcana.types.model import (
     ModelCapabilities,
@@ -65,6 +66,7 @@ __all__ = [
     "MemoryQuery",
     "MemoryType",
     "MemoryScope",
+    "RetrievalMode",
     "AdapterCapabilities",
     "AdapterHealth",
     # Model
