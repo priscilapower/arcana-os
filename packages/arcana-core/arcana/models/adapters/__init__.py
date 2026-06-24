@@ -15,6 +15,7 @@ from arcana.models.adapters.embedding import (
     EmbeddingError,
 )
 from arcana.models.adapters.ollama import OllamaAdapter
+from arcana.models.adapters.ollama_embedding import OllamaEmbeddingAdapter
 from arcana.models.adapters.openai_compat import OpenAICompatAdapter
 
 __all__ = [
@@ -29,6 +30,7 @@ __all__ = [
     "ModelChunk",
     "ModelHealth",
     "OllamaAdapter",
+    "OllamaEmbeddingAdapter",
     "OpenAICompatAdapter",
     "ToolCallResult",
     "ToolParam",
