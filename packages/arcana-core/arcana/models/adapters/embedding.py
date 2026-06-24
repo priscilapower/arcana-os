@@ -43,6 +43,17 @@ class EmbeddingAdapter(ABC):
         """Length of the vectors this adapter produces."""
         ...
 
+    @property
+    def model_family(self) -> str:
+        """Identifier shared by models that embed into the same vector space.
+
+        Two adapters reporting the same ``model_family`` produce interchangeable
+        vectors, so one may serve a database the other pinned. Defaults to
+        ``model_name`` — each model is its own family unless an adapter
+        explicitly declares membership in a shared one.
+        """
+        return self.model_name
+
     @abstractmethod
     async def embed(self, text: str) -> list[float]:
         """Embed a single string into a dense vector of length ``dimensions``.

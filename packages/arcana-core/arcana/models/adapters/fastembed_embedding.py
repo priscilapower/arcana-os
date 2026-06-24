@@ -19,6 +19,10 @@ _DEFAULT_REPO_ID = "nomic-ai/nomic-embed-text-v1.5"
 _DEFAULT_DIMENSIONS = 768
 _INSTALL_HINT = "Install arcana-core[embed] to use FastEmbedEmbeddingAdapter (fastembed + ONNX Runtime)."
 
+# Shares a vector space with Ollama's nomic-embed-text; reports the same family so
+# either can serve a database the other pinned. Must match the Ollama adapter's value.
+_NOMIC_FAMILY = "nomic-text-v1.5"
+
 
 def _default_cache_dir() -> Path:
     return Path.home() / ".arcana" / "models"
@@ -52,6 +56,10 @@ class FastEmbedEmbeddingAdapter(EmbeddingAdapter):
     @property
     def dimensions(self) -> int:
         return self._dimensions
+
+    @property
+    def model_family(self) -> str:
+        return _NOMIC_FAMILY if self._model_name == _DEFAULT_MODEL_NAME else self._model_name
 
     @staticmethod
     def _package_available() -> bool:

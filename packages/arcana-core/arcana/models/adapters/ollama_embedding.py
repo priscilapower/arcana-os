@@ -11,6 +11,11 @@ _DEFAULT_MODEL = "nomic-embed-text"
 _DEFAULT_DIMENSIONS = 768
 _DEFAULT_ENDPOINT = "http://localhost:11434"
 
+# Ollama's nomic-embed-text and fastembed's nomic-embed-text-v1.5 embed into the
+# same vector space; they report this shared family so a database pinned to one
+# can fall back to the other. Must stay identical to the fastembed adapter's value.
+_NOMIC_FAMILY = "nomic-text-v1.5"
+
 
 class _EmbedPayload(TypedDict, total=False):
     model: Required[str]
@@ -44,6 +49,10 @@ class OllamaEmbeddingAdapter(EmbeddingAdapter):
     @property
     def dimensions(self) -> int:
         return self._dimensions
+
+    @property
+    def model_family(self) -> str:
+        return _NOMIC_FAMILY if self._model == _DEFAULT_MODEL else self._model
 
     async def aclose(self) -> None:
         await self._client.aclose()
