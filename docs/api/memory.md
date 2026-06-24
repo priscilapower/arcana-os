@@ -89,16 +89,59 @@ never edit a shipped migration — add a new `versions/vNNN_*.py` module and
 register it. Each migration's DDL and its `user_version` bump share a
 transaction, so a partial failure rolls back atomically.
 
+## Embedding gateway and model pinning
+
+Vector search needs an embedder, and which one a database may use is **pinned**.
+The first model to write an embedding is recorded in the database's
+`embedding_meta` row (added by migration `v3`), and the database stays locked to
+it. [`EmbeddingGateway.resolve()`](#embedding-gateway) turns that pin into the
+adapter to embed with:
+
+- **New database** (no pin yet) → the first healthy adapter, in priority order;
+  the database is then pinned to it.
+- **Pinned database** → the adapter for its exact model when healthy; otherwise a
+  healthy adapter in the **same `model_family`** (interchangeable vectors);
+  otherwise `None`.
+
+A `None` result is the signal to fall back to keyword (FTS5) search. The gateway
+never substitutes a model from a *different* family — that would compare vectors
+across incompatible spaces and corrupt similarity scores with no error raised.
+
+```python
+from arcana.memory import EmbeddingGateway
+from arcana.models.adapters.ollama_embedding import OllamaEmbeddingAdapter
+from arcana.models.adapters.fastembed_embedding import FastEmbedEmbeddingAdapter
+
+# Priority order: Ollama first, fastembed second.
+gateway = EmbeddingGateway([OllamaEmbeddingAdapter(), FastEmbedEmbeddingAdapter()])
+
+adapter = await gateway.resolve(db_meta)   # db_meta: EmbeddingMeta | None
+if adapter is not None:
+    vector = await adapter.embed("some text")
+else:
+    ...  # fall back to FTS5 keyword search
+```
+
+The gateway is pure resolution logic: it takes the database's
+[`EmbeddingMeta`](types.md#arcana.types.memory.EmbeddingMeta) (or `None`) and
+returns an adapter. Reading and writing the `embedding_meta` row belongs to the
+vector backend that consumes the gateway.
+
 ## What `SQLiteAdapter` does *not* do yet
 
-`search()` covers keyword (BM25) relevance and metadata filtering. Vector
-similarity (the `embedding` column is stored but not searched), hybrid score
-fusion, and cross-tier federation arrive in later building blocks of Memory
-Federation.
+`search()` covers keyword (BM25) relevance and metadata filtering, and the
+embedding gateway can resolve an embedder for a database. Still to come: the
+vector backend that actually stores and searches embeddings (sqlite-vec — the
+`embedding` column is persisted but not yet searched), hybrid score fusion, and
+cross-tier federation.
 
 ## Adapter
 
 ::: arcana.memory.adapters.sqlite.SQLiteAdapter
+
+## Embedding gateway
+
+::: arcana.memory.embedding_gateway.EmbeddingGateway
 
 ## Migrations
 

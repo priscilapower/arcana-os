@@ -48,3 +48,5 @@ from arcana.types import Agent, ModelConnection, Session
 ::: arcana.types.memory.AdapterCapabilities
 
 ::: arcana.types.memory.AdapterHealth
+
+::: arcana.types.memory.EmbeddingMeta

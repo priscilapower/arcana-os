@@ -13,6 +13,7 @@ from arcana.types.card import (
 from arcana.types.memory import (
     AdapterCapabilities,
     AdapterHealth,
+    EmbeddingMeta,
     MemoryAdapter,
     MemoryEntry,
     MemoryQuery,
@@ -69,6 +70,7 @@ __all__ = [
     "RetrievalMode",
     "AdapterCapabilities",
     "AdapterHealth",
+    "EmbeddingMeta",
     # Model
     "ModelConnection",
     "ModelProvider",

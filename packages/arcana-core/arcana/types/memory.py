@@ -315,6 +315,21 @@ class AdapterHealth(BaseModel):
     message: str = ""
 
 
+class EmbeddingMeta(BaseModel):
+    """The embedding model a database is pinned to.
+
+    Written when the first embedding is stored; one row per database. Locks the
+    database to a model so a later, incompatible embedder cannot silently corrupt
+    similarity scores against existing vectors. Datetimes persist as ISO-8601
+    ``TEXT``, matching ``MemoryEntry``.
+    """
+
+    model_name: str
+    dimensions: int
+    first_used_at: datetime = Field(default_factory=now_utc)
+    entry_count: int = 0
+
+
 # ---------------------------------------------------------------------------
 # Observability
 # ---------------------------------------------------------------------------
