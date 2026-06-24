@@ -1,60 +1,78 @@
-"""EmbeddingAdapter ABC — separated from VectorAdapter so the two concerns
-can be swapped independently.
+"""EmbeddingAdapter ABC — the contract every embedding provider implements.
 
-Phase 1:  OllamaEmbeddingAdapter (nomic-embed-text) + SqliteVecAdapter
-Phase 2:  OllamaEmbeddingAdapter OR TransformersEmbeddingAdapter + SqliteVecAdapter
-Phase 3:  OpenAIEmbeddingAdapter + PgVectorAdapter (or QdrantAdapter)
-
-Keeping embedding generation separate from vector storage means you can switch
-embedding providers (and re-index) without touching the vector store, and vice versa.
+Embedding generation is deliberately separate from vector storage so the two
+concerns swap independently: an embedding provider can change (and the store be
+re-indexed) without touching the vector backend, and vice versa.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+
+from arcana.types import AdapterHealth
 
 
-@dataclass
-class EmbeddingResult:
-    vector: list[float]
-    model: str
-    dimensions: int = field(init=False)
+class EmbeddingError(Exception):
+    """Base for embedding-backend failures.
 
-    def __post_init__(self) -> None:
-        self.dimensions = len(self.vector)
+    Concrete adapters raise this (or a subclass) when generation fails, so
+    callers can ``except EmbeddingError`` without knowing the provider.
+    """
 
 
 class EmbeddingAdapter(ABC):
+    """Converts text into a dense embedding vector. One concrete adapter per provider.
+
+    ``model_name`` and ``dimensions`` are the source of truth for model identity:
+    callers read them to decide — before any vector is generated — whether the
+    resolved model is the one a store is locked to. They are properties rather
+    than fields on the returned vector so that decision needs no embedding call.
     """
-    Converts text into a dense embedding vector.
 
-    Each concrete adapter targets one provider:
-      - OllamaEmbeddingAdapter   → nomic-embed-text via Ollama (default Phase 1)
-      - TransformersEmbeddingAdapter → in-process transformers.js fallback
-      - OpenAIEmbeddingAdapter   → text-embedding-3-small via OpenAI API (Phase 3)
-    """
-
-    model_id: str = "unknown"
-    dimensions: int = 768  # override per adapter
-
+    @property
     @abstractmethod
-    async def embed(self, text: str) -> EmbeddingResult:
-        """Embed a single string. Returns a dense vector."""
+    def model_name(self) -> str:
+        """Stable identifier for the embedding model.
+
+        Must be identical across process restarts: callers use it as a
+        persistence key to detect when a store's model has changed.
+        """
         ...
 
-    async def embed_batch(self, texts: list[str]) -> list[EmbeddingResult]:
-        """
-        Embed multiple strings. Default implementation calls embed() serially.
-        Override for providers that support native batch endpoints (OpenAI, Cohere).
-        """
-        results: list[EmbeddingResult] = []
-        for text in texts:
-            results.append(await self.embed(text))
-        return results
+    @property
+    @abstractmethod
+    def dimensions(self) -> int:
+        """Length of the vectors this adapter produces."""
+        ...
 
-    async def health_check(self) -> bool:
-        """Return True if the embedding provider is reachable."""
-        try:
-            result = await self.embed("health check")
-            return len(result.vector) == self.dimensions
-        except Exception:
-            return False
+    @abstractmethod
+    async def embed(self, text: str) -> list[float]:
+        """Embed a single string into a dense vector of length ``dimensions``.
+
+        Raises ``EmbeddingError`` (or a subclass) on backend failure — never
+        returns an empty or wrong-length vector silently. Callers that want
+        graceful degradation gate on ``health_check`` first.
+        """
+        ...
+
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Embed many strings, order- and length-preserving (``result[i]`` ↔ ``texts[i]``).
+
+        Default implementation calls ``embed`` serially. Override for providers
+        with a native batch endpoint.
+        """
+        return [await self.embed(text) for text in texts]
+
+    @abstractmethod
+    async def health_check(self) -> AdapterHealth:
+        """Probe whether the provider is reachable and usable.
+
+        Must not raise — return ``AdapterHealth(adapter_id=..., healthy=False,
+        message=...)`` on failure, so callers can probe several adapters without
+        exception handling.
+        """
+        ...
+
+    async def ensure_model(self) -> None:  # noqa: B027
+        """Download or warm up the model on first use; no-op if already present.
+
+        Default is a no-op for providers that need no local model.
+        """
