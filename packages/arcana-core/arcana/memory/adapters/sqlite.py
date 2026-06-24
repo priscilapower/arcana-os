@@ -79,6 +79,7 @@ class SQLiteAdapter:
         await conn.execute("PRAGMA journal_mode=WAL")
         await conn.execute("PRAGMA busy_timeout=5000")
         await conn.execute("PRAGMA foreign_keys=ON")
+        await self._assert_fts5(conn)
         await migrate_to_latest(conn)
         self._conn = conn
         if self._global_store is not None:
@@ -96,6 +97,23 @@ class SQLiteAdapter:
         assert self._conn is not None  # noqa: S101 — narrow type after connect
         return self._conn
 
+    @staticmethod
+    async def _assert_fts5(conn: aiosqlite.Connection) -> None:
+        """Fail loudly at connect if this SQLite build lacks FTS5.
+
+        Keyword search depends on FTS5, so we verify the capability up front
+        rather than let the v2 migration explode with a cryptic
+        ``CREATE VIRTUAL TABLE`` error, or silently degrade at query time.
+        """
+        row = await (
+            await conn.execute("SELECT 1 FROM pragma_compile_options WHERE compile_options = 'ENABLE_FTS5'")
+        ).fetchone()
+        if row is None:
+            raise MemoryStorageError(
+                "This SQLite build lacks FTS5; keyword memory search is unavailable. "
+                "Use a Python built against SQLite with FTS5, or install `pysqlite3-binary`."
+            )
+
     # ------------------------------------------------------------------
     # MemoryAdapter protocol
     # ------------------------------------------------------------------
@@ -112,7 +130,7 @@ class SQLiteAdapter:
         # Importance-based promotion. The entry's own rule gates on scope == PRIVATE,
         # so the GLOBAL copy can never re-promote (no recursion). Same id keeps the
         # global write idempotent across re-writes. Promotion is a no-op without a
-        # configured global store — federation (E2) wires that in.
+        # configured global store — a higher layer wires that in.
         if self._global_store is not None and entry.should_promote_to_global:
             promoted = entry.model_copy(update={"scope": MemoryScope.GLOBAL, "pool_name": None})
             await self._global_store.write(promoted)
@@ -120,13 +138,18 @@ class SQLiteAdapter:
         self._emit_write(entry)
 
     async def search(self, query: MemoryQuery) -> list[MemoryEntry]:
-        """Return entries matching ``query``, ordered pinned → importance → recency."""
+        """Return entries matching ``query``.
+
+        When the query carries usable text, results are ranked by FTS5 BM25
+        relevance (keyword search). Otherwise it's filter-and-order:
+        pinned → importance → recency. Any text query — whatever its
+        ``retrieval_mode`` — is currently served by the keyword path.
+        """
         conn = await self._ensure()
         started = time.perf_counter()
 
-        where, params = _sql.build_where(query)
-        sql = f"{_sql.SELECT_BASE}{where}{_sql.ORDER_BY} LIMIT ?"
-        params.append(query.limit)
+        match = _sql.to_match_query(query.text) if query.text else None
+        sql, params = _sql.keyword_search(query, match) if match is not None else _sql.filter_search(query)
 
         try:
             cursor = await conn.execute(sql, params)

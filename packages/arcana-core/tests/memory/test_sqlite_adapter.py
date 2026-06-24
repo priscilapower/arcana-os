@@ -185,12 +185,15 @@ async def test_limit(adapter: SQLiteAdapter):
     assert len(await adapter.search(MemoryQuery(agent_id=agent, limit=3))) == 3
 
 
-async def test_retrieval_mode_hybrid_does_not_error(adapter: SQLiteAdapter):
-    # A1 has no vector/BM25 yet; hybrid degrades to filter-and-order, never raises.
+async def test_retrieval_mode_hybrid_runs_keyword_leg(adapter: SQLiteAdapter):
+    # A hybrid text query runs FTS5 BM25 keyword matching: matching text returns
+    # the row, non-matching text returns nothing. Never errors.
     agent = uuid4()
-    await adapter.write(_entry(agent_id=agent))
-    got = await adapter.search(MemoryQuery(agent_id=agent, text="anything", retrieval_mode=RetrievalMode.hybrid))
-    assert len(got) == 1
+    await adapter.write(_entry(agent_id=agent, content="the sky is blue"))
+    hit = await adapter.search(MemoryQuery(agent_id=agent, text="sky", retrieval_mode=RetrievalMode.hybrid))
+    assert len(hit) == 1
+    miss = await adapter.search(MemoryQuery(agent_id=agent, text="zebra", retrieval_mode=RetrievalMode.hybrid))
+    assert miss == []
 
 
 # --------------------------------------------------------------------------
