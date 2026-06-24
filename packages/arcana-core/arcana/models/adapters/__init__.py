@@ -14,6 +14,7 @@ from arcana.models.adapters.embedding import (
     EmbeddingAdapter,
     EmbeddingError,
 )
+from arcana.models.adapters.fastembed_embedding import FastEmbedEmbeddingAdapter
 from arcana.models.adapters.ollama import OllamaAdapter
 from arcana.models.adapters.ollama_embedding import OllamaEmbeddingAdapter
 from arcana.models.adapters.openai_compat import OpenAICompatAdapter
@@ -25,6 +26,7 @@ __all__ = [
     "CustomAPIAdapter",
     "EmbeddingAdapter",
     "EmbeddingError",
+    "FastEmbedEmbeddingAdapter",
     "MessageParam",
     "ModelAdapter",
     "ModelChunk",
