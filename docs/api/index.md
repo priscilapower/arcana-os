@@ -22,5 +22,6 @@ from arcana.observability import configure_observability, get_audit_log
 | `arcana.cards` | `Card`, `CardRegistry`, `CardEngine` | [Cards](cards.md) |
 | `arcana.types` | Pydantic models — `ModelConnection`, `AgentRecord`, `Session`, … | [Types](types.md) |
 | `arcana.models` | `ModelGateway`, `ConnectionStore`, adapters, errors, pricing | [Models](models.md) |
+| `arcana.memory` | `SQLiteAdapter`, schema migrations, errors | [Memory](memory.md) |
 | `arcana.evals` | `EvalHarness`, judges, `EvalCase` | [Evals](evals.md) |
 | `arcana.observability` | `AuditLog`, events, metrics, tracing | [Observability](observability.md) |
