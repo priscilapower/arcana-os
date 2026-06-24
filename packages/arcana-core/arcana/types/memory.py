@@ -43,6 +43,7 @@ class ConfidenceSource(StrEnum):
 class RetrievalMode(StrEnum):
     semantic = "semantic"  # only semantic search
     hybrid = "hybrid"  # semantic + BM25 keyword search
+    keyword = "keyword"  # BM25 keyword search only (FTS5)
 
 
 # ---------------------------------------------------------------------------
