@@ -125,19 +125,103 @@ else:
 The gateway is pure resolution logic: it takes the database's
 [`EmbeddingMeta`](types.md#arcana.types.memory.EmbeddingMeta) (or `None`) and
 returns an adapter. Reading and writing the `embedding_meta` row belongs to the
-vector backend that consumes the gateway.
+vector backend that consumes the gateway — that backend is `VectorAdapter`,
+below.
 
-## What `SQLiteAdapter` does *not* do yet
+## Vector search (semantic)
 
-`search()` covers keyword (BM25) relevance and metadata filtering, and the
-embedding gateway can resolve an embedder for a database. Still to come: the
-vector backend that actually stores and searches embeddings (sqlite-vec — the
-`embedding` column is persisted but not yet searched), hybrid score fusion, and
-cross-tier federation.
+`VectorAdapter` adds semantic search on top of a `SQLiteAdapter`. It *composes*
+(does not subclass) the SQLite store and an `EmbeddingGateway`, storing
+embeddings in a [sqlite-vec](https://github.com/asg017/sqlite-vec) `vec0` index
+that lives in the same `memory.db` — so row and vector writes share one
+connection and stay consistent. Vector storage is an optional extra:
 
-## Adapter
+```bash
+pip install "arcana-os[vector]"
+```
+
+```python
+from arcana.memory import EmbeddingGateway, SQLiteAdapter, VectorAdapter
+from arcana.models.adapters.ollama_embedding import OllamaEmbeddingAdapter
+from arcana.types import MemoryQuery, RetrievalMode
+
+memory = VectorAdapter(
+    SQLiteAdapter.for_agent(agent_id),
+    EmbeddingGateway([OllamaEmbeddingAdapter()]),
+)
+await memory.connect()
+
+await memory.write(entry)                    # embeds content, indexes the vector
+
+results = await memory.search(
+    MemoryQuery(
+        agent_id=agent_id,
+        text="units the user likes",
+        retrieval_mode=RetrievalMode.semantic,
+        limit=5,
+    )
+)
+```
+
+On `write()`, the adapter resolves an embedder through the gateway, embeds the
+entry's `content` (when no vector is supplied), and stores it in the index. The
+**first** embedded write both creates the dimension-sized index and pins the
+database to the model (writing its `embedding_meta` row); vectors are
+L2-normalized and the index ranks by cosine distance. A vector whose width
+disagrees with the pin is refused with `MemoryStorageError` rather than
+silently corrupting the index.
+
+`search()` embeds the query, ranks by nearest-neighbour cosine distance, then
+applies the same metadata filters as keyword search. It **falls back to FTS5
+keyword search** (with a one-time warning) whenever no compatible embedder is
+healthy — or when sqlite-vec is not installed — so memory stays usable without
+the extra, just without semantic ranking. A query with no text uses the
+filter-and-order path.
+
+## Hybrid retrieval
+
+`RetrievalMode.hybrid` fuses the vector and keyword legs into one ranking.
+Because cosine distance and BM25 sit on different, incompatible scales, each leg
+is converted to a higher-is-better relevance and **min-max normalized to
+`[0, 1]` within the query's candidate pool**, then combined:
+
+```text
+finalScore = vector_weight × vNorm + bm25_weight × bm25Norm
+```
+
+Per-query normalization keeps either leg from dominating purely because of
+scale. The weights are set on the adapter and normalized to sum 1, defaulting to
+0.7 vector / 0.3 keyword:
+
+```python
+memory = VectorAdapter(sqlite, gateway, vector_weight=0.7, bm25_weight=0.3)
+
+results = await memory.search(
+    MemoryQuery(
+        agent_id=agent_id,
+        text="metric units",
+        retrieval_mode=RetrievalMode.hybrid,
+        limit=5,
+    )
+)
+```
+
+An entry surfaced by only one leg contributes 0 for the other. With no healthy
+embedder, hybrid degrades to keyword-only (the BM25 leg alone).
+
+## What the memory layer does *not* do yet
+
+`search()` now covers keyword (BM25), semantic (vector), and hybrid retrieval
+with metadata filtering, and the embedding gateway resolves and pins an embedder
+per database. Still to come: cross-tier **federation** — routing reads and
+fanning out writes across private, shared, and global stores, and a streaming
+search that merges results from all tiers.
+
+## Adapters
 
 ::: arcana.memory.adapters.sqlite.SQLiteAdapter
+
+::: arcana.memory.adapters.vector.VectorAdapter
 
 ## Embedding gateway
 
