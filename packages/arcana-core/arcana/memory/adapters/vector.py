@@ -46,6 +46,23 @@ def _l2_normalize(vec: list[float]) -> list[float]:
     return [x / norm for x in vec]
 
 
+def _minmax(scores: dict[str, float]) -> dict[str, float]:
+    """Scale scores to ``[0, 1]`` for hybrid fusion.
+
+    A single candidate — or a leg where every score ties — maps to ``1.0``
+    (uniformly relevant) rather than dividing by a zero span. Inputs are
+    higher-is-better relevances, so the best score lands at 1.0, the worst at 0.0.
+    """
+    if not scores:
+        return {}
+    lo = min(scores.values())
+    hi = max(scores.values())
+    if hi == lo:
+        return {key: 1.0 for key in scores}
+    span = hi - lo
+    return {key: (value - lo) / span for key, value in scores.items()}
+
+
 class VectorAdapter:
     """Semantic memory backend: sqlite-vec KNN over a ``SQLiteAdapter``'s database.
 
@@ -61,12 +78,20 @@ class VectorAdapter:
         gateway: EmbeddingGateway,
         *,
         candidate_multiplier: int = 4,
+        vector_weight: float = 0.7,
+        bm25_weight: float = 0.3,
     ) -> None:
         self._sqlite = sqlite
         self._gateway = gateway
         #: KNN oversampling factor: fetch ``limit * multiplier`` neighbours so
         #: metadata filtering still leaves enough to fill ``limit``.
         self._candidate_multiplier = candidate_multiplier
+        #: Hybrid fusion weights, normalised to sum 1 so only their ratio matters.
+        total = vector_weight + bm25_weight
+        if total <= 0:
+            raise ValueError("vector_weight + bm25_weight must be positive")
+        self._vector_weight = vector_weight / total
+        self._bm25_weight = bm25_weight / total
         self._vec_ok = False
         self._vec_attempted = False
         self._serialize: Callable[[list[float]], bytes] | None = None
@@ -196,6 +221,8 @@ class VectorAdapter:
             if meta is not None:
                 embedder = await self._gateway.resolve(meta)
                 if embedder is not None:
+                    if query.retrieval_mode == RetrievalMode.hybrid:
+                        return await self._hybrid_search(conn, query, embedder, meta)
                     return await self._semantic_search(conn, query, embedder, meta)
                 self._warn_once(
                     "search-fallback",
@@ -253,6 +280,87 @@ class VectorAdapter:
             raise MemoryStorageError(f"failed to decode stored memory row: {exc}") from exc
 
         entries.sort(key=lambda e: rank[str(e.id)])
+        entries = entries[: query.limit]
+
+        await self._sqlite.record_read(query, entries, started)
+        return entries
+
+    async def _hybrid_search(
+        self,
+        conn: aiosqlite.Connection,
+        query: MemoryQuery,
+        embedder: EmbeddingAdapter,
+        meta: EmbeddingMeta,
+    ) -> list[MemoryEntry]:
+        """Fuse the vector (cosine) and keyword (BM25) legs into one ranking.
+
+        Each leg is converted to a higher-is-better relevance and min-max
+        normalised over the surviving candidates, then combined as
+        ``vector_weight * vNorm + bm25_weight * bm25Norm``. Per-query
+        normalisation keeps the legs' incompatible scales from letting one
+        dominate; an id found by only one leg contributes 0 for the other.
+        """
+        started = time.perf_counter()
+        qvec = _l2_normalize(await embedder.embed(query.text or ""))
+        if len(qvec) != meta.dimensions:
+            self._warn_once(
+                "search-fallback",
+                "Query embedding dimension does not match the database pin; falling back to FTS5.",
+            )
+            return await self._sqlite.search(query)
+
+        serialize = self._serialize
+        assert serialize is not None  # noqa: S101 — set whenever _vec_ok (we are past the guard)
+        k = max(query.limit * self._candidate_multiplier, _MIN_CANDIDATES)
+
+        # Vector leg: id -> cosine distance (smaller = better).
+        try:
+            cursor = await conn.execute(_sql.VEC_KNN, (serialize(qvec), k))
+            vec_rows = await cursor.fetchall()
+        except aiosqlite.Error as exc:
+            raise MemoryStorageError(f"vector search failed: {exc}") from exc
+        distances = {row[0]: row[1] for row in vec_rows}
+
+        # BM25 leg: id -> bm25 score (smaller = better). Reuses the keyword
+        # candidate pool; ``match`` is non-None here (search() gated on it).
+        bm25: dict[str, float] = {}
+        match = _sql.to_match_query(query.text or "")
+        if match is not None:
+            sql, params = _sql.bm25_candidates(query, match, k)
+            try:
+                cursor = await conn.execute(sql, params)
+                bm_rows = await cursor.fetchall()
+            except aiosqlite.Error as exc:
+                raise MemoryStorageError(f"keyword search failed: {exc}") from exc
+            bm25 = {row[0]: row[1] for row in bm_rows}
+
+        union = list({*distances, *bm25})
+        if not union:
+            return []
+
+        # One filtered fetch over the union applies the metadata filters to both
+        # legs' candidates at once.
+        sql, params = _sql.fetch_by_ids(query, union)
+        try:
+            cursor = await conn.execute(sql, params)
+            rows = await cursor.fetchall()
+        except aiosqlite.Error as exc:
+            raise MemoryStorageError(f"vector row fetch failed: {exc}") from exc
+        try:
+            entries = [_sql.row_to_entry(row) for row in rows]
+        except Exception as exc:
+            raise MemoryStorageError(f"failed to decode stored memory row: {exc}") from exc
+
+        # Normalise each leg over the surviving ids (negate so higher = better).
+        survivors = [str(e.id) for e in entries]
+        vnorm = _minmax({eid: -distances[eid] for eid in survivors if eid in distances})
+        bnorm = _minmax({eid: -bm25[eid] for eid in survivors if eid in bm25})
+
+        def fused(entry: MemoryEntry) -> float:
+            eid = str(entry.id)
+            return self._vector_weight * vnorm.get(eid, 0.0) + self._bm25_weight * bnorm.get(eid, 0.0)
+
+        entries.sort(key=fused, reverse=True)
         entries = entries[: query.limit]
 
         await self._sqlite.record_read(query, entries, started)

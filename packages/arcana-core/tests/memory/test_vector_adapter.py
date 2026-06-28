@@ -303,3 +303,115 @@ async def test_upsert_reembeds_on_changed_content(vec: VectorAdapter):
     conn = vec._sqlite.connection
     count = await (await conn.execute("SELECT count(*) FROM memory_vectors")).fetchone()
     assert count is not None and count[0] == 1  # replaced in place, not duplicated
+
+
+# --------------------------------------------------------------------------
+# Hybrid retrieval / score fusion
+# --------------------------------------------------------------------------
+#
+# These rely on the two legs disagreeing. With query "alpha zeta":
+#   - "V" = "alpha" embeds exactly onto the query's vector → vector leg ranks it
+#     first; but it is a weak lexical match (one term, once).
+#   - "L" = "zeta zeta alpha beta beta beta" matches both query terms several
+#     times → BM25 ranks it first; but the beta-heavy vector points away from the
+#     query → vector leg ranks it lower. ("zeta"/"beta" are invisible to the
+#     embedder, which only counts the four axes, so the legs decouple cleanly.)
+
+
+async def _write_divergent_set(adapter: VectorAdapter, agent) -> dict[str, object]:
+    items = {"V": "alpha", "L": "zeta zeta alpha beta beta beta", "noise": "delta"}
+    ids: dict[str, object] = {}
+    for name, content in items.items():
+        entry = _entry(agent_id=agent, content=content)
+        ids[entry.id] = name
+        await adapter.write(entry)
+    return ids
+
+
+async def _order(adapter: VectorAdapter, agent, mode: RetrievalMode) -> list[str]:
+    results = await adapter.search(MemoryQuery(agent_id=agent, text="alpha zeta", retrieval_mode=mode, limit=10))
+    return [r.id for r in results]
+
+
+async def test_hybrid_legs_disagree_precondition(vec: VectorAdapter):
+    # Guards the fusion tests: if the legs ever stop disagreeing, those tests
+    # would pass vacuously. This makes that failure loud.
+    agent = uuid4()
+    ids = await _write_divergent_set(vec, agent)
+    semantic = [ids[i] for i in await _order(vec, agent, RetrievalMode.semantic)]
+    keyword = [ids[i] for i in await _order(vec, agent, RetrievalMode.keyword)]
+    assert semantic[0] == "V"
+    assert keyword[0] == "L"
+
+
+async def test_hybrid_default_weights_are_vector_dominant(vec: VectorAdapter):
+    agent = uuid4()
+    ids = await _write_divergent_set(vec, agent)
+    order = [ids[i] for i in await _order(vec, agent, RetrievalMode.hybrid)]
+    assert order[0] == "V"  # 0.7 vector beats the BM25-favoured "L"
+
+
+async def test_hybrid_bm25_heavy_weights_flip_the_winner(tmp_path: Path):
+    adapter = VectorAdapter(
+        SQLiteAdapter(tmp_path / "memory.db"),
+        EmbeddingGateway([KeywordEmbedder()]),
+        vector_weight=0.1,
+        bm25_weight=0.9,
+    )
+    await adapter.connect()
+    agent = uuid4()
+    ids = await _write_divergent_set(adapter, agent)
+    order = [ids[i] for i in await _order(adapter, agent, RetrievalMode.hybrid)]
+    assert order[0] == "L"  # BM25 now dominates
+    await adapter.aclose()
+
+
+async def test_hybrid_falls_back_to_bm25_without_embedder(tmp_path: Path, caplog):
+    db = tmp_path / "memory.db"
+    a = await _build(db, KeywordEmbedder(name="m", family="m", healthy=True))
+    agent = uuid4()
+    await _write_divergent_set(a, agent)  # pins + indexes
+    await a.aclose()
+
+    caplog.set_level(logging.WARNING, logger="arcana.memory.vector")
+    down = KeywordEmbedder(name="m", family="m", healthy=False)
+    b = await _build(db, down)
+    order = [
+        r.content
+        for r in await b.search(
+            MemoryQuery(agent_id=agent, text="alpha zeta", retrieval_mode=RetrievalMode.hybrid, limit=10)
+        )
+    ]
+
+    assert order  # served by FTS5
+    assert down.embed_calls == 0  # no vector leg without an embedder
+    assert any("falling back to FTS5" in r.message for r in caplog.records)
+    await b.aclose()
+
+
+async def test_hybrid_metadata_filters_apply(vec: VectorAdapter):
+    agent = uuid4()
+    keep = _entry(agent_id=agent, content="alpha", importance=0.8)
+    drop = _entry(agent_id=agent, content="zeta zeta alpha beta beta beta", importance=0.1)
+    await vec.write(keep)
+    await vec.write(drop)
+
+    results = await vec.search(
+        MemoryQuery(
+            agent_id=agent,
+            text="alpha zeta",
+            retrieval_mode=RetrievalMode.hybrid,
+            min_importance=0.5,
+        )
+    )
+    assert [e.id for e in results] == [keep.id]
+
+
+def test_invalid_weights_raise(tmp_path: Path):
+    with pytest.raises(ValueError, match="must be positive"):
+        VectorAdapter(
+            SQLiteAdapter(tmp_path / "memory.db"),
+            EmbeddingGateway([KeywordEmbedder()]),
+            vector_weight=0.0,
+            bm25_weight=0.0,
+        )

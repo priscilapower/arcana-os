@@ -253,6 +253,25 @@ def keyword_search(query: MemoryQuery, match: str) -> tuple[str, list[Any]]:
     return sql, [match, *params, query.limit]
 
 
+def bm25_candidates(query: MemoryQuery, match: str, k: int) -> tuple[str, list[Any]]:
+    """``entry_id`` + raw BM25 score for the top-``k`` keyword matches.
+
+    The fusion sibling of ``keyword_search``: returns only ids and raw ``bm25()``
+    scores (no row hydration) so the hybrid path can union these candidates with
+    the vector leg before a single filtered fetch. Same metadata filters; lower
+    bm25 is a better match.
+    """
+    clauses, params = _where_clauses(query, alias="m")
+    where = " AND ".join(["memory_entries_fts MATCH ?", *clauses])
+    sql = (
+        "SELECT m.id, bm25(memory_entries_fts) AS _score "
+        "FROM memory_entries_fts "
+        "JOIN memory_entries m ON m.id = memory_entries_fts.entry_id "
+        f"WHERE {where} ORDER BY _score LIMIT ?"
+    )
+    return sql, [match, *params, k]
+
+
 def fetch_by_ids(query: MemoryQuery, ids: list[str]) -> tuple[str, list[Any]]:
     """SELECT full rows for a set of ids, with the query's metadata filters applied.
 
