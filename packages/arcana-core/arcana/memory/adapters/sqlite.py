@@ -15,7 +15,7 @@ from uuid import UUID
 import aiosqlite
 
 from arcana.memory.adapters import _sql
-from arcana.memory.errors import MemoryStorageError
+from arcana.memory.errors import MemoryNotConnectedError, MemoryStorageError
 from arcana.memory.migrations import migrate_to_latest
 from arcana.observability import MemoryReadEvent, MemoryWriteEvent, get_audit_log
 from arcana.types import MemoryEntry, MemoryQuery, MemoryScope
@@ -97,6 +97,18 @@ class SQLiteAdapter:
         assert self._conn is not None  # noqa: S101 — narrow type after connect
         return self._conn
 
+    @property
+    def connection(self) -> aiosqlite.Connection:
+        """The live connection, for sibling adapters sharing this database.
+
+        ``VectorAdapter`` layers a vec0 index onto the same ``memory.db`` and
+        needs this exact connection so its vector writes sit in the same database
+        as the rows. Raises if the adapter was never connected.
+        """
+        if self._conn is None:
+            raise MemoryNotConnectedError("adapter is not connected; call connect() first")
+        return self._conn
+
     @staticmethod
     async def _assert_fts5(conn: aiosqlite.Connection) -> None:
         """Fail loudly at connect if this SQLite build lacks FTS5.
@@ -164,21 +176,36 @@ class SQLiteAdapter:
         except Exception as exc:
             raise MemoryStorageError(f"failed to decode stored memory row: {exc}") from exc
 
-        # Access tracking drives decay refresh (DecayProfile.refresh_on_access).
-        # Trade-off: every read becomes a small write; batched into one UPDATE and
-        # toggleable per-instance.
-        if self._refresh_on_access and entries:
-            await self._touch([e.id for e in entries])
-            for entry in entries:
-                entry.bump_access()
+        await self.record_read(query, entries, started)
+        return entries
 
+    async def record_read(self, query: MemoryQuery, entries: list[MemoryEntry], started: float) -> None:
+        """Post-read bookkeeping: refresh access tracking and emit the read event.
+
+        Public so a sibling adapter (``VectorAdapter``) whose semantic path
+        bypasses ``search`` shares the same access-refresh + audit behaviour.
+        ``started`` is a ``time.perf_counter()`` stamp taken before the query ran.
+        """
+        await self._refresh_access(entries)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         self._emit_read(query, len(entries), elapsed_ms)
-        return entries
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    async def _refresh_access(self, entries: list[MemoryEntry]) -> None:
+        """Bump access tracking for the read entries, driving decay refresh.
+
+        Access tracking drives decay refresh (DecayProfile.refresh_on_access).
+        Trade-off: every read becomes a small write; batched into one UPDATE and
+        toggleable per-instance. Shared with ``VectorAdapter``, whose semantic
+        path bypasses ``search`` but still needs the same refresh.
+        """
+        if self._refresh_on_access and entries:
+            await self._touch([e.id for e in entries])
+            for entry in entries:
+                entry.bump_access()
 
     async def _touch(self, ids: list[UUID]) -> None:
         conn = await self._ensure()

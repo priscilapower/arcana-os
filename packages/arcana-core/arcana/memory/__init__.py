@@ -6,6 +6,7 @@ storage layer behind it.
 """
 
 from arcana.memory.adapters.sqlite import SQLiteAdapter
+from arcana.memory.adapters.vector import VectorAdapter
 from arcana.memory.embedding_gateway import EmbeddingGateway
 from arcana.memory.errors import (
     MemoryError,
@@ -16,6 +17,7 @@ from arcana.memory.errors import (
 __all__ = [
     "EmbeddingGateway",
     "SQLiteAdapter",
+    "VectorAdapter",
     "MemoryError",
     "MemoryStorageError",
     "MemoryNotConnectedError",
