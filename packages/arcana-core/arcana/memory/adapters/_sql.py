@@ -12,7 +12,7 @@ import json
 import re
 from typing import Any
 
-from arcana.types import MemoryEntry, MemoryQuery
+from arcana.types import EmbeddingMeta, MemoryEntry, MemoryQuery
 
 # Canonical column order — the single source of truth shared by INSERT and SELECT
 # so the two can never drift. Matches migration v1 in ``migrations/versions/``.
@@ -251,3 +251,75 @@ def keyword_search(query: MemoryQuery, match: str) -> tuple[str, list[Any]]:
         f"WHERE {where} ORDER BY _score LIMIT ?"
     )
     return sql, [match, *params, query.limit]
+
+
+def fetch_by_ids(query: MemoryQuery, ids: list[str]) -> tuple[str, list[Any]]:
+    """SELECT full rows for a set of ids, with the query's metadata filters applied.
+
+    The vector path resolves candidate ids from the ``vec0`` KNN index, then
+    rehydrates them here — the same scope/importance/confidence/time/tag filters
+    that gate keyword search also gate semantic results. No ``ORDER BY``/``LIMIT``:
+    the caller re-orders by KNN distance and truncates, since SQL has no notion of
+    the vector ranking.
+    """
+    clauses, params = _where_clauses(query)
+    marks = ", ".join("?" for _ in ids)
+    conds = [f"id IN ({marks})", *clauses]
+    sql = f"{SELECT_BASE} WHERE {' AND '.join(conds)}"
+    return sql, [*ids, *params]
+
+
+# --------------------------------------------------------------------------
+# Vector index (sqlite-vec) + per-database embedding-model pin
+# --------------------------------------------------------------------------
+
+# vec0 virtual table holding one unit-length embedding per memory id. Lives in
+# the same memory.db as ``memory_entries`` so row + vector writes share one
+# connection and stay consistent (the pattern the FTS5 triggers already follow).
+VEC_TABLE = "memory_vectors"
+
+
+def vec_table_ddl(dims: int) -> str:
+    """DDL for the vec0 index, sized to ``dims`` and using cosine distance.
+
+    Dimension is fixed at CREATE time and determined at runtime by the resolved
+    embedder, so this is created lazily on the first embedded write — not as a
+    static ``PRAGMA user_version`` migration. ``dims`` is an int we control
+    (``EmbeddingAdapter.dimensions``), never user input, so interpolation is safe.
+    """
+    return (
+        f"CREATE VIRTUAL TABLE IF NOT EXISTS {VEC_TABLE} USING vec0("
+        "entry_id TEXT PRIMARY KEY, "
+        f"embedding float[{int(dims)}] distance_metric=cosine"
+        ")"
+    )
+
+
+# vec0 does not honour ``INSERT OR REPLACE`` upsert semantics on the declared
+# primary key, so re-indexing is delete-then-insert — the same shape the FTS5
+# sync triggers use.
+VEC_DELETE = f"DELETE FROM {VEC_TABLE} WHERE entry_id = ?"
+VEC_INSERT = f"INSERT INTO {VEC_TABLE}(entry_id, embedding) VALUES (?, ?)"
+
+# vec0 KNN: MATCH supplies the query vector, ``k`` bounds the neighbour count.
+# Lower distance = closer; ORDER BY distance puts the strongest matches first.
+VEC_KNN = f"SELECT entry_id, distance FROM {VEC_TABLE} WHERE embedding MATCH ? AND k = ? ORDER BY distance"
+
+# Single-row ``embedding_meta`` table (migration v3): the model a DB is pinned to.
+READ_EMBEDDING_META = "SELECT model_name, dimensions, first_used_at, entry_count FROM embedding_meta LIMIT 1"
+INSERT_EMBEDDING_META = (
+    "INSERT INTO embedding_meta (model_name, dimensions, first_used_at, entry_count) VALUES (?, ?, ?, ?)"
+)
+BUMP_ENTRY_COUNT = "UPDATE embedding_meta SET entry_count = entry_count + 1"
+
+
+def meta_row_to_model(row: Any) -> EmbeddingMeta:
+    """Rebuild an ``EmbeddingMeta`` from an ``embedding_meta`` row."""
+    return EmbeddingMeta.model_validate(
+        {
+            "model_name": row[0],
+            "dimensions": row[1],
+            "first_used_at": row[2],
+            "entry_count": row[3],
+        }
+    )
