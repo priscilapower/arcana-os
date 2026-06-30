@@ -27,7 +27,15 @@ from arcana.memory.adapters.sqlite import SQLiteAdapter
 from arcana.memory.embedding_gateway import EmbeddingGateway
 from arcana.memory.errors import MemoryStorageError
 from arcana.models.adapters.embedding import EmbeddingAdapter
-from arcana.types import AdapterCapabilities, EmbeddingMeta, MemoryEntry, MemoryQuery, RetrievalMode
+from arcana.types import (
+    AdapterCapabilities,
+    EmbeddingMeta,
+    MemoryEntry,
+    MemoryQuery,
+    PrunePolicy,
+    PruneReport,
+    RetrievalMode,
+)
 
 logger = logging.getLogger("arcana.memory.vector")
 
@@ -133,6 +141,12 @@ class VectorAdapter:
 
     def capabilities(self) -> AdapterCapabilities:
         return AdapterCapabilities(supports_vector=self._vec_ok, supports_full_text=True)
+
+    async def prune(self, policy: PrunePolicy) -> PruneReport:
+        """Prune the underlying store. Shares the connection, so a PURGE here also
+        clears the vec0 index rows for the removed entries.
+        """
+        return await self._sqlite.prune(policy)
 
     # ------------------------------------------------------------------
     # MemoryAdapter protocol

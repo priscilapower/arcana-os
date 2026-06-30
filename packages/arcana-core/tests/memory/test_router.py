@@ -182,6 +182,23 @@ def test_register_pool_makes_it_routable():
     assert targets[0].pool_name == "late"
 
 
+def test_all_tiers_lists_every_backend():
+    router = _router(pools=["a", "b"])
+    tiers = router.all_tiers()
+    assert [t.scope for t in tiers] == [
+        MemoryScope.PRIVATE,
+        MemoryScope.SHARED,
+        MemoryScope.SHARED,
+        MemoryScope.GLOBAL,
+    ]
+    assert {t.pool_name for t in tiers if t.scope == MemoryScope.SHARED} == {"a", "b"}
+
+
+def test_all_tiers_without_global():
+    router = _router(with_global=False)
+    assert [t.scope for t in router.all_tiers()] == [MemoryScope.PRIVATE]
+
+
 # --------------------------------------------------------------------------
 # rank
 # --------------------------------------------------------------------------

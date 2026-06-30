@@ -18,6 +18,7 @@ from pathlib import Path
 from arcana.observability.audit import AuditLog
 from arcana.observability.events import (
     AuditEvent,
+    MemoryPruneEvent,
     MemoryReadEvent,
     MemoryWriteEvent,
     ModelCallEvent,
@@ -74,5 +75,6 @@ __all__ = [
     "RoutingEvent",
     "MemoryReadEvent",
     "MemoryWriteEvent",
+    "MemoryPruneEvent",
     "event_to_dict",
 ]

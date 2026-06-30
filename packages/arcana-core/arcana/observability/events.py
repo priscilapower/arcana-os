@@ -89,7 +89,19 @@ class MemoryWriteEvent:
     timestamp: str = field(default_factory=_now_iso)
 
 
-AuditEvent = SessionEvent | ModelCallEvent | RoutingEvent | MemoryReadEvent | MemoryWriteEvent
+@dataclass
+class MemoryPruneEvent:
+    """Emitted after a memory prune pass over one store."""
+
+    agent_id: str
+    scanned: int
+    archived: int
+    purged: int
+    type: Literal["memory_prune"] = field(default="memory_prune", init=False)
+    timestamp: str = field(default_factory=_now_iso)
+
+
+AuditEvent = SessionEvent | ModelCallEvent | RoutingEvent | MemoryReadEvent | MemoryWriteEvent | MemoryPruneEvent
 
 
 def event_to_dict(event: AuditEvent) -> dict[str, Any]:

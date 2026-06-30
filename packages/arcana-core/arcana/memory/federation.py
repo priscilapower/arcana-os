@@ -22,12 +22,20 @@ private write may have committed when a later tier fails.
 import asyncio
 import logging
 from collections.abc import AsyncIterator
+from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 from arcana.memory.router import MemoryRouter, TierBackend
-from arcana.types import MemoryEntry, MemoryQuery
+from arcana.types import MemoryEntry, MemoryQuery, PrunePolicy, PruneReport
 
 logger = logging.getLogger("arcana.memory.federation")
+
+
+@runtime_checkable
+class SupportsPrune(Protocol):
+    """A backend that can prune itself. Read-only tiers won't satisfy this."""
+
+    async def prune(self, policy: PrunePolicy) -> PruneReport: ...
 
 
 class MemoryFederation:
@@ -82,6 +90,22 @@ class MemoryFederation:
         """
         for entry in await self._merge_ranked(query):
             yield entry
+
+    async def prune(self, policy: PrunePolicy) -> PruneReport:
+        """Prune every tier whose backend supports it; aggregate the reports.
+
+        Read-only backends (no ``prune`` method) are skipped. Like writes, a tier
+        failure propagates — losing track of a destructive operation should
+        surface rather than be silently swallowed.
+        """
+        prunable = [t.adapter for t in self._router.all_tiers() if isinstance(t.adapter, SupportsPrune)]
+        reports: list[PruneReport] = await asyncio.gather(*(adapter.prune(policy) for adapter in prunable))
+        return PruneReport(
+            scanned=sum(r.scanned for r in reports),
+            archived=sum(r.archived for r in reports),
+            purged=sum(r.purged for r in reports),
+            tiers=len(prunable),
+        )
 
     # ------------------------------------------------------------------
     # Internals

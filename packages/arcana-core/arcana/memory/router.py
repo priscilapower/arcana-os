@@ -121,7 +121,7 @@ class MemoryRouter:
         not exist is a caller error and raises ``MemoryRoutingError``.
         """
         if query.scope is None:
-            return self._all_tiers()
+            return self.all_tiers()
 
         if query.scope == MemoryScope.PRIVATE:
             return [TierBackend(MemoryScope.PRIVATE, self._private)]
@@ -163,7 +163,12 @@ class MemoryRouter:
     # Internals
     # ------------------------------------------------------------------
 
-    def _all_tiers(self) -> list[TierBackend]:
+    def all_tiers(self) -> list[TierBackend]:
+        """Every registered tier — private, each shared pool, then global.
+
+        The same private → shared → global order a federated read fans across,
+        and the set a store-wide operation (e.g. pruning) iterates.
+        """
         tiers = [TierBackend(MemoryScope.PRIVATE, self._private)]
         tiers += [TierBackend(MemoryScope.SHARED, a, pool_name=n) for n, a in self._pools.items()]
         if self._global is not None:

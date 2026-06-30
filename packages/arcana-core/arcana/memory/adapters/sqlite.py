@@ -17,8 +17,8 @@ import aiosqlite
 from arcana.memory.adapters import _sql
 from arcana.memory.errors import MemoryNotConnectedError, MemoryStorageError
 from arcana.memory.migrations import migrate_to_latest
-from arcana.observability import MemoryReadEvent, MemoryWriteEvent, get_audit_log
-from arcana.types import MemoryEntry, MemoryQuery, MemoryScope
+from arcana.observability import MemoryPruneEvent, MemoryReadEvent, MemoryWriteEvent, get_audit_log
+from arcana.types import MemoryEntry, MemoryQuery, MemoryScope, PruneMode, PrunePolicy, PruneReport
 
 
 def _default_base() -> Path:
@@ -191,6 +191,59 @@ class SQLiteAdapter:
         self._emit_read(query, len(entries), elapsed_ms)
 
     # ------------------------------------------------------------------
+    # Pruning
+    # ------------------------------------------------------------------
+
+    async def prune(self, policy: PrunePolicy) -> PruneReport:
+        """Remove low-value entries per ``policy``; pinned entries are never touched.
+
+        ARCHIVE soft-deletes (sets ``archived``, hiding entries from search but
+        keeping them recoverable); PURGE hard-deletes the row — and its vector,
+        if a vec index exists. The importance floor and max-entries cap compose
+        into a single victim set, removed in one committed transaction.
+        """
+        conn = await self._ensure()
+        purge = policy.mode is PruneMode.PURGE
+        try:
+            row = await (await conn.execute(_sql.PRUNABLE_COUNT)).fetchone()
+            scanned = int(row[0]) if row is not None else 0
+
+            victims: set[str] = set()
+            if policy.min_importance is not None:
+                cursor = await conn.execute(
+                    _sql.prune_below_importance_sql(include_archived=purge), [policy.min_importance]
+                )
+                victims.update(r[0] for r in await cursor.fetchall())
+            if policy.max_entries is not None:
+                cursor = await conn.execute(_sql.prune_over_cap_sql(), [policy.max_entries])
+                victims.update(r[0] for r in await cursor.fetchall())
+
+            ids = list(victims)
+            archived = purged = 0
+            if ids:
+                if purge:
+                    await conn.execute(_sql.delete_ids_sql(len(ids)), ids)
+                    if await self._vec_table_exists(conn):
+                        for vid in ids:
+                            await conn.execute(_sql.VEC_DELETE, (vid,))
+                    purged = len(ids)
+                else:
+                    await conn.execute(_sql.archive_ids_sql(len(ids)), ids)
+                    archived = len(ids)
+            await conn.commit()
+        except aiosqlite.Error as exc:
+            raise MemoryStorageError(f"prune failed: {exc}") from exc
+
+        report = PruneReport(scanned=scanned, archived=archived, purged=purged)
+        self._emit_prune(report)
+        return report
+
+    @staticmethod
+    async def _vec_table_exists(conn: aiosqlite.Connection) -> bool:
+        row = await (await conn.execute(_sql.TABLE_EXISTS, (_sql.VEC_TABLE,))).fetchone()
+        return row is not None
+
+    # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
@@ -228,6 +281,22 @@ class SQLiteAdapter:
                         agent_id=str(entry.agent_id),
                         memory_type=entry.type.value,
                         importance=entry.importance,
+                    )
+                )
+        except Exception:
+            pass
+
+    def _emit_prune(self, report: PruneReport) -> None:
+        """Best-effort audit event. The store can span agents, so agent_id is blank."""
+        try:
+            audit = get_audit_log()
+            if audit is not None:
+                audit.append(
+                    MemoryPruneEvent(
+                        agent_id="",
+                        scanned=report.scanned,
+                        archived=report.archived,
+                        purged=report.purged,
                     )
                 )
         except Exception:

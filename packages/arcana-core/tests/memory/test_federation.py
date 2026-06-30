@@ -13,6 +13,9 @@ from arcana.types import (
     MemoryScope,
     MemoryType,
     MemoryWeights,
+    PruneMode,
+    PrunePolicy,
+    PruneReport,
 )
 
 # --------------------------------------------------------------------------
@@ -38,6 +41,19 @@ class _RecordingAdapter:
         if self.fail:
             raise RuntimeError(f"{self.name} search boom")
         return list(self.seed)
+
+
+class _PrunableAdapter(_RecordingAdapter):
+    """A recording adapter that also supports pruning, returning a fixed report."""
+
+    def __init__(self, name: str, *, report: PruneReport) -> None:
+        super().__init__(name)
+        self.report = report
+        self.prune_calls: list[PrunePolicy] = []
+
+    async def prune(self, policy: PrunePolicy) -> PruneReport:
+        self.prune_calls.append(policy)
+        return self.report
 
 
 def _entry(**overrides) -> MemoryEntry:
@@ -308,6 +324,64 @@ async def test_stream_search_end_to_end(tmp_path: Path):
 
     streamed = [e.content async for e in fed.stream_search(MemoryQuery(agent_id=agent))]
     assert streamed == ["promote me"]  # present once despite living in two tiers
+
+    await private.aclose()
+    await global_.aclose()
+
+
+# --------------------------------------------------------------------------
+# prune
+# --------------------------------------------------------------------------
+
+
+async def test_prune_aggregates_across_tiers():
+    private = _PrunableAdapter("private", report=PruneReport(scanned=10, archived=3))
+    global_ = _PrunableAdapter("global", report=PruneReport(scanned=5, archived=1))
+    fed = MemoryFederation(MemoryRouter(private=private, global_=global_))
+
+    report = await fed.prune(PrunePolicy(min_importance=0.1))
+    assert report.scanned == 15
+    assert report.archived == 4
+    assert report.tiers == 2
+    assert private.prune_calls and global_.prune_calls  # every tier was pruned
+
+
+async def test_prune_skips_tiers_without_prune_support():
+    private = _PrunableAdapter("private", report=PruneReport(scanned=4, archived=2))
+    plain_pool = _RecordingAdapter("pool")  # no prune method
+    fed = MemoryFederation(MemoryRouter(private=private, pools={"team": plain_pool}))
+
+    report = await fed.prune(PrunePolicy(min_importance=0.1))
+    assert report.tiers == 1  # only the prunable private tier counted
+    assert report.archived == 2
+
+
+async def test_prune_propagates_tier_failure():
+    class _BoomPrunable(_RecordingAdapter):
+        async def prune(self, policy: PrunePolicy) -> PruneReport:
+            raise RuntimeError("prune boom")
+
+    fed = MemoryFederation(MemoryRouter(private=_BoomPrunable("private")))
+    with pytest.raises(RuntimeError, match="prune boom"):
+        await fed.prune(PrunePolicy(min_importance=0.1))
+
+
+async def test_prune_end_to_end(tmp_path: Path):
+    private = SQLiteAdapter(tmp_path / "private.db")
+    global_ = SQLiteAdapter(tmp_path / "global.db")
+    await private.connect()
+    await global_.connect()
+    fed = MemoryFederation(MemoryRouter(private=private, global_=global_))
+
+    agent = uuid4()
+    await fed.write(_entry(agent_id=agent, importance=0.05, scope=MemoryScope.PRIVATE, content="weak"))
+    await fed.write(_entry(agent_id=agent, importance=0.8, scope=MemoryScope.PRIVATE, content="strong"))
+
+    report = await fed.prune(PrunePolicy(min_importance=0.1, mode=PruneMode.PURGE))
+    assert report.purged == 1
+
+    survivors = [e.content for e in await fed.search(MemoryQuery(agent_id=agent))]
+    assert survivors == ["strong"]
 
     await private.aclose()
     await global_.aclose()

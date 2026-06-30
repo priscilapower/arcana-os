@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Protocol, runtime_checkable
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from arcana.types._utils import now_utc
 
@@ -144,6 +144,9 @@ class MemoryEntry(BaseModel):
     created_at: datetime = Field(default_factory=now_utc)
     last_accessed_at: datetime = Field(default_factory=now_utc)
     access_count: int = 0
+
+    # --- Lifecycle ---
+    archived: bool = False  # soft-deleted by pruning; hidden from search unless include_archived
 
     # Promotion flag: >= 0.9 importance → auto-promote to GLOBAL
     @property
@@ -392,6 +395,45 @@ class ConsolidationReport(BaseModel):
     new_semantic_memories: int
     conflicts_detected: int = 0
     conflicts_resolved: int = 0
+    ran_at: datetime = Field(default_factory=now_utc)
+
+
+# ---------------------------------------------------------------------------
+# Pruning
+# ---------------------------------------------------------------------------
+
+
+class PruneMode(StrEnum):
+    ARCHIVE = "archive"  # soft-delete: set archived=1, recoverable, hidden from search
+    PURGE = "purge"  # hard-delete: remove the row (and its vector) for good
+
+
+class PrunePolicy(BaseModel):
+    """Selects low-value entries to remove. Pinned entries are never selected.
+
+    ``min_importance`` and ``max_entries`` compose: an entry is a victim if it
+    falls below the importance floor OR sits outside the top ``max_entries`` by
+    importance. At least one criterion must be set.
+    """
+
+    min_importance: float | None = None  # remove non-pinned entries strictly below this
+    max_entries: int | None = None  # keep only the top-N non-pinned by importance; remove the rest
+    mode: PruneMode = PruneMode.ARCHIVE
+
+    @model_validator(mode="after")
+    def _require_a_criterion(self) -> "PrunePolicy":
+        if self.min_importance is None and self.max_entries is None:
+            raise ValueError("PrunePolicy requires min_importance and/or max_entries")
+        return self
+
+
+class PruneReport(BaseModel):
+    """Outcome of a prune pass, aggregated across tiers at the federation layer."""
+
+    scanned: int = 0  # prunable (non-pinned, active) entries examined
+    archived: int = 0  # entries soft-deleted this pass
+    purged: int = 0  # entries hard-deleted this pass
+    tiers: int = 1  # number of memory tiers pruned
     ran_at: datetime = Field(default_factory=now_utc)
 
 

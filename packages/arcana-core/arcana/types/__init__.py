@@ -19,6 +19,9 @@ from arcana.types.memory import (
     MemoryQuery,
     MemoryScope,
     MemoryType,
+    PruneMode,
+    PrunePolicy,
+    PruneReport,
     RetrievalMode,
 )
 from arcana.types.model import (
@@ -71,6 +74,9 @@ __all__ = [
     "AdapterCapabilities",
     "AdapterHealth",
     "EmbeddingMeta",
+    "PruneMode",
+    "PrunePolicy",
+    "PruneReport",
     # Model
     "ModelConnection",
     "ModelProvider",
