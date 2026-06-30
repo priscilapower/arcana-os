@@ -14,12 +14,14 @@ from arcana.memory.errors import (
     MemoryRoutingError,
     MemoryStorageError,
 )
+from arcana.memory.federation import MemoryFederation
 from arcana.memory.router import GLOBAL_PROMOTION_THRESHOLD, MemoryRouter, TierBackend
 
 __all__ = [
     "EmbeddingGateway",
     "SQLiteAdapter",
     "VectorAdapter",
+    "MemoryFederation",
     "MemoryRouter",
     "TierBackend",
     "GLOBAL_PROMOTION_THRESHOLD",
