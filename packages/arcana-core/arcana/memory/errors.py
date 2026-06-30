@@ -16,3 +16,12 @@ class MemoryStorageError(MemoryError):
 
 class MemoryNotConnectedError(MemoryError):
     """The adapter was used before a connection/schema was established."""
+
+
+class MemoryRoutingError(MemoryError):
+    """A write targets a tier that is missing or under-specified.
+
+    Raised when an entry must reach a backend that was never registered — a
+    GLOBAL write with no global backend, or a SHARED write whose ``pool_name``
+    is absent or names an unknown pool.
+    """

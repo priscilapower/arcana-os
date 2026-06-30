@@ -11,14 +11,20 @@ from arcana.memory.embedding_gateway import EmbeddingGateway
 from arcana.memory.errors import (
     MemoryError,
     MemoryNotConnectedError,
+    MemoryRoutingError,
     MemoryStorageError,
 )
+from arcana.memory.router import GLOBAL_PROMOTION_THRESHOLD, MemoryRouter, TierBackend
 
 __all__ = [
     "EmbeddingGateway",
     "SQLiteAdapter",
     "VectorAdapter",
+    "MemoryRouter",
+    "TierBackend",
+    "GLOBAL_PROMOTION_THRESHOLD",
     "MemoryError",
     "MemoryStorageError",
     "MemoryNotConnectedError",
+    "MemoryRoutingError",
 ]

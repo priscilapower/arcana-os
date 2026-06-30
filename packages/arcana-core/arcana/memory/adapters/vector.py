@@ -15,8 +15,6 @@ Vectors are L2-normalised on write and query; combined with the index's cosine
 distance metric, ranking is by cosine similarity.
 """
 
-from __future__ import annotations
-
 import logging
 import math
 import time
