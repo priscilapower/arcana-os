@@ -21,6 +21,7 @@ private write may have committed when a later tier fails.
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
 from uuid import UUID
 
 from arcana.memory.router import MemoryRouter, TierBackend
@@ -66,6 +67,32 @@ class MemoryFederation:
         (keeping the copy from the most-local tier in routing order) and ranked
         by the agent's memory weights, then truncated to ``query.limit``.
         """
+        return await self._merge_ranked(query)
+
+    async def stream_search(self, query: MemoryQuery) -> AsyncIterator[MemoryEntry]:
+        """Yield the merged, ranked entries best-first, one at a time.
+
+        Produces the same sequence as :meth:`search` but as an async generator,
+        so a caller can stop iterating the moment it has what it needs (e.g. once
+        a context budget is full) instead of materialising the whole list.
+
+        Best-first order needs the full candidate pool, so the fan-out and rank
+        still happen up front; the streaming is on the consumption side. An empty
+        routing set yields nothing.
+        """
+        for entry in await self._merge_ranked(query):
+            yield entry
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    async def _merge_ranked(self, query: MemoryQuery) -> list[MemoryEntry]:
+        """Fan out across routed tiers, drop failures, dedup, and rank.
+
+        Shared by :meth:`search` and :meth:`stream_search` so their merge and
+        ranking behaviour cannot drift.
+        """
         tiers = self._router.route_read(query)
         if not tiers:
             return []
@@ -83,10 +110,6 @@ class MemoryFederation:
                 merged.setdefault(entry.id, entry)
 
         return self._router.rank(list(merged.values()), query)
-
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _payload_for(tier: TierBackend, entry: MemoryEntry) -> MemoryEntry:

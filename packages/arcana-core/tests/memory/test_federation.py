@@ -218,3 +218,96 @@ async def test_end_to_end_promotion_and_merge(tmp_path: Path):
 
     await private.aclose()
     await global_.aclose()
+
+
+# --------------------------------------------------------------------------
+# stream_search
+# --------------------------------------------------------------------------
+
+
+async def test_stream_search_matches_search():
+    p = _entry(content="private fact")
+    s = _entry(content="shared fact", scope=MemoryScope.SHARED, pool_name="team")
+    g = _entry(content="global fact", scope=MemoryScope.GLOBAL)
+    fed = MemoryFederation(
+        MemoryRouter(
+            private=_RecordingAdapter("private", seed=[p]),
+            global_=_RecordingAdapter("global", seed=[g]),
+            pools={"team": _RecordingAdapter("team", seed=[s])},
+        )
+    )
+
+    query = MemoryQuery()
+    streamed = [e.id async for e in fed.stream_search(query)]
+    listed = [e.id for e in await fed.search(query)]
+    assert streamed == listed  # same order, same dedup
+
+
+async def test_stream_search_yields_best_first():
+    weights = MemoryWeights(episodic=0.1, procedural=0.9)
+    ep = _entry(type=MemoryType.EPISODIC, importance=0.6, content="ep")
+    proc = _entry(type=MemoryType.PROCEDURAL, importance=0.6, content="proc")
+    fed = MemoryFederation(MemoryRouter(private=_RecordingAdapter("private", seed=[ep, proc]), weights=weights))
+
+    streamed = [e.content async for e in fed.stream_search(MemoryQuery())]
+    assert streamed == ["proc", "ep"]
+
+
+async def test_stream_search_honors_limit():
+    a = _entry(importance=0.9, content="a")
+    b = _entry(importance=0.5, content="b")
+    fed = MemoryFederation(MemoryRouter(private=_RecordingAdapter("private", seed=[a, b])))
+
+    streamed = [e.content async for e in fed.stream_search(MemoryQuery(limit=1))]
+    assert streamed == ["a"]
+
+
+async def test_stream_search_supports_early_break():
+    high = _entry(importance=0.95, content="high")
+    low = _entry(importance=0.1, content="low")
+    fed = MemoryFederation(MemoryRouter(private=_RecordingAdapter("private", seed=[high, low])))
+
+    first = None
+    async for entry in fed.stream_search(MemoryQuery()):
+        first = entry
+        break  # consumer stops after the top-ranked entry
+    assert first is not None
+    assert first.content == "high"
+
+
+async def test_stream_search_degrades_when_a_tier_fails(caplog):
+    good = _entry(content="survivor")
+    fed = MemoryFederation(
+        MemoryRouter(
+            private=_RecordingAdapter("private", seed=[good]),
+            global_=_RecordingAdapter("global", fail=True),
+        )
+    )
+
+    streamed = [e.content async for e in fed.stream_search(MemoryQuery())]
+    assert streamed == ["survivor"]
+    assert any("failed during search" in r.message for r in caplog.records)
+
+
+async def test_stream_search_empty_routing_yields_nothing():
+    fed = MemoryFederation(MemoryRouter(private=_RecordingAdapter("private")))
+    streamed = [e async for e in fed.stream_search(MemoryQuery(scope=MemoryScope.GLOBAL))]
+    assert streamed == []
+
+
+async def test_stream_search_end_to_end(tmp_path: Path):
+    private = SQLiteAdapter(tmp_path / "private.db")
+    global_ = SQLiteAdapter(tmp_path / "global.db")
+    await private.connect()
+    await global_.connect()
+    fed = MemoryFederation(MemoryRouter(private=private, global_=global_))
+
+    agent = uuid4()
+    entry = _entry(agent_id=agent, importance=0.95, scope=MemoryScope.PRIVATE, content="promote me")
+    await fed.write(entry)
+
+    streamed = [e.content async for e in fed.stream_search(MemoryQuery(agent_id=agent))]
+    assert streamed == ["promote me"]  # present once despite living in two tiers
+
+    await private.aclose()
+    await global_.aclose()
