@@ -400,6 +400,17 @@ async def test_archived_survives_round_trip(adapter: SQLiteAdapter):
     assert got[0].archived is True
 
 
+async def test_prune_translates_driver_errors(adapter: SQLiteAdapter):
+    # Drop the table out from under the adapter; the driver error must surface as
+    # MemoryStorageError, not a raw aiosqlite exception.
+    conn = adapter._conn
+    assert conn is not None
+    await conn.execute("DROP TABLE memory_entries")
+    await conn.commit()
+    with pytest.raises(MemoryStorageError, match="prune failed"):
+        await adapter.prune(PrunePolicy(min_importance=0.1))
+
+
 async def test_corrupt_row_raises_storage_error(adapter: SQLiteAdapter):
     # Inject a row with malformed JSON in a list column to prove errors are
     # translated to MemoryStorageError rather than leaking json/driver exceptions.
