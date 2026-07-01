@@ -35,7 +35,15 @@ def _default_base() -> Path:
 
 #: Substrings SQLite uses to report a physically damaged or non-database file.
 #: A driver error carrying any of these is corruption, not transient contention.
-_CORRUPTION_MARKERS = ("malformed", "file is not a database", "not a database", "disk image")
+#: Includes ``vtable constructor failed`` — how damaged FTS5 shadow tables surface
+#: on an existing store, where FTS5 availability is already asserted at connect.
+_CORRUPTION_MARKERS = (
+    "malformed",
+    "not a database",
+    "disk image",
+    "corrupt",
+    "vtable constructor failed",
+)
 
 
 class SQLiteAdapter:
