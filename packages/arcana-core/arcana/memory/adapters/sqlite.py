@@ -15,7 +15,7 @@ from uuid import UUID
 import aiosqlite
 
 from arcana.memory.adapters import _sql
-from arcana.memory.errors import MemoryNotConnectedError, MemoryStorageError
+from arcana.memory.errors import MemoryCorruptError, MemoryNotConnectedError, MemoryStorageError
 from arcana.memory.migrations import migrate_to_latest
 from arcana.observability import MemoryPruneEvent, MemoryReadEvent, MemoryWriteEvent, get_audit_log
 from arcana.types import (
@@ -33,6 +33,11 @@ def _default_base() -> Path:
     return Path.home() / ".arcana" / "agents"
 
 
+#: Substrings SQLite uses to report a physically damaged or non-database file.
+#: A driver error carrying any of these is corruption, not transient contention.
+_CORRUPTION_MARKERS = ("malformed", "file is not a database", "not a database", "disk image")
+
+
 class SQLiteAdapter:
     """Async SQLite memory backend. Implements the ``MemoryAdapter`` protocol."""
 
@@ -46,11 +51,19 @@ class SQLiteAdapter:
         *,
         global_store: SQLiteAdapter | None = None,
         refresh_on_access: bool = True,
+        quick_check_on_open: bool = True,
     ) -> None:
         self._db_path = Path(db_path)
         self._global_store = global_store
         self._refresh_on_access = refresh_on_access
+        # PRIVATE stores open once per session, so a cheap integrity check at open
+        # quarantines a corrupt agent before it runs. SHARED/GLOBAL stores open
+        # widely and rely on detect-on-read instead; wiring disables this for them.
+        self._quick_check_on_open = quick_check_on_open
         self._conn: aiosqlite.Connection | None = None
+        #: Set to the integrity-failure detail once corruption is seen. Latches:
+        #: a quarantined store stays quarantined for this adapter's lifetime.
+        self._corrupt: str | None = None
 
     @classmethod
     def for_agent(
@@ -77,21 +90,62 @@ class SQLiteAdapter:
         Idempotent — safe to call repeatedly. ``search``/``write`` lazily call
         this, so explicit ``connect()`` is optional.
         """
+        if self._corrupt is not None:
+            raise MemoryCorruptError(f"store at {self._db_path} is quarantined: {self._corrupt}")
         if self._conn is not None:
             return
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = await aiosqlite.connect(self._db_path)
-        conn.row_factory = aiosqlite.Row
-        # WAL: concurrent readers alongside a single writer. busy_timeout: wait
-        # rather than fail on transient lock contention.
-        await conn.execute("PRAGMA journal_mode=WAL")
-        await conn.execute("PRAGMA busy_timeout=5000")
-        await conn.execute("PRAGMA foreign_keys=ON")
-        await self._assert_fts5(conn)
-        await migrate_to_latest(conn)
+
+        try:
+            conn.row_factory = aiosqlite.Row
+            # WAL: concurrent readers alongside a single writer. busy_timeout: wait
+            # rather than fail on transient lock contention.
+            await conn.execute("PRAGMA journal_mode=WAL")
+            await conn.execute("PRAGMA busy_timeout=5000")
+            await conn.execute("PRAGMA foreign_keys=ON")
+            await self._assert_fts5(conn)
+            if self._quick_check_on_open:
+                await self._run_quick_check(conn)
+            await migrate_to_latest(conn)
+        except aiosqlite.Error as exc:
+            # A driver error during open on a file that should already be a valid
+            # database is corruption territory — translate before it escapes raw.
+            await conn.close()
+            raise self._translate_sqlite_error(exc, f"failed to open store at {self._db_path}") from exc
+        except MemoryCorruptError:
+            await conn.close()
+            raise
         self._conn = conn
         if self._global_store is not None:
             await self._global_store.connect()
+
+    async def _run_quick_check(self, conn: aiosqlite.Connection) -> None:
+        """Run ``PRAGMA quick_check`` and quarantine the store if it is damaged.
+
+        ``quick_check`` skips the expensive index cross-checks of a full
+        ``integrity_check`` — milliseconds on the small per-agent stores — while
+        still catching a malformed page image. A non-``ok`` result latches
+        ``_corrupt`` and raises ``MemoryCorruptError``.
+        """
+        row = await (await conn.execute("PRAGMA quick_check")).fetchone()
+        result = str(row[0]) if row is not None else "no result"
+        if result != "ok":
+            self._corrupt = result
+            raise MemoryCorruptError(f"integrity check failed for {self._db_path}: {result}")
+
+    def _translate_sqlite_error(self, exc: aiosqlite.Error, prefix: str) -> MemoryStorageError:
+        """Map a driver error to the memory taxonomy, flagging corruption.
+
+        A malformed-image / not-a-database error latches ``_corrupt`` and becomes
+        ``MemoryCorruptError`` (which the resilience layer quarantines for the
+        session); anything else stays a plain ``MemoryStorageError``.
+        """
+        text = str(exc).lower()
+        if any(marker in text for marker in _CORRUPTION_MARKERS):
+            self._corrupt = str(exc)
+            return MemoryCorruptError(f"{prefix}: {exc}")
+        return MemoryStorageError(f"{prefix}: {exc}")
 
     async def aclose(self) -> None:
         """Close the connection. Safe to call more than once."""
@@ -108,6 +162,9 @@ class SQLiteAdapter:
         half-open recovery probe without exception handling.
         """
         adapter_id = str(self._db_path)
+        if self._corrupt is not None:
+            return AdapterHealth(adapter_id=adapter_id, healthy=False, message=f"corrupt: {self._corrupt}")
+
         try:
             conn = await self._ensure()
             await conn.execute("SELECT 1")
@@ -157,11 +214,12 @@ class SQLiteAdapter:
     async def write(self, entry: MemoryEntry) -> None:
         """Upsert one entry (keyed on ``id``), then promote to GLOBAL if eligible."""
         conn = await self._ensure()
+
         try:
             await conn.execute(_sql.UPSERT, _sql.entry_to_row(entry))
             await conn.commit()
         except aiosqlite.Error as exc:
-            raise MemoryStorageError(f"write failed for entry {entry.id}: {exc}") from exc
+            raise self._translate_sqlite_error(exc, f"write failed for entry {entry.id}") from exc
 
         # Importance-based promotion. The entry's own rule gates on scope == PRIVATE,
         # so the GLOBAL copy can never re-promote (no recursion). Same id keeps the
@@ -191,7 +249,7 @@ class SQLiteAdapter:
             cursor = await conn.execute(sql, params)
             rows = await cursor.fetchall()
         except aiosqlite.Error as exc:
-            raise MemoryStorageError(f"search failed: {exc}") from exc
+            raise self._translate_sqlite_error(exc, "search failed") from exc
 
         # Decode/validation failures (e.g. corrupt JSON in a list column) are
         # translated too, so callers only ever see MemoryStorageError.
@@ -256,7 +314,7 @@ class SQLiteAdapter:
                     archived = len(ids)
             await conn.commit()
         except aiosqlite.Error as exc:
-            raise MemoryStorageError(f"prune failed: {exc}") from exc
+            raise self._translate_sqlite_error(exc, "prune failed") from exc
 
         report = PruneReport(scanned=scanned, archived=archived, purged=purged)
         self._emit_prune(report)
