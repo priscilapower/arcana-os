@@ -101,7 +101,34 @@ class MemoryPruneEvent:
     timestamp: str = field(default_factory=_now_iso)
 
 
-AuditEvent = SessionEvent | ModelCallEvent | RoutingEvent | MemoryReadEvent | MemoryWriteEvent | MemoryPruneEvent
+@dataclass
+class MemoryDegradedEvent:
+    """Emitted when a memory tier is skipped or drops out of an operation.
+
+    A degraded read returns partial context; a degraded shared/global write is
+    dropped. Either way the session proceeds — this event is how the thinning is
+    surfaced instead of being silent.
+    """
+
+    agent_id: str
+    session_id: str
+    tier: str  # "private" | "shared:{pool}" | "global"
+    operation: Literal["read", "write", "promote"]
+    reason: Literal["timeout", "breaker_open", "backend_error", "corruption"]
+    message: str = ""
+    type: Literal["memory_degraded"] = field(default="memory_degraded", init=False)
+    timestamp: str = field(default_factory=_now_iso)
+
+
+AuditEvent = (
+    SessionEvent
+    | ModelCallEvent
+    | RoutingEvent
+    | MemoryReadEvent
+    | MemoryWriteEvent
+    | MemoryPruneEvent
+    | MemoryDegradedEvent
+)
 
 
 def event_to_dict(event: AuditEvent) -> dict[str, Any]:

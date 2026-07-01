@@ -29,6 +29,7 @@ from arcana.memory.errors import MemoryStorageError
 from arcana.models.adapters.embedding import EmbeddingAdapter
 from arcana.types import (
     AdapterCapabilities,
+    AdapterHealth,
     EmbeddingMeta,
     MemoryEntry,
     MemoryQuery,
@@ -141,6 +142,23 @@ class VectorAdapter:
 
     def capabilities(self) -> AdapterCapabilities:
         return AdapterCapabilities(supports_vector=self._vec_ok, supports_full_text=True)
+
+    async def health_check(self) -> AdapterHealth:
+        """Report health of the underlying store. Never raises.
+
+        Storage health is the underlying SQLite store: if rows are readable, the
+        tier is usable. A missing vector layer is *degraded but healthy* —
+        keyword retrieval still answers — so it is noted in ``message`` rather
+        than reported as unhealthy.
+        """
+        base = await self._sqlite.health_check()
+        if not base.healthy or self._vec_ok:
+            return base
+        return AdapterHealth(
+            adapter_id=base.adapter_id,
+            healthy=True,
+            message="vector search unavailable; keyword-only",
+        )
 
     async def prune(self, policy: PrunePolicy) -> PruneReport:
         """Prune the underlying store. Shares the connection, so a PURGE here also

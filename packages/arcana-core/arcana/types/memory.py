@@ -448,3 +448,11 @@ class MemoryAdapter(Protocol):
 
     async def search(self, query: MemoryQuery) -> list[MemoryEntry]: ...
     async def write(self, entry: MemoryEntry) -> None: ...
+    async def health_check(self) -> AdapterHealth:
+        """Probe whether the backend is reachable and usable.
+
+        Must not raise — return ``AdapterHealth(healthy=False, ...)`` on failure.
+        The resilience layer uses this as the half-open recovery probe after a
+        breaker has opened, so it must be cheap (e.g. ``SELECT 1``) and honest.
+        """
+        ...

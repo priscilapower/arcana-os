@@ -7,6 +7,7 @@ import pytest
 
 from arcana.memory import GLOBAL_PROMOTION_THRESHOLD, MemoryRouter, MemoryRoutingError
 from arcana.types import (
+    AdapterHealth,
     MemoryAdapter,
     MemoryEntry,
     MemoryQuery,
@@ -33,6 +34,9 @@ class _FakeAdapter:
 
     async def write(self, entry: MemoryEntry) -> None:  # pragma: no cover
         return None
+
+    async def health_check(self) -> AdapterHealth:  # pragma: no cover
+        return AdapterHealth(adapter_id=self.name, healthy=True)
 
 
 def _entry(**overrides) -> MemoryEntry:

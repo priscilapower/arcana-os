@@ -5,6 +5,11 @@ into these at the boundary, so callers never see raw driver exceptions — mirro
 the ``ModelAdapter._translate`` contract in ``arcana.models``.
 """
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from arcana.types import MemoryScope
+
 
 class MemoryError(Exception):
     """Base class for all memory-backend errors."""
@@ -12,6 +17,17 @@ class MemoryError(Exception):
 
 class MemoryStorageError(MemoryError):
     """A read/write against the backend failed (I/O, corruption, constraint)."""
+
+
+class MemoryCorruptError(MemoryStorageError):
+    """The backend reported a malformed or unreadable database image.
+
+    A subclass of ``MemoryStorageError`` so existing ``except MemoryStorageError``
+    sites still catch it, but distinct so the resilience layer can treat it
+    specially: corruption is a session-long condition, not a transient failure,
+    so a tier that raises this is quarantined (breaker forced open) rather than
+    merely counted as one failure.
+    """
 
 
 class MemoryNotConnectedError(MemoryError):
@@ -25,3 +41,28 @@ class MemoryRoutingError(MemoryError):
     GLOBAL write with no global backend, or a SHARED write whose ``pool_name``
     is absent or names an unknown pool.
     """
+
+
+class MemoryWriteError(MemoryError):
+    """A write to an agent's PRIVATE store failed and could not be recovered.
+
+    PRIVATE memory is the durability anchor: an agent that cannot persist its
+    own memory must learn of it rather than silently lose data it believes was
+    written. The federation raises this when the private write leg fails; SHARED
+    and GLOBAL write failures degrade instead (surfaced via ``MemoryDegradedEvent``).
+    """
+
+
+class TierWriteFailed(MemoryError):
+    """A single tier's write failed inside the resilience wrapper.
+
+    Carries the ``scope`` of the failing tier so the federation can decide the
+    blast radius — PRIVATE is fatal (re-raised as ``MemoryWriteError``), SHARED
+    and GLOBAL degrade. ``cause`` is the original backend exception (or a
+    breaker-open sentinel) for observability.
+    """
+
+    def __init__(self, scope: "MemoryScope", cause: BaseException) -> None:
+        self.scope = scope
+        self.cause = cause
+        super().__init__(f"write to {scope} tier failed: {cause!r}")

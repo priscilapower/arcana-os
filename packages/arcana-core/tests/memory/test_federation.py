@@ -7,6 +7,7 @@ import pytest
 
 from arcana.memory import MemoryFederation, MemoryRouter, SQLiteAdapter
 from arcana.types import (
+    AdapterHealth,
     MemoryAdapter,
     MemoryEntry,
     MemoryQuery,
@@ -41,6 +42,9 @@ class _RecordingAdapter:
         if self.fail:
             raise RuntimeError(f"{self.name} search boom")
         return list(self.seed)
+
+    async def health_check(self) -> AdapterHealth:
+        return AdapterHealth(adapter_id=self.name, healthy=not self.fail)
 
 
 class _PrunableAdapter(_RecordingAdapter):

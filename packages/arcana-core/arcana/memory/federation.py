@@ -26,7 +26,7 @@ from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 from arcana.memory.router import MemoryRouter, TierBackend
-from arcana.types import MemoryEntry, MemoryQuery, PrunePolicy, PruneReport
+from arcana.types import AdapterHealth, MemoryEntry, MemoryQuery, PrunePolicy, PruneReport
 
 logger = logging.getLogger("arcana.memory.federation")
 
@@ -90,6 +90,25 @@ class MemoryFederation:
         """
         for entry in await self._merge_ranked(query):
             yield entry
+
+    async def health_check(self) -> AdapterHealth:
+        """Aggregate health across all registered tiers. Never raises.
+
+        The federation is usable as long as at least one tier is reachable —
+        consistent with degraded reads returning partial context. Unhealthy
+        tiers are named in ``message`` so a caller can see what dropped out.
+        """
+        tiers = self._router.all_tiers()
+        probes = await asyncio.gather(*(tier.adapter.health_check() for tier in tiers), return_exceptions=True)
+        unhealthy: list[str] = []
+        any_healthy = False
+        for tier, probe in zip(tiers, probes, strict=True):
+            if isinstance(probe, AdapterHealth) and probe.healthy:
+                any_healthy = True
+            else:
+                unhealthy.append(_tier_label(tier))
+        message = "" if not unhealthy else f"degraded tiers: {', '.join(unhealthy)}"
+        return AdapterHealth(adapter_id="federation", healthy=any_healthy, message=message)
 
     async def prune(self, policy: PrunePolicy) -> PruneReport:
         """Prune every tier whose backend supports it; aggregate the reports.

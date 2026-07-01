@@ -18,7 +18,15 @@ from arcana.memory.adapters import _sql
 from arcana.memory.errors import MemoryNotConnectedError, MemoryStorageError
 from arcana.memory.migrations import migrate_to_latest
 from arcana.observability import MemoryPruneEvent, MemoryReadEvent, MemoryWriteEvent, get_audit_log
-from arcana.types import MemoryEntry, MemoryQuery, MemoryScope, PruneMode, PrunePolicy, PruneReport
+from arcana.types import (
+    AdapterHealth,
+    MemoryEntry,
+    MemoryQuery,
+    MemoryScope,
+    PruneMode,
+    PrunePolicy,
+    PruneReport,
+)
 
 
 def _default_base() -> Path:
@@ -90,6 +98,22 @@ class SQLiteAdapter:
         if self._conn is not None:
             await self._conn.close()
             self._conn = None
+
+    async def health_check(self) -> AdapterHealth:
+        """Probe the backend with a trivial query. Never raises.
+
+        Ensures the connection (which validates the store), then runs
+        ``SELECT 1``. Any failure — unconnectable, corrupt, or FTS5-less —
+        reports unhealthy so the resilience layer can gate on it as its
+        half-open recovery probe without exception handling.
+        """
+        adapter_id = str(self._db_path)
+        try:
+            conn = await self._ensure()
+            await conn.execute("SELECT 1")
+            return AdapterHealth(adapter_id=adapter_id, healthy=True)
+        except Exception as exc:  # noqa: BLE001 — a health probe must not raise
+            return AdapterHealth(adapter_id=adapter_id, healthy=False, message=str(exc))
 
     async def _ensure(self) -> aiosqlite.Connection:
         if self._conn is None:
