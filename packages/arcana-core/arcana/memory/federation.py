@@ -21,12 +21,15 @@ private write may have committed when a later tier fails.
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
+from arcana.memory.errors import MemoryWriteError, TierWriteFailed
+from arcana.memory.resilience import ResilientTier
 from arcana.memory.router import MemoryRouter, TierBackend
-from arcana.types import AdapterHealth, MemoryEntry, MemoryQuery, PrunePolicy, PruneReport
+from arcana.observability import MemoryDegradedEvent, emit_degraded
+from arcana.types import AdapterHealth, MemoryAdapter, MemoryEntry, MemoryQuery, MemoryScope, PrunePolicy, PruneReport
 
 logger = logging.getLogger("arcana.memory.federation")
 
@@ -45,27 +48,65 @@ class MemoryFederation:
     every routing and ranking decision; this layer only performs the I/O.
     """
 
-    def __init__(self, router: MemoryRouter) -> None:
+    def __init__(
+        self,
+        router: MemoryRouter,
+        on_degraded: Callable[[MemoryDegradedEvent], None] | None = None,
+    ) -> None:
         self._router = router
+        # Write/promote degradation is emitted here (not in the tier wrapper),
+        # since only this layer knows a leg is a promotion and whether a failure
+        # is fatal (PRIVATE) or degraded (SHARED / GLOBAL).
+        self._on_degraded = on_degraded or emit_degraded
 
     # ------------------------------------------------------------------
     # MemoryAdapter protocol
     # ------------------------------------------------------------------
 
     async def write(self, entry: MemoryEntry) -> None:
-        """Write an entry to every tier the router selects.
+        """Write an entry to every tier the router selects, by failure policy.
 
         When a target tier's scope differs from the entry's, a scope-rewritten
         copy is sent there instead — this is the promotion case, where a
         high-importance PRIVATE entry is also stored GLOBAL. The copy keeps the
         same ``id`` (idempotent) and drops ``pool_name``.
 
-        Writes fan out concurrently and are not transactional across tiers: if a
-        tier fails, the exception propagates while any already-issued writes
-        stand.
+        Writes fan out concurrently and are not transactional across tiers, and a
+        failing tier is handled by its scope: PRIVATE is the durability anchor,
+        so its failure raises ``MemoryWriteError``; a SHARED or GLOBAL failure
+        degrades (the tier wrapper has already surfaced a ``MemoryDegradedEvent``)
+        so the session proceeds. A degraded GLOBAL therefore pauses promotion
+        without ever failing the private write.
         """
         targets = self._router.route_write(entry)
-        await asyncio.gather(*(tier.adapter.write(self._payload_for(tier, entry)) for tier in targets))
+        results = await asyncio.gather(
+            *(tier.adapter.write(self._payload_for(tier, entry)) for tier in targets),
+            return_exceptions=True,
+        )
+
+        for tier, result in zip(targets, results, strict=True):
+            if result is None:
+                continue
+            if isinstance(result, TierWriteFailed):
+                if result.scope is MemoryScope.PRIVATE:
+                    # Fatal, not a degradation — raise, do not emit a degraded event.
+                    raise MemoryWriteError(f"private memory write failed for entry {entry.id}") from result.cause
+                # SHARED / GLOBAL degrade. A scope-rewritten leg is a promotion.
+                operation = "promote" if tier.scope != entry.scope else "write"
+                self._emit_degraded(tier, operation, result)
+                continue
+            raise result  # an unwrapped backend or unexpected error — surface it
+
+    def _emit_degraded(self, tier: TierBackend, operation: str, failure: TierWriteFailed) -> None:
+        event = MemoryDegradedEvent(
+            agent_id="",
+            session_id="",
+            tier=_tier_label(tier),
+            operation=operation,  # type: ignore[arg-type]
+            reason=failure.reason,  # type: ignore[arg-type]
+            message=str(failure.cause),
+        )
+        self._on_degraded(event)
 
     async def search(self, query: MemoryQuery) -> list[MemoryEntry]:
         """Fan a query across all routed tiers, then merge, dedup, and rank.
@@ -113,11 +154,14 @@ class MemoryFederation:
     async def prune(self, policy: PrunePolicy) -> PruneReport:
         """Prune every tier whose backend supports it; aggregate the reports.
 
-        Read-only backends (no ``prune`` method) are skipped. Like writes, a tier
-        failure propagates — losing track of a destructive operation should
-        surface rather than be silently swallowed.
+        Read-only backends (no ``prune`` method) are skipped. The resilient tier
+        wrapper does not forward pruning, so we prune the backend it wraps
+        directly: pruning is a destructive maintenance op that deliberately
+        bypasses the read/write resilience path — a tier failure propagates,
+        because losing track of a destructive operation should surface rather
+        than be silently swallowed.
         """
-        prunable = [t.adapter for t in self._router.all_tiers() if isinstance(t.adapter, SupportsPrune)]
+        prunable = [inner for t in self._router.all_tiers() if (inner := _prunable_backend(t.adapter)) is not None]
         reports: list[PruneReport] = await asyncio.gather(*(adapter.prune(policy) for adapter in prunable))
         return PruneReport(
             scanned=sum(r.scanned for r in reports),
@@ -164,3 +208,13 @@ class MemoryFederation:
 
 def _tier_label(tier: TierBackend) -> str:
     return f"{tier.scope.value}:{tier.pool_name}" if tier.pool_name else tier.scope.value
+
+
+def _prunable_backend(adapter: MemoryAdapter) -> SupportsPrune | None:
+    """The prunable backend behind a tier, unwrapping the resilience layer.
+
+    Returns the adapter itself (or the wrapper's inner) when it supports pruning,
+    else ``None`` for read-only tiers.
+    """
+    backend = adapter.inner if isinstance(adapter, ResilientTier) else adapter
+    return backend if isinstance(backend, SupportsPrune) else None

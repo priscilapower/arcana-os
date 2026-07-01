@@ -59,10 +59,15 @@ class TierWriteFailed(MemoryError):
     Carries the ``scope`` of the failing tier so the federation can decide the
     blast radius — PRIVATE is fatal (re-raised as ``MemoryWriteError``), SHARED
     and GLOBAL degrade. ``cause`` is the original backend exception (or a
-    breaker-open sentinel) for observability.
+    breaker-open sentinel); ``reason`` is the degradation category
+    (``timeout`` / ``breaker_open`` / ``backend_error`` / ``corruption``) the
+    federation puts on the ``MemoryDegradedEvent`` it emits for a degraded tier.
+    The wrapper raises rather than emits, so the federation can label the event
+    ``write`` vs ``promote`` and suppress it entirely for the fatal PRIVATE case.
     """
 
-    def __init__(self, scope: "MemoryScope", cause: BaseException) -> None:
+    def __init__(self, scope: "MemoryScope", cause: BaseException, reason: str = "backend_error") -> None:
         self.scope = scope
         self.cause = cause
-        super().__init__(f"write to {scope} tier failed: {cause!r}")
+        self.reason = reason
+        super().__init__(f"write to {scope} tier failed ({reason}): {cause!r}")

@@ -5,7 +5,8 @@ from uuid import uuid4
 
 import pytest
 
-from arcana.memory import MemoryFederation, MemoryRouter, SQLiteAdapter
+from arcana.memory import MemoryFederation, MemoryRouter, MemoryWriteError, SQLiteAdapter
+from arcana.observability.events import MemoryDegradedEvent
 from arcana.types import (
     AdapterHealth,
     MemoryAdapter,
@@ -130,13 +131,48 @@ async def test_shared_write_targets_named_pool_only():
     assert private.writes == []
 
 
-async def test_write_propagates_tier_failure():
+async def test_private_write_failure_is_fatal():
+    # PRIVATE is the durability anchor: an agent must learn its own memory did
+    # not persist rather than silently lose it. Fatal, so no degraded event.
+    private = _RecordingAdapter("private", fail=True)
+    events: list[MemoryDegradedEvent] = []
+    fed = MemoryFederation(MemoryRouter(private=private), on_degraded=events.append)
+
+    with pytest.raises(MemoryWriteError):
+        await fed.write(_entry(scope=MemoryScope.PRIVATE))
+    assert events == []
+
+
+async def test_promotion_failure_emits_promote_event():
+    # A high-importance PRIVATE entry promotes to GLOBAL. The global leg fails,
+    # but a degraded GLOBAL must not fail the session — the private write stands,
+    # promotion pauses, and the degraded event is labelled "promote".
     private = _RecordingAdapter("private")
     global_ = _RecordingAdapter("global", fail=True)
-    fed = MemoryFederation(MemoryRouter(private=private, global_=global_))
+    events: list[MemoryDegradedEvent] = []
+    fed = MemoryFederation(MemoryRouter(private=private, global_=global_), on_degraded=events.append)
 
-    with pytest.raises(RuntimeError, match="global write boom"):
-        await fed.write(_entry(importance=0.95, scope=MemoryScope.PRIVATE))
+    await fed.write(_entry(importance=0.95, scope=MemoryScope.PRIVATE))
+    assert len(private.writes) == 1  # private committed despite the global failure
+    assert len(events) == 1
+    assert events[0].operation == "promote"
+    assert events[0].tier == "global"
+    assert events[0].reason == "backend_error"
+
+
+async def test_direct_global_write_failure_emits_write_event():
+    # A genuine GLOBAL write (not a promotion copy) that fails degrades and is
+    # labelled "write" — distinguishing it from a paused promotion.
+    global_ = _RecordingAdapter("global", fail=True)
+    events: list[MemoryDegradedEvent] = []
+    fed = MemoryFederation(
+        MemoryRouter(private=_RecordingAdapter("private"), global_=global_), on_degraded=events.append
+    )
+
+    await fed.write(_entry(scope=MemoryScope.GLOBAL))
+    assert len(events) == 1
+    assert events[0].operation == "write"
+    assert events[0].tier == "global"
 
 
 # --------------------------------------------------------------------------
@@ -191,7 +227,10 @@ async def test_read_applies_card_weight_ranking_and_limit():
     assert [e.content for e in capped] == ["proc"]
 
 
-async def test_read_degrades_when_a_tier_fails(caplog):
+async def test_read_degrades_when_a_tier_fails():
+    # The failing tier is skipped and the read returns the survivor's results —
+    # partial memory beats none. The degraded-event emission is covered at the
+    # ResilientTier unit level (test_resilient_tier).
     good = _entry(content="survivor")
     fed = MemoryFederation(
         MemoryRouter(
@@ -202,7 +241,6 @@ async def test_read_degrades_when_a_tier_fails(caplog):
 
     got = await fed.search(MemoryQuery())
     assert [e.content for e in got] == ["survivor"]
-    assert any("failed during search" in r.message for r in caplog.records)
 
 
 async def test_read_with_empty_routing_returns_empty():
@@ -295,7 +333,7 @@ async def test_stream_search_supports_early_break():
     assert first.content == "high"
 
 
-async def test_stream_search_degrades_when_a_tier_fails(caplog):
+async def test_stream_search_degrades_when_a_tier_fails():
     good = _entry(content="survivor")
     fed = MemoryFederation(
         MemoryRouter(
@@ -306,7 +344,6 @@ async def test_stream_search_degrades_when_a_tier_fails(caplog):
 
     streamed = [e.content async for e in fed.stream_search(MemoryQuery())]
     assert streamed == ["survivor"]
-    assert any("failed during search" in r.message for r in caplog.records)
 
 
 async def test_stream_search_empty_routing_yields_nothing():

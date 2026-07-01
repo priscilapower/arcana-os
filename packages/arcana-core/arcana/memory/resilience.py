@@ -148,6 +148,13 @@ class ResilientTier:
         self._breaker = breaker
         self._on_degraded = on_degraded or emit_degraded
 
+    @property
+    def inner(self) -> MemoryAdapter:
+        """The wrapped backend. Lets callers reach capabilities the wrapper does
+        not forward (e.g. pruning, a destructive op that deliberately bypasses
+        the read/write resilience path)."""
+        return self._inner
+
     async def search(self, query: MemoryQuery) -> list[MemoryEntry]:
         """Fan a query to the backend within budget; never raise."""
         if not self._breaker.allow():
@@ -180,11 +187,16 @@ class ResilientTier:
             self._publish_state()
 
     async def write(self, entry: MemoryEntry) -> None:
-        """Write to the backend within budget; raise ``TierWriteFailed`` on failure."""
+        """Write to the backend within budget; raise ``TierWriteFailed`` on failure.
+
+        A failed write surfaces by *raising* (carrying scope + reason) rather than
+        emitting a degraded event: only the federation knows whether this leg is a
+        promotion and whether the failure is fatal (PRIVATE) or a degradation
+        (SHARED / GLOBAL), so it owns the ``MemoryDegradedEvent``.
+        """
         if not self._breaker.allow():
-            self._degrade("write", "breaker_open", "circuit open; tier skipped")
             self._publish_state()
-            raise TierWriteFailed(self._scope, _BreakerOpen("circuit open"))
+            raise TierWriteFailed(self._scope, _BreakerOpen("circuit open"), "breaker_open")
 
         budget = self._config.write_timeout_ms / 1000
         started = time.perf_counter()
@@ -193,16 +205,13 @@ class ResilientTier:
             await asyncio.wait_for(self._inner.write(entry), budget)
         except TimeoutError as exc:
             self._breaker.record_failure()
-            self._degrade("write", "timeout", f"write exceeded {budget:.3f}s")
-            raise TierWriteFailed(self._scope, exc) from exc
+            raise TierWriteFailed(self._scope, exc, "timeout") from exc
         except MemoryCorruptError as exc:
             self._breaker.force_open()
-            self._degrade("write", "corruption", str(exc))
-            raise TierWriteFailed(self._scope, exc) from exc
+            raise TierWriteFailed(self._scope, exc, "corruption") from exc
         except Exception as exc:
             self._breaker.record_failure()
-            self._degrade("write", "backend_error", str(exc))
-            raise TierWriteFailed(self._scope, exc) from exc
+            raise TierWriteFailed(self._scope, exc, "backend_error") from exc
         else:
             self._breaker.record_success()
             self._record_latency("write", started)

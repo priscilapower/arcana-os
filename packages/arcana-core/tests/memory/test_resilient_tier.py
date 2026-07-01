@@ -212,8 +212,9 @@ async def test_write_timeout_raises_tier_write_failed():
     with pytest.raises(TierWriteFailed) as exc_info:
         await tier.write(_entry())
     assert exc_info.value.scope is MemoryScope.SHARED
-    assert events[0].reason == "timeout"
-    assert events[0].operation == "write"
+    assert exc_info.value.reason == "timeout"
+    # writes surface by raising; the federation owns the degraded event
+    assert events == []
 
 
 async def test_write_backend_error_raises_with_scope_and_cause():
@@ -224,28 +225,29 @@ async def test_write_backend_error_raises_with_scope_and_cause():
         await tier.write(_entry())
     assert exc_info.value.scope is MemoryScope.GLOBAL
     assert exc_info.value.cause is cause
-    assert events[0].reason == "backend_error"
+    assert exc_info.value.reason == "backend_error"
+    assert events == []
 
 
 async def test_write_corruption_quarantines():
     inner = _FakeInner(write_exc=MemoryCorruptError("malformed"))
-    tier, events, breaker = _make(inner, breaker=CircuitBreaker(fail_threshold=99))
-    with pytest.raises(TierWriteFailed):
+    tier, _, breaker = _make(inner, breaker=CircuitBreaker(fail_threshold=99))
+    with pytest.raises(TierWriteFailed) as exc_info:
         await tier.write(_entry())
     assert breaker.state is BreakerState.OPEN
-    assert events[0].reason == "corruption"
+    assert exc_info.value.reason == "corruption"
 
 
 async def test_open_breaker_write_raises_without_calling_inner():
     inner = _FakeInner()
     breaker = CircuitBreaker(fail_threshold=1)
     breaker.force_open()
-    tier, events, _ = _make(inner, breaker=breaker)
+    tier, _, _ = _make(inner, breaker=breaker)
     with pytest.raises(TierWriteFailed) as exc_info:
         await tier.write(_entry())
     assert exc_info.value.scope is MemoryScope.PRIVATE
     assert inner.write_calls == 0
-    assert events[0].reason == "breaker_open"
+    assert exc_info.value.reason == "breaker_open"
 
 
 # --------------------------------------------------------------------------

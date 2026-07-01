@@ -16,7 +16,9 @@ applies any scope rewrite a promotion target calls for.
 
 from dataclasses import dataclass
 
+from arcana.memory.config import MemoryResilienceConfig
 from arcana.memory.errors import MemoryRoutingError
+from arcana.memory.resilience import CircuitBreaker, ResilientTier
 from arcana.types import (
     MemoryAdapter,
     MemoryEntry,
@@ -59,11 +61,18 @@ class MemoryRouter:
         global_: MemoryAdapter | None = None,
         pools: dict[str, MemoryAdapter] | None = None,
         weights: MemoryWeights | None = None,
+        resilience: MemoryResilienceConfig | None = None,
     ) -> None:
-        self._private = private
-        self._global = global_
-        self._pools: dict[str, MemoryAdapter] = dict(pools or {})
+        # Each tier is wrapped once here so every routing decision hands the
+        # federation a resilient adapter — timeouts, breaker, and degraded
+        # reporting — without the federation knowing which backend is underneath.
+        self._resilience = resilience or MemoryResilienceConfig.load()
         self._weights = weights or MemoryWeights()
+        self._private = self._wrap(private, MemoryScope.PRIVATE)
+        self._global = self._wrap(global_, MemoryScope.GLOBAL) if global_ is not None else None
+        self._pools: dict[str, MemoryAdapter] = {
+            name: self._wrap(adapter, MemoryScope.SHARED, name) for name, adapter in (pools or {}).items()
+        }
 
     # ------------------------------------------------------------------
     # Registration
@@ -71,7 +80,24 @@ class MemoryRouter:
 
     def register_pool(self, name: str, adapter: MemoryAdapter) -> None:
         """Register (or replace) the backend serving a named shared pool."""
-        self._pools[name] = adapter
+        self._pools[name] = self._wrap(adapter, MemoryScope.SHARED, name)
+
+    def _wrap(self, adapter: MemoryAdapter, scope: MemoryScope, pool_name: str | None = None) -> MemoryAdapter:
+        """Wrap a raw backend in a ``ResilientTier`` with this tier's config slice.
+
+        Idempotent: an already-wrapped adapter is returned unchanged, so re-wiring
+        a pool never double-wraps. Each wrapper gets its own circuit breaker.
+        """
+        if isinstance(adapter, ResilientTier):
+            return adapter
+        if scope is MemoryScope.PRIVATE:
+            config, label = self._resilience.private, "private"
+        elif scope is MemoryScope.GLOBAL:
+            config, label = self._resilience.global_, "global"
+        else:
+            config, label = self._resilience.for_shared(pool_name or ""), f"shared:{pool_name}"
+        breaker = CircuitBreaker(fail_threshold=config.fail_threshold, reset_after_seconds=config.reset_after_seconds)
+        return ResilientTier(adapter, scope=scope, label=label, config=config, breaker=breaker)
 
     # ------------------------------------------------------------------
     # Write routing
