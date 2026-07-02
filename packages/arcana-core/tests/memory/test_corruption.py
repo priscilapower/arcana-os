@@ -101,6 +101,11 @@ async def test_detect_on_read_surfaces_corruption(tmp_path: Path):
     with pytest.raises(MemoryCorruptError):
         await a.search(MemoryQuery(text="sky"))
 
+    # Surfacing corruption must also release the underlying connection. aiosqlite
+    # runs each connection on a non-daemon thread; leaving it open leaks that
+    # thread and blocks interpreter shutdown (a hung test process, not a failure).
+    assert a._conn is None
+
 
 # --------------------------------------------------------------------------
 # Quarantine latch

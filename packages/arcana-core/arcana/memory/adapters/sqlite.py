@@ -161,6 +161,29 @@ class SQLiteAdapter:
             await self._conn.close()
             self._conn = None
 
+    async def _close_conn_quietly(self) -> None:
+        """Drop the underlying connection, swallowing any close error.
+
+        Called when a read/write surfaces corruption: the store is quarantined
+        for the rest of its lifetime (``_corrupt`` latches), so keeping the
+        aiosqlite connection open only leaks its worker thread — a non-daemon
+        thread that blocks interpreter shutdown. Releasing it lets the process
+        exit cleanly while the ``_corrupt`` latch keeps subsequent calls failing.
+        """
+        conn, self._conn = self._conn, None
+        if conn is not None:
+            try:
+                await conn.close()
+            except Exception:  # noqa: BLE001 — we are already failing; a close error is moot
+                pass
+
+    async def _fail_translated(self, exc: aiosqlite.Error, prefix: str) -> MemoryStorageError:
+        """Translate a driver error and, if it is corruption, release the connection."""
+        err = self._translate_sqlite_error(exc, prefix)
+        if isinstance(err, MemoryCorruptError):
+            await self._close_conn_quietly()
+        return err
+
     async def health_check(self) -> AdapterHealth:
         """Probe the backend with a trivial query. Never raises.
 
@@ -227,7 +250,7 @@ class SQLiteAdapter:
             await conn.execute(_sql.UPSERT, _sql.entry_to_row(entry))
             await conn.commit()
         except aiosqlite.Error as exc:
-            raise self._translate_sqlite_error(exc, f"write failed for entry {entry.id}") from exc
+            raise await self._fail_translated(exc, f"write failed for entry {entry.id}") from exc
 
         # Importance-based promotion. The entry's own rule gates on scope == PRIVATE,
         # so the GLOBAL copy can never re-promote (no recursion). Same id keeps the
@@ -257,7 +280,7 @@ class SQLiteAdapter:
             cursor = await conn.execute(sql, params)
             rows = await cursor.fetchall()
         except aiosqlite.Error as exc:
-            raise self._translate_sqlite_error(exc, "search failed") from exc
+            raise await self._fail_translated(exc, "search failed") from exc
 
         # Decode/validation failures (e.g. corrupt JSON in a list column) are
         # translated too, so callers only ever see MemoryStorageError.
@@ -322,7 +345,7 @@ class SQLiteAdapter:
                     archived = len(ids)
             await conn.commit()
         except aiosqlite.Error as exc:
-            raise self._translate_sqlite_error(exc, "prune failed") from exc
+            raise await self._fail_translated(exc, "prune failed") from exc
 
         report = PruneReport(scanned=scanned, archived=archived, purged=purged)
         self._emit_prune(report)
