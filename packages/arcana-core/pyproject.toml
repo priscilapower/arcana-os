@@ -57,3 +57,6 @@ packages = ["arcana"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "--cov=arcana --cov-report=term-missing"
+markers = [
+    "llm_eval: tests that need live LLM/embedding backends; excluded from the default CI lane",
+]

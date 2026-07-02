@@ -15,10 +15,14 @@ from arcana.types.memory import (
     AdapterHealth,
     EmbeddingMeta,
     MemoryAdapter,
+    MemoryEdge,
     MemoryEntry,
     MemoryQuery,
     MemoryScope,
     MemoryType,
+    PruneMode,
+    PrunePolicy,
+    PruneReport,
     RetrievalMode,
 )
 from arcana.types.model import (
@@ -63,6 +67,7 @@ __all__ = [
     "AgentConfig",
     # Memory
     "MemoryAdapter",
+    "MemoryEdge",
     "MemoryEntry",
     "MemoryQuery",
     "MemoryType",
@@ -71,6 +76,9 @@ __all__ = [
     "AdapterCapabilities",
     "AdapterHealth",
     "EmbeddingMeta",
+    "PruneMode",
+    "PrunePolicy",
+    "PruneReport",
     # Model
     "ModelConnection",
     "ModelProvider",

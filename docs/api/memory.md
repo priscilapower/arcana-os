@@ -209,19 +209,261 @@ results = await memory.search(
 An entry surfaced by only one leg contributes 0 for the other. With no healthy
 embedder, hybrid degrades to keyword-only (the BM25 leg alone).
 
-## What the memory layer does *not* do yet
+## Folder connector (Markdown)
 
-`search()` now covers keyword (BM25), semantic (vector), and hybrid retrieval
-with metadata filtering, and the embedding gateway resolves and pins an embedder
-per database. Still to come: cross-tier **federation** — routing reads and
-fanning out writes across private, shared, and global stores, and a streaming
-search that merges results from all tiers.
+`MarkdownFolderAdapter` exposes a directory of Markdown notes as retrievable
+memory — the zero-setup way to make an Obsidian vault (or any notes folder)
+searchable by an agent. It implements the same `MemoryAdapter` protocol, so it
+registers as a federation tier or attaches to an agent's memory slot with
+nothing but a folder path: no plugin, no server, no sync job.
+
+One `.md`/`.markdown` file becomes one `MemoryEntry`. The id is a stable `uuid5`
+of the file's root-relative path, so re-reads — and any future ingest into
+SQLite — upsert instead of duplicating, and the federation dedups a folder note
+against an ingested copy by that shared id. YAML frontmatter maps to fields
+(`type`, `importance`, `pinned`, `tags`), Obsidian `#hashtags` fold into tags,
+and malformed frontmatter is tolerated — one bad note never fails the scan.
+
+The folder has no FTS5 or vector index, so every retrieval mode **collapses to
+keyword**: a `semantic` or `hybrid` query is served by the same in-process
+substring/token scan with a one-line degraded notice, never an error. Results
+rank pinned → lexical relevance → importance → recency. A process-local index
+cache keyed by path → (mtime, size) keeps a live read fresh — each `search()`
+restats the tree and re-parses only changed or new files — so the connector
+works standalone with zero sync infrastructure.
+
+It is **read-only**: reads never mutate files, and `write()` raises
+`MemoryWriteError` (the folder is an external source of truth, not a sink).
+Dotfiles and dot-dirs (`.obsidian/`, `.trash/`), symlinks, oversized files
+(`max_file_bytes`, default 1 MiB), and any configurable ignore-glob are skipped;
+`health_check()` is a cheap `stat` + readability probe on the root and never
+raises.
+
+```python
+from pathlib import Path
+from uuid import uuid4
+
+from arcana.memory import MarkdownFolderAdapter
+from arcana.types import MemoryQuery, MemoryScope
+
+vault = MarkdownFolderAdapter(
+    Path("~/Documents/MyVault").expanduser(),
+    agent_id=uuid4(),
+    scope=MemoryScope.SHARED,        # e.g. registered as a shared read tier
+    pool_name="vault",
+)
+results = await vault.search(MemoryQuery(text="metric units", limit=5))
+```
+
+## Pruning
+
+`prune()` removes low-value entries per a
+[`PrunePolicy`](types.md#arcana.types.memory.PrunePolicy). The `min_importance`
+floor and the `max_entries` cap compose into one victim set (an entry is removed
+if it falls below the floor *or* sits outside the top-N by importance), and
+**pinned entries are never touched**. `PruneMode.ARCHIVE` soft-deletes (sets
+`archived`, hiding the entry from search but keeping it recoverable);
+`PruneMode.PURGE` hard-deletes the row — and its vector, if a `vec0` index
+exists. A [`PruneReport`](types.md#arcana.types.memory.PruneReport) records what
+was scanned, archived, and purged.
+
+```python
+from arcana.types import PrunePolicy, PruneMode
+
+report = await memory.prune(PrunePolicy(min_importance=0.2, max_entries=10_000))
+```
+
+## Knowledge graph (edges)
+
+Beyond similarity, memory carries an explicit graph: typed, directed **edges**
+between nodes, stored in a `memory_edges` table (migration `v4`) that lives in
+the same SQLite database as the rows — a property graph, no separate engine.
+`EdgeStore` is its read/write layer. An edge is a
+[`MemoryEdge`](types.md#arcana.types.memory.MemoryEdge): `src_id → dst_id` under
+a `relation`, tagged by the `source` that produced it and carrying a
+`confidence`. Endpoints are stable node ids, so an edge can relate nodes that
+live in any tier — a folder connector's `uuid5` note id is a valid endpoint even
+though it is not a stored row.
+
+The `(src_id, dst_id, relation)` primary key makes writes idempotent. A producer
+owns its `source` and rewrites exactly that set with `replace_source()`, so a
+re-index stays convergent as links are added, removed, or re-pointed.
+`neighbors()` returns the ids one hop away in either direction — the seed→expand
+primitive for graph-aware retrieval.
+
+### Wikilinks → edges
+
+`WikilinkEdgeExtractor` populates the graph from a Markdown folder: it parses
+Obsidian `[[wikilinks]]` (and `![[embeds]]`) out of the notes a
+`MarkdownFolderAdapter` already reads and writes them as `references` edges. It
+is fully **deterministic** — regex over text, resolution by filename or path, no
+model in the loop — so it carries none of the hallucinated-edge risk that
+inferred edges would. Targets resolve within the folder (a bare `[[Note]]` by
+basename, `[[folder/Note]]` by path); ambiguous and dangling links are skipped
+and counted, never guessed. Each `reindex()` rewrites the whole `wikilink` edge
+set and returns an `EdgeIndexReport` tally.
+
+```python
+from arcana.memory import (
+    EdgeStore,
+    MarkdownFolderAdapter,
+    SQLiteAdapter,
+    WikilinkEdgeExtractor,
+)
+
+reader = MarkdownFolderAdapter(vault_path, agent_id)
+edges = EdgeStore(SQLiteAdapter.for_agent(agent_id))
+await edges.connect()
+
+report = await WikilinkEdgeExtractor(reader, edges).reindex()
+neighbours = await edges.neighbors(note_id)   # ids one hop away
+```
+
+!!! note "Populates, doesn't traverse"
+    The extractor writes edges; consuming them at read time — seed by
+    vector/keyword, expand along edges, re-rank — is a federation concern and is
+    not wired into the read path yet.
+
+## Federation across tiers
+
+A `MemoryFederation` presents many tier backends as a single `MemoryAdapter`, so
+an Agent holds it exactly where it would hold one store and the topology stays
+invisible. Three scopes make up the topology:
+
+- **private** — the agent's own store (the durability anchor);
+- **shared** — named pools an agent group reads and writes;
+- **global** — the shared-by-all tier, the mechanism behind "all agents read;
+  The World writes".
+
+A `MemoryRouter` owns the pure routing policy; the federation performs the I/O.
+
+- **Fan-out writes** — `route_write()` decides the target tiers, and the
+  federation writes each concurrently. A high-importance (`>= 0.9`) `PRIVATE`
+  entry is also written to `GLOBAL` as a scope-rewritten copy (promotion, same
+  `id`). Writes are **not transactional** across tiers.
+- **Merged reads** — `route_read()` fans a query across the routed tiers
+  concurrently; results are deduplicated by `id` (the most-local tier wins) and
+  re-ranked by the agent's [`MemoryWeights`](cards.md) before truncation to
+  `query.limit`. `stream_search()` yields the same ranked sequence one entry at
+  a time.
+
+Reads and writes treat failure differently, on purpose: a failed *read* tier is
+dropped so the agent still sees the other tiers' results (partial memory beats
+none), while a failed *private write* raises `MemoryWriteError` — a lost write to
+the durability anchor is data loss the caller must know about. `SHARED`/`GLOBAL`
+write failures degrade instead (a degraded `GLOBAL` simply pauses promotion).
+
+```python
+from arcana.memory import MemoryFederation, MemoryRouter, SQLiteAdapter
+
+router = MemoryRouter(
+    private=SQLiteAdapter.for_agent(agent_id),
+    global_=SQLiteAdapter(global_db_path),
+    pools={"team-research": SQLiteAdapter(pool_db_path)},
+    weights=agent_config.memory_weights,
+)
+memory = MemoryFederation(router)
+
+await memory.write(entry)                    # fans out to every routed tier
+results = await memory.search(MemoryQuery(agent_id=agent_id))  # merged + ranked
+```
+
+## Resilience
+
+The router wraps every tier in a `ResilientTier` before handing it to the
+federation, so a slow, locked, or corrupt store can never stall or sink a whole
+session. Each wrapper bounds calls with a **timeout**, contains failures behind a
+per-tier **circuit breaker**, and surfaces the thinning as a
+[`MemoryDegradedEvent`](observability.md#events) rather than swallowing it
+silently.
+
+- **Reads are total** — a timeout, open breaker, corruption, or backend error
+  yields `[]` after emitting a degraded event.
+- **Writes are partial** — the same conditions raise `TierWriteFailed` carrying
+  the tier's scope, so the federation decides the blast radius (`PRIVATE` fatal,
+  `SHARED`/`GLOBAL` degrade).
+
+A `CircuitBreaker` trips after `fail_threshold` consecutive failures during real
+traffic, fails fast while `OPEN`, then allows one `HALF_OPEN` probe once
+`reset_after_seconds` elapses. Corruption is special: a `MemoryCorruptError` is a
+session-long condition, so it *forces* the breaker open (quarantine) rather than
+counting as one transient failure.
+
+Timeout budgets and breaker thresholds are per tier — a keyword read hits local
+SQLite, while a semantic read may call a remote embedder — and configurable via
+`~/.arcana/connections/memory-adapters.json` (a missing file yields safe
+defaults, so existing programmatic wiring keeps working):
+
+```json
+{
+  "private":       { "read_timeout_ms": 250, "semantic_timeout_ms": 1500, "write_timeout_ms": 500 },
+  "global":        { "read_timeout_ms": 400, "write_timeout_ms": 600 },
+  "shared":        { "team-research": { "read_timeout_ms": 400 } },
+  "default_shared": { "read_timeout_ms": 400, "write_timeout_ms": 600 }
+}
+```
+
+## Background jobs
+
+Post-session extraction and periodic consolidation are meant to run *off* the
+request path. `BackgroundJobQueue` models that as a bounded queue with
+load-shedding: `submit()` never blocks, always accepting **critical** jobs (e.g.
+a user-confirmed preference) while shedding **non-critical** jobs once the
+backlog's drain estimate (`depth × EWMA(service time)`) exceeds its headroom.
+
+!!! note "Design-ahead, not yet wired"
+    Extraction is still an inline synchronous write in `Agent`; nothing drains
+    this queue in the live path yet. Only the queue interface and its
+    depth/drain metrics ship today — the consumer loop lands when consolidation
+    actually moves off the request path.
 
 ## Adapters
 
 ::: arcana.memory.adapters.sqlite.SQLiteAdapter
 
 ::: arcana.memory.adapters.vector.VectorAdapter
+
+::: arcana.memory.adapters.markdown.MarkdownFolderAdapter
+
+::: arcana.memory.adapters.markdown.ScannedNote
+
+## Knowledge graph
+
+::: arcana.memory.edges.EdgeStore
+
+::: arcana.memory.wikilinks.WikilinkEdgeExtractor
+
+::: arcana.memory.wikilinks.EdgeIndexReport
+
+## Federation and routing
+
+::: arcana.memory.federation.MemoryFederation
+
+::: arcana.memory.router.MemoryRouter
+
+::: arcana.memory.router.TierBackend
+
+## Resilience
+
+::: arcana.memory.resilience.ResilientTier
+
+::: arcana.memory.resilience.CircuitBreaker
+
+::: arcana.memory.resilience.BreakerState
+
+## Configuration
+
+::: arcana.memory.config.MemoryResilienceConfig
+
+::: arcana.memory.config.TierResilienceConfig
+
+## Background jobs
+
+::: arcana.memory.jobs.BackgroundJobQueue
+
+::: arcana.memory.jobs.MemoryJob
+
+::: arcana.memory.jobs.MemoryJobKind
 
 ## Embedding gateway
 
@@ -239,4 +481,12 @@ search that merges results from all tiers.
 
 ::: arcana.memory.errors.MemoryStorageError
 
+::: arcana.memory.errors.MemoryCorruptError
+
 ::: arcana.memory.errors.MemoryNotConnectedError
+
+::: arcana.memory.errors.MemoryRoutingError
+
+::: arcana.memory.errors.MemoryWriteError
+
+::: arcana.memory.errors.TierWriteFailed

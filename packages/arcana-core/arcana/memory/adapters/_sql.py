@@ -37,6 +37,7 @@ COLUMNS: tuple[str, ...] = (
     "created_at",
     "last_accessed_at",
     "access_count",
+    "archived",
 )
 
 _COL_LIST = ", ".join(COLUMNS)
@@ -58,6 +59,55 @@ def touch_sql(n: int) -> str:
     """UPDATE that bumps access tracking for ``n`` ids (one ``?`` per id)."""
     marks = ", ".join("?" for _ in range(n))
     return f"UPDATE memory_entries SET access_count = access_count + 1, last_accessed_at = ? WHERE id IN ({marks})"
+
+
+# --------------------------------------------------------------------------
+# Pruning — importance-based removal (never touches pinned entries)
+# --------------------------------------------------------------------------
+
+# Population a prune pass considers: non-pinned, not-yet-archived entries. Used
+# as the ``scanned`` denominator in a PruneReport.
+PRUNABLE_COUNT = "SELECT COUNT(*) FROM memory_entries WHERE pinned = 0 AND archived = 0"
+
+
+def prune_below_importance_sql(*, include_archived: bool) -> str:
+    """Ids of non-pinned entries strictly below an importance floor (one ``?``).
+
+    ``include_archived`` widens the candidates to already-archived rows too —
+    used by PURGE so a hard-delete can also clear previously soft-deleted rows.
+    """
+    archived = "" if include_archived else " AND archived = 0"
+    return f"SELECT id FROM memory_entries WHERE pinned = 0 AND importance < ?{archived}"
+
+
+def prune_over_cap_sql() -> str:
+    """Ids of non-pinned active entries beyond the top-N by importance (one ``?`` = N).
+
+    Keeps the best entries (importance, then recency) and skips the first N via
+    ``OFFSET``; everything after the cap is a victim. Always scoped to active
+    (archived=0) rows — the cap bounds the live store, not the archive.
+    """
+    return (
+        "SELECT id FROM memory_entries WHERE pinned = 0 AND archived = 0 "
+        "ORDER BY importance DESC, last_accessed_at DESC LIMIT -1 OFFSET ?"
+    )
+
+
+def archive_ids_sql(n: int) -> str:
+    """UPDATE that soft-deletes ``n`` ids (one ``?`` per id)."""
+    marks = ", ".join("?" for _ in range(n))
+    return f"UPDATE memory_entries SET archived = 1 WHERE id IN ({marks})"
+
+
+def delete_ids_sql(n: int) -> str:
+    """DELETE for ``n`` ids (one ``?`` per id). Fires the FTS5 cleanup trigger."""
+    marks = ", ".join("?" for _ in range(n))
+    return f"DELETE FROM memory_entries WHERE id IN ({marks})"
+
+
+# vec0 has no delete trigger (it is a separate virtual table), so a PURGE must
+# clear vector rows itself — but only if the index exists for this database.
+TABLE_EXISTS = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?"
 
 
 # --------------------------------------------------------------------------
@@ -88,6 +138,7 @@ def entry_to_row(entry: MemoryEntry) -> list[Any]:
         entry.created_at.isoformat(),
         entry.last_accessed_at.isoformat(),
         entry.access_count,
+        int(entry.archived),
     ]
 
 
@@ -121,6 +172,7 @@ def row_to_entry(row: Any) -> MemoryEntry:
             "created_at": r["created_at"],
             "last_accessed_at": r["last_accessed_at"],
             "access_count": r["access_count"],
+            "archived": bool(r["archived"]),
         }
     )
 
@@ -164,8 +216,8 @@ def _where_clauses(query: MemoryQuery, alias: str = "") -> tuple[list[str], list
     sit on the bare ``memory_entries`` table or on the aliased side of the FTS5
     join. ``query.text`` does not appear here — relevance ranking is the search
     builders' job (FTS5 ``MATCH`` for keyword/BM25). ``query.keywords`` keep their
-    naive substring ``LIKE`` as a complementary filter. ``include_archived`` is
-    intentionally a no-op: MemoryEntry has no archival field yet.
+    naive substring ``LIKE`` as a complementary filter. Archived (soft-deleted)
+    entries are excluded unless ``query.include_archived`` is set.
     """
     p = f"{alias}." if alias else ""
     clauses: list[str] = []
@@ -199,6 +251,9 @@ def _where_clauses(query: MemoryQuery, alias: str = "") -> tuple[list[str], list
 
     if not query.include_conflicted:
         clauses.append(f"{p}has_conflict = 0")
+
+    if not query.include_archived:
+        clauses.append(f"{p}archived = 0")
 
     for kw in query.keywords:
         clauses.append(f"{p}content LIKE ?")

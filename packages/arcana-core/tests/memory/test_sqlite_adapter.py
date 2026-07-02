@@ -14,6 +14,8 @@ from arcana.types import (
     MemoryQuery,
     MemoryScope,
     MemoryType,
+    PruneMode,
+    PrunePolicy,
 )
 from arcana.types.memory import ConfidenceSource, RetrievalMode
 
@@ -322,6 +324,91 @@ async def test_migration_rollback_keeps_version(tmp_path: Path):
     tables = await (await conn.execute("SELECT name FROM sqlite_master WHERE name='ok'")).fetchall()
     assert tables == []
     await conn.close()
+
+
+async def test_prune_archives_below_importance(adapter: SQLiteAdapter):
+    agent = uuid4()
+    await adapter.write(_entry(agent_id=agent, importance=0.05, content="weak"))
+    await adapter.write(_entry(agent_id=agent, importance=0.8, content="strong"))
+
+    report = await adapter.prune(PrunePolicy(min_importance=0.1))
+    assert report.archived == 1
+    assert report.purged == 0
+    assert report.scanned == 2
+
+    survivors = await adapter.search(MemoryQuery(agent_id=agent))
+    assert [e.content for e in survivors] == ["strong"]
+
+
+async def test_prune_never_touches_pinned(adapter: SQLiteAdapter):
+    agent = uuid4()
+    await adapter.write(_entry(agent_id=agent, importance=0.01, content="pinned-weak", pinned=True))
+
+    report = await adapter.prune(PrunePolicy(min_importance=0.5))
+    assert report.archived == 0
+    assert len(await adapter.search(MemoryQuery(agent_id=agent))) == 1
+
+
+async def test_prune_max_entries_keeps_top_by_importance(adapter: SQLiteAdapter):
+    agent = uuid4()
+    for i, imp in enumerate([0.1, 0.5, 0.9]):
+        await adapter.write(_entry(agent_id=agent, importance=imp, content=f"e{i}"))
+
+    report = await adapter.prune(PrunePolicy(max_entries=2))
+    assert report.archived == 1  # the lowest-importance entry is dropped
+
+    survivors = await adapter.search(MemoryQuery(agent_id=agent))
+    assert {e.content for e in survivors} == {"e1", "e2"}  # 0.5 and 0.9 kept
+
+
+async def test_archived_hidden_unless_include_archived(adapter: SQLiteAdapter):
+    agent = uuid4()
+    await adapter.write(_entry(agent_id=agent, importance=0.05, content="weak"))
+    await adapter.prune(PrunePolicy(min_importance=0.1))
+
+    assert await adapter.search(MemoryQuery(agent_id=agent)) == []
+    revealed = await adapter.search(MemoryQuery(agent_id=agent, include_archived=True))
+    assert len(revealed) == 1
+    assert revealed[0].archived is True
+
+
+async def test_prune_purge_hard_deletes(adapter: SQLiteAdapter):
+    agent = uuid4()
+    await adapter.write(_entry(agent_id=agent, importance=0.05, content="weak"))
+
+    report = await adapter.prune(PrunePolicy(min_importance=0.1, mode=PruneMode.PURGE))
+    assert report.purged == 1
+    assert report.archived == 0
+    # gone for good — not even include_archived brings it back
+    assert await adapter.search(MemoryQuery(agent_id=agent, include_archived=True)) == []
+
+
+async def test_prune_purge_also_clears_archived_rows(adapter: SQLiteAdapter):
+    agent = uuid4()
+    await adapter.write(_entry(agent_id=agent, importance=0.05, content="weak"))
+    await adapter.prune(PrunePolicy(min_importance=0.1))  # archive first
+    report = await adapter.prune(PrunePolicy(min_importance=0.1, mode=PruneMode.PURGE))
+    assert report.purged == 1
+    assert await adapter.search(MemoryQuery(agent_id=agent, include_archived=True)) == []
+
+
+async def test_archived_survives_round_trip(adapter: SQLiteAdapter):
+    agent = uuid4()
+    await adapter.write(_entry(agent_id=agent, importance=0.05, content="weak"))
+    await adapter.prune(PrunePolicy(min_importance=0.1))
+    got = await adapter.search(MemoryQuery(agent_id=agent, include_archived=True))
+    assert got[0].archived is True
+
+
+async def test_prune_translates_driver_errors(adapter: SQLiteAdapter):
+    # Drop the table out from under the adapter; the driver error must surface as
+    # MemoryStorageError, not a raw aiosqlite exception.
+    conn = adapter._conn
+    assert conn is not None
+    await conn.execute("DROP TABLE memory_entries")
+    await conn.commit()
+    with pytest.raises(MemoryStorageError, match="prune failed"):
+        await adapter.prune(PrunePolicy(min_importance=0.1))
 
 
 async def test_corrupt_row_raises_storage_error(adapter: SQLiteAdapter):

@@ -15,7 +15,16 @@ import pytest
 
 from arcana.memory import EmbeddingGateway, MemoryStorageError, SQLiteAdapter, VectorAdapter
 from arcana.models.adapters.embedding import EmbeddingAdapter
-from arcana.types import AdapterHealth, MemoryEntry, MemoryQuery, MemoryScope, MemoryType, RetrievalMode
+from arcana.types import (
+    AdapterHealth,
+    MemoryEntry,
+    MemoryQuery,
+    MemoryScope,
+    MemoryType,
+    PruneMode,
+    PrunePolicy,
+    RetrievalMode,
+)
 
 # --------------------------------------------------------------------------
 # Fixtures / helpers
@@ -137,6 +146,25 @@ async def test_capabilities_reports_vector(vec: VectorAdapter):
     caps = vec.capabilities()
     assert caps.supports_vector is True
     assert caps.supports_full_text is True
+
+
+async def test_purge_clears_vector_row(vec: VectorAdapter):
+    agent = uuid4()
+    keep = _entry(agent_id=agent, content="alpha alpha", importance=0.8)
+    drop = _entry(agent_id=agent, content="beta beta", importance=0.05)
+    await vec.write(keep)
+    await vec.write(drop)
+
+    report = await vec.prune(PrunePolicy(min_importance=0.1, mode=PruneMode.PURGE))
+    assert report.purged == 1
+
+    # The vec0 row is gone too: a semantic search can never surface the purged id.
+    results = await vec.search(MemoryQuery(agent_id=agent, text="beta", retrieval_mode=RetrievalMode.semantic))
+    assert all(e.id != drop.id for e in results)
+
+    conn = vec._sqlite.connection
+    rows = await (await conn.execute("SELECT entry_id FROM memory_vectors")).fetchall()
+    assert {r[0] for r in rows} == {str(keep.id)}
 
 
 # --------------------------------------------------------------------------

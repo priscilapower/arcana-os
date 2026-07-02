@@ -24,7 +24,8 @@ MIGRATION: tuple[int, list[str]] = (
             tags              TEXT NOT NULL DEFAULT '[]',
             created_at        TEXT NOT NULL,
             last_accessed_at  TEXT NOT NULL,
-            access_count      INTEGER NOT NULL DEFAULT 0
+            access_count      INTEGER NOT NULL DEFAULT 0,
+            archived          INTEGER NOT NULL DEFAULT 0
         )
         """,
         "CREATE INDEX idx_mem_scope_agent ON memory_entries(scope, agent_id)",
@@ -32,5 +33,6 @@ MIGRATION: tuple[int, list[str]] = (
         "CREATE INDEX idx_mem_pool        ON memory_entries(pool_name)",
         "CREATE INDEX idx_mem_importance  ON memory_entries(importance DESC)",
         "CREATE INDEX idx_mem_created     ON memory_entries(created_at DESC)",
+        "CREATE INDEX idx_mem_archived    ON memory_entries(archived)",
     ],
 )

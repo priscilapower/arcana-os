@@ -1,6 +1,9 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
+import pytest
+from pydantic import ValidationError
+
 from arcana.types.memory import (
     AdapterCapabilities,
     AdapterHealth,
@@ -14,6 +17,9 @@ from arcana.types.memory import (
     MemoryScope,
     MemoryType,
     MemoryWhiteboard,
+    PruneMode,
+    PrunePolicy,
+    PruneReport,
     RetrievalMode,
 )
 
@@ -221,3 +227,28 @@ def test_adapter_health_unhealthy_with_message():
     health = AdapterHealth(adapter_id="sqlite-private", healthy=False, message="Connection refused")
     assert health.healthy is False
     assert "refused" in health.message
+
+
+# ---------------------------------------------------------------------------
+# Pruning types
+# ---------------------------------------------------------------------------
+
+
+def test_memory_entry_archived_defaults_false():
+    assert _make_entry().archived is False
+
+
+def test_prune_policy_requires_a_criterion():
+    with pytest.raises(ValidationError):
+        PrunePolicy()
+
+
+def test_prune_policy_accepts_either_criterion():
+    assert PrunePolicy(min_importance=0.2).mode is PruneMode.ARCHIVE  # default mode
+    assert PrunePolicy(max_entries=100).max_entries == 100
+    assert PrunePolicy(min_importance=0.1, max_entries=50, mode=PruneMode.PURGE).mode is PruneMode.PURGE
+
+
+def test_prune_report_defaults():
+    report = PruneReport()
+    assert (report.scanned, report.archived, report.purged, report.tiers) == (0, 0, 0, 1)

@@ -18,6 +18,8 @@ from pathlib import Path
 from arcana.observability.audit import AuditLog
 from arcana.observability.events import (
     AuditEvent,
+    MemoryDegradedEvent,
+    MemoryPruneEvent,
     MemoryReadEvent,
     MemoryWriteEvent,
     ModelCallEvent,
@@ -56,6 +58,21 @@ def get_audit_log() -> AuditLog | None:
     return _audit_log
 
 
+def emit_degraded(event: MemoryDegradedEvent) -> None:
+    """Record a memory degradation to the audit log and metrics (best effort).
+
+    Observability must never break the memory path, so every failure here is
+    swallowed. Mirrors the best-effort emission the adapters already use.
+    """
+    try:
+        audit = get_audit_log()
+        if audit is not None:
+            audit.append(event)
+        get_metrics().record_memory_degraded(tier=event.tier, operation=event.operation, reason=event.reason)
+    except Exception:
+        pass
+
+
 __all__ = [
     # Configuration
     "configure_observability",
@@ -64,6 +81,8 @@ __all__ = [
     "get_audit_log",
     "get_tracer",
     "get_metrics",
+    # Emitters
+    "emit_degraded",
     # Classes
     "AuditLog",
     "ArcanaMetrics",
@@ -74,5 +93,7 @@ __all__ = [
     "RoutingEvent",
     "MemoryReadEvent",
     "MemoryWriteEvent",
+    "MemoryPruneEvent",
+    "MemoryDegradedEvent",
     "event_to_dict",
 ]

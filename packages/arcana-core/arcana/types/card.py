@@ -4,6 +4,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel
 
+from arcana.types.memory import MemoryType
+
 
 class Card(StrEnum):
     """The 22 Major Arcana. Assign one to any agent."""
@@ -46,6 +48,15 @@ class MemoryWeights(BaseModel):
     semantic: float = 0.5
     procedural: float = 0.5
     preference: float = 0.5
+
+    def for_type(self, memory_type: MemoryType) -> float:
+        """Return the weight this agent places on a given memory type."""
+        return {
+            MemoryType.EPISODIC: self.episodic,
+            MemoryType.SEMANTIC: self.semantic,
+            MemoryType.PROCEDURAL: self.procedural,
+            MemoryType.PREFERENCE: self.preference,
+        }[memory_type]
 
 
 class CardDecayConfig(BaseModel):

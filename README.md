@@ -51,7 +51,7 @@ async with ModelGateway(ConnectionStore()) as gw:
     result = await agent.run("summarize recent advances in RAG")
 ```
 
-It includes the card engine and all 22 Major Arcana, the model gateway with adapters for Ollama, Anthropic, and OpenAI-compatible providers, and agent + session persistence. See the [`arcana-core` README](packages/arcana-core/README.md) for the full module map.
+It includes the card engine and all 22 Major Arcana, the model gateway with adapters for Ollama, Anthropic, and OpenAI-compatible providers, agent + session persistence, and a federated memory layer (tiered SQLite / vector stores, an Obsidian-vault folder connector, and a wikilink knowledge graph). See the [`arcana-core` README](packages/arcana-core/README.md) for the full module map.
 
 ### [`arcana-cli`](packages/arcana-cli/README.md) — the command line
 
@@ -112,7 +112,7 @@ Requirements: Python 3.11+ (the curl installer fetches a managed one for you). F
 
 ## Roadmap
 
-This is the **Phase 1a MVP** — card-configured agents that run statelessly today. The next phase adds federated memory, a tool/MCP gateway, and **The World**, a meta-agent (card XXI) that routes work across agents; their type systems are already modelled in `arcana-core`, ready to be wired up.
+This is the **Phase 1a MVP** — card-configured agents that run statelessly today. The federated memory layer already ships in `arcana-core` (usable as a library); the next phase wires it into the agent run path and adds a tool/MCP gateway and **The World**, a meta-agent (card XXI) that routes work across agents.
 
 ---
 
