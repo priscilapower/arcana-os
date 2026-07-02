@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 import arcana_cli.commands.run as run_mod
 from arcana.agents.registry import AgentRegistry
 from arcana.agents.session_manager import SessionManager
+from arcana.memory.federation import MemoryFederation
 from arcana.types.card import Card
 from arcana.types.model import ModelConnection, ModelProvider
 from arcana.types.session import MessageRole
@@ -68,6 +69,16 @@ def test_init_already_exists_is_noop(tmp_path, monkeypatch):
     result = runner.invoke(app, ["init"])
     assert result.exit_code == 0
     assert "already exists" in result.output
+
+
+def test_init_writes_memory_config_block(tmp_path, monkeypatch):
+    fake_home = tmp_path / ".arcana"
+    monkeypatch.setattr(run_mod, "ARCANA_HOME", fake_home)
+    result = runner.invoke(app, ["init"])
+    assert result.exit_code == 0
+    config = json.loads((fake_home / "config.json").read_text())
+    assert config["memory"] == {"enabled": True, "private": "sqlite", "global": "vector", "pools": []}
+    assert (fake_home / "vector").is_dir()
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +195,67 @@ def test_run_with_agent_by_uuid(agent_fixture, arcana_home, monkeypatch):
     result = runner.invoke(app, ["run", "hello", "--agent", str(agent_fixture.id)])
     assert result.exit_code == 0, result.output
     assert "UUID lookup works." in result.output
+
+
+# ---------------------------------------------------------------------------
+# arcana run — memory injection + teardown
+# ---------------------------------------------------------------------------
+
+
+def _memory_db(arcana_home, agent_id) -> "object":
+    return arcana_home / "agents" / str(agent_id) / "memory.db"
+
+
+def test_run_injects_memory_and_tears_it_down(agent_fixture, arcana_home, monkeypatch):
+    """Default run assembles a private federation and closes it after the turn."""
+    closed: list[bool] = []
+    original_aclose = MemoryFederation.aclose
+
+    async def _spy_aclose(self) -> None:
+        closed.append(True)
+        await original_aclose(self)
+
+    mock_runtime = MagicMock()
+    mock_runtime.run = AsyncMock(return_value="remembered")
+
+    monkeypatch.setattr(run_mod, "ModelGateway", _MockGateway)
+    monkeypatch.setattr(run_mod, "_resolve_embedding_gateway", lambda: None)  # SQLite-only, deterministic
+    monkeypatch.setattr(AgentRegistry, "build_runtime", lambda *a, **k: mock_runtime)
+    monkeypatch.setattr(MemoryFederation, "aclose", _spy_aclose)
+
+    result = runner.invoke(app, ["run", "hello", "--agent", "scout"])
+    assert result.exit_code == 0, result.output
+    # Private store was materialised, then the federation was closed with the run.
+    assert _memory_db(arcana_home, agent_fixture.id).exists()
+    assert closed == [True]
+
+
+def test_run_no_memory_is_stateless(agent_fixture, arcana_home, monkeypatch):
+    """--no-memory skips assembly entirely — no per-agent store is created."""
+    mock_runtime = MagicMock()
+    mock_runtime.run = AsyncMock(return_value="stateless")
+
+    monkeypatch.setattr(run_mod, "ModelGateway", _MockGateway)
+    monkeypatch.setattr(AgentRegistry, "build_runtime", lambda *a, **k: mock_runtime)
+
+    result = runner.invoke(app, ["run", "hello", "--agent", "scout", "--no-memory"])
+    assert result.exit_code == 0, result.output
+    assert "stateless" in result.output
+    assert not _memory_db(arcana_home, agent_fixture.id).exists()
+
+
+def test_run_respects_memory_disabled_in_config(agent_fixture, arcana_home, monkeypatch):
+    """A config.json memory block with enabled=false also runs stateless."""
+    (arcana_home / "config.json").write_text(json.dumps({"memory": {"enabled": False}}))
+    mock_runtime = MagicMock()
+    mock_runtime.run = AsyncMock(return_value="off")
+
+    monkeypatch.setattr(run_mod, "ModelGateway", _MockGateway)
+    monkeypatch.setattr(AgentRegistry, "build_runtime", lambda *a, **k: mock_runtime)
+
+    result = runner.invoke(app, ["run", "hello", "--agent", "scout"])
+    assert result.exit_code == 0, result.output
+    assert not _memory_db(arcana_home, agent_fixture.id).exists()
 
 
 # ---------------------------------------------------------------------------

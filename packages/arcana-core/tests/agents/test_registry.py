@@ -1,10 +1,13 @@
 """Tests for AgentRegistry."""
 
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
 
 from arcana.agents.registry import AgentRegistry
+from arcana.agents.session_manager import SessionManager
+from arcana.memory import MemoryFederation
 from arcana.types.card import Card
 from arcana.types.session import MessageRole, SessionStatus
 
@@ -214,6 +217,72 @@ async def test_build_runtime_with_modifier_cards_blends_temperature(tmp_registry
     await agent.run("test blend")
     call_args = gateway.complete.call_args[0][1]
     assert abs(call_args.temperature - 0.50) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# build_runtime_with_memory() — federation assembly + injection
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_with_memory_injects_a_federation(tmp_path, gateway):
+    registry = AgentRegistry(base_dir=tmp_path / "agents")
+    record = registry.create(name="rememberer", card=Card.HERMIT, model=_TEST_MODEL)
+
+    agent, federation = await registry.build_runtime_with_memory(record, gateway, home=tmp_path)
+
+    assert isinstance(federation, MemoryFederation)
+    assert agent.memory is federation
+    assert (tmp_path / "agents" / str(record.id) / "memory.db").exists()
+
+    await federation.aclose()
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_with_memory_disabled_is_stateless(tmp_path, gateway):
+    registry = AgentRegistry(base_dir=tmp_path / "agents")
+    record = registry.create(name="stateless", card=Card.HERMIT, model=_TEST_MODEL)
+
+    agent, federation = await registry.build_runtime_with_memory(record, gateway, home=tmp_path, enabled=False)
+
+    assert federation is None
+    assert agent.memory is None
+    assert not (tmp_path / "agents" / str(record.id) / "memory.db").exists()
+
+
+@pytest.mark.asyncio
+async def test_memory_persists_across_sessions_end_to_end(tmp_path, gateway):
+    """The payoff: a turn's memory written to PRIVATE is recalled in a later session."""
+    registry = AgentRegistry(base_dir=tmp_path / "agents")
+    sm = SessionManager(base_dir=tmp_path / "agents")
+    record = registry.create(name="mnemonic", card=Card.HERMIT, model=_TEST_MODEL)
+
+    # First session: run once, which persists an episodic memory, then close the store.
+    agent1, fed1 = await registry.build_runtime_with_memory(record, gateway, home=tmp_path, session_manager=sm)
+    assert fed1 is not None
+    await agent1.run("remember the alpha protocol", session=sm.start(record.id))
+    await fed1.aclose()
+
+    # A fresh runtime (new session) reopens the same private store and recalls it.
+    agent2, fed2 = await registry.build_runtime_with_memory(record, gateway, home=tmp_path, session_manager=sm)
+    assert fed2 is not None
+    context = await agent2._retrieve_memory_context("alpha")
+    assert "alpha protocol" in context
+    await fed2.aclose()
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_with_memory_passes_explicit_override_through(tmp_path, gateway):
+    registry = AgentRegistry(base_dir=tmp_path / "agents")
+    record = registry.create(name="fake-mem", card=Card.HERMIT, model=_TEST_MODEL)
+    sentinel = MagicMock()
+
+    agent, federation = await registry.build_runtime_with_memory(record, gateway, home=tmp_path, memory=sentinel)
+
+    # An explicit adapter wins: no federation is assembled, nothing is written to disk.
+    assert federation is None
+    assert agent.memory is sentinel
+    assert not (tmp_path / "agents" / str(record.id) / "memory.db").exists()
 
 
 # ---------------------------------------------------------------------------

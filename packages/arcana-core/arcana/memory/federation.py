@@ -170,6 +170,20 @@ class MemoryFederation:
             tiers=len(prunable),
         )
 
+    async def aclose(self) -> None:
+        """Close every tier's backend connection. Safe to call more than once.
+
+        Reaches past the router's resilience wrappers to the real backend and
+        closes it when it supports ``aclose`` (read-only tiers may not). This is
+        the teardown seam a caller uses to release the private SQLite handle and
+        any vector store when a run ends, leaving no open connections behind.
+        """
+        for tier in self._router.all_tiers():
+            backend = tier.adapter.inner if isinstance(tier.adapter, ResilientTier) else tier.adapter
+            closer = getattr(backend, "aclose", None)
+            if closer is not None:
+                await closer()
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------

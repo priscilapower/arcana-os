@@ -9,6 +9,7 @@ pool vs. global) is decided one layer up by ``MemoryFederation``.
 from __future__ import annotations
 
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -433,6 +434,4 @@ class SQLiteAdapter:
 
 
 def _now_iso() -> str:
-    from datetime import UTC, datetime
-
     return datetime.now(UTC).isoformat()

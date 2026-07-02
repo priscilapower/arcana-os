@@ -1,5 +1,6 @@
 """arcana providers — full CRUD for model provider connections."""
 
+import asyncio
 import json
 import os
 import uuid
@@ -8,7 +9,8 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from arcana.models import ConnectionStore
+from arcana.agents.registry import AgentRegistry
+from arcana.models import ConnectionStore, ModelGateway
 from arcana.types.model import ModelConnection, ModelProvider
 from arcana_cli.constants import AGENTS_BASE, CONNECTIONS_PATH
 from arcana_cli.ui.theme import GREEN, ORANGE, TXT3, dim, err, hl, make_table, ok, warn
@@ -72,10 +74,6 @@ def _read_new_key(
 
 def _run_health_check(conn: ModelConnection, store: ConnectionStore) -> None:
     """Probe the connection and print healthy / down. Never raises."""
-    import asyncio
-
-    from arcana.models.gateway import ModelGateway
-
     if not conn.default_model:
         console.print(dim("  Skipping health check — no default model configured."))
         return
@@ -369,8 +367,6 @@ def remove_cmd(
 
     Scans for dependent agents and aborts unless --force is given.
     """
-    from arcana.agents.registry import AgentRegistry
-
     store, conn = _resolve(name)
     provider_str = str(conn.provider)
     conn_name = conn.name
