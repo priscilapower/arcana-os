@@ -111,7 +111,7 @@ The World (XXI) is defined but reserved — it cannot be assigned to an agent ye
 
 | Module | What's implemented |
 |--------|--------------------|
-| `arcana/types/` | All Pydantic models — always import from `arcana.types`. Covers cards, agents, sessions, and models. |
+| `arcana/types/` | All Pydantic models — always import from `arcana.types`. Covers cards, agents, sessions, models, memory, tools, and workspaces. |
 | `arcana/cards/definitions/` | One file per card, each exporting a `TarotCard` instance (all 22 present). |
 | `arcana/cards/registry.py` | `CardRegistry` — `get(Card)`, `all()`. |
 | `arcana/cards/engine.py` | `CardEngine` — blending, `resolve()` → `AgentConfig`, `check_compatibility()`. |
@@ -120,6 +120,9 @@ The World (XXI) is defined but reserved — it cannot be assigned to an agent ye
 | `arcana/agents/session_manager.py` | `SessionManager` — session lifecycle, persisted to disk. |
 | `arcana/models/` | `ModelGateway` (routing, adapter pooling, retry/backoff, error normalization, cost metering), adapters for Ollama / Anthropic / OpenAI-compatible, `ConnectionStore` (keyring-backed secrets), pricing, and a normalized `ModelError` hierarchy. |
 | `arcana/memory/` | The federated memory layer. `MemoryFederation` presents private / shared / global tiers as one `MemoryAdapter`: `SQLiteAdapter` (FTS5 keyword search), optional `VectorAdapter` (sqlite-vec semantic + hybrid), and read-only **connectors** — `MarkdownFolderAdapter` makes an Obsidian vault or notes folder searchable from just a path. A **knowledge-graph** layer (`memory_edges` + `EdgeStore`) links notes into typed edges, populated from `[[wikilinks]]` by `WikilinkEdgeExtractor`. Per-tier resilience (timeouts, circuit breakers) and `PRAGMA user_version` migrations round it out. |
+| `arcana/context/` | `read_soul()` — loads the optional user-owned `~/.arcana/soul.md` context injected into sessions; missing or unreadable is a silent `None`. |
+| `arcana/observability/` | Local-first telemetry: a JSONL `AuditLog` (`~/.arcana/logs/`), OpenTelemetry tracing (optional `[observability]` extra), and metrics — wired through the `Agent` and `ModelGateway`. |
+| `arcana/evals/` | `arcana.evals`, the public evaluation harness: `EvalHarness` runs `EvalCase` suites (cards, memory, decay, blending) scored by a `CompositeJudge` (deterministic `RuleJudge` + optional `LLMJudge`), with JSON result persistence and regression comparison across runs. |
 
 ### Types convention
 
