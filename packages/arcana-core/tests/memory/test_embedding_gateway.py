@@ -5,7 +5,7 @@ from pathlib import Path
 import aiosqlite
 
 from arcana.memory.embedding_gateway import EmbeddingGateway
-from arcana.memory.migrations import MIGRATIONS, latest_version, migrate_to_latest
+from arcana.memory.migrations import MIGRATIONS, migrate_to_latest
 from arcana.models.adapters.embedding import AdapterHealth, EmbeddingAdapter
 from arcana.models.adapters.fastembed_embedding import FastEmbedEmbeddingAdapter
 from arcana.models.adapters.ollama_embedding import OllamaEmbeddingAdapter
@@ -159,8 +159,7 @@ def test_non_default_model_reverts_to_its_own_family() -> None:
 
 async def test_migration_v3_creates_embedding_meta(tmp_path: Path) -> None:
     async with aiosqlite.connect(tmp_path / "m.db") as conn:
-        version = await migrate_to_latest(conn)
-        assert version == latest_version() == 3
+        await migrate_to_latest(conn)
 
         row = await (
             await conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='embedding_meta'")

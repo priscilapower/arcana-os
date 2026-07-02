@@ -195,6 +195,29 @@ class MemoryConflict(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Knowledge-graph edges
+# ---------------------------------------------------------------------------
+
+
+class MemoryEdge(BaseModel):
+    """A directed, typed relation between two memory nodes.
+
+    Endpoints are stable node ids (``src_id`` → ``dst_id``); a node may live in any
+    tier, so an id need not correspond to a ``MemoryEntry`` row (a folder
+    connector's ``uuid5`` note id is a valid endpoint). ``relation`` names the edge
+    type and ``source`` its producer; together with the two endpoints they form the
+    edge's identity — one edge per ``(src_id, dst_id, relation)``.
+    """
+
+    src_id: UUID
+    dst_id: UUID
+    relation: str = "references"  # generic reference; the vocabulary is open (free string)
+    confidence: float = 1.0  # 1.0 for deterministic edges (e.g. parsed wikilinks)
+    source: str = "wikilink"  # producer tag, so a re-index can replace only its own edges
+    created_at: datetime = Field(default_factory=now_utc)
+
+
+# ---------------------------------------------------------------------------
 # Whiteboard — ephemeral task workspace
 # ---------------------------------------------------------------------------
 

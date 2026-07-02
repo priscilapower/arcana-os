@@ -119,6 +119,7 @@ The World (XXI) is defined but reserved — it cannot be assigned to an agent ye
 | `arcana/agents/registry.py` | `AgentRegistry` — CRUD for agent records persisted to `~/.arcana/agents/{id}/agent.json`; `build_runtime()`. |
 | `arcana/agents/session_manager.py` | `SessionManager` — session lifecycle, persisted to disk. |
 | `arcana/models/` | `ModelGateway` (routing, adapter pooling, retry/backoff, error normalization, cost metering), adapters for Ollama / Anthropic / OpenAI-compatible, `ConnectionStore` (keyring-backed secrets), pricing, and a normalized `ModelError` hierarchy. |
+| `arcana/memory/` | The federated memory layer. `MemoryFederation` presents private / shared / global tiers as one `MemoryAdapter`: `SQLiteAdapter` (FTS5 keyword search), optional `VectorAdapter` (sqlite-vec semantic + hybrid), and read-only **connectors** — `MarkdownFolderAdapter` makes an Obsidian vault or notes folder searchable from just a path. A **knowledge-graph** layer (`memory_edges` + `EdgeStore`) links notes into typed edges, populated from `[[wikilinks]]` by `WikilinkEdgeExtractor`. Per-tier resilience (timeouts, circuit breakers) and `PRAGMA user_version` migrations round it out. |
 
 ### Types convention
 
@@ -156,4 +157,4 @@ uv run pytest packages/arcana-core/tests/ -v -m "not llm_eval"
 
 ## Roadmap
 
-This release ships the **Phase 1a MVP**: card-configured, stateless agents on the model gateway. The memory type system (`MemoryEntry`, `MemoryProfile`, `MemoryWeights`) is already modelled and the `Agent` has memory slots ready — federated memory backends, a tool/MCP gateway, and The World meta-agent land in Phase 1b as additive wiring, not a rewrite.
+This release ships the **Phase 1a MVP**: card-configured, stateless agents on the model gateway. The **federated memory layer** now lives in `arcana-core` (tiered backends, folder connectors, and a knowledge-graph edge layer — see the module map), usable directly as a library. Wiring it into the agent run path — plus a tool/MCP gateway and The World meta-agent — lands in Phase 1b as additive work, not a rewrite.

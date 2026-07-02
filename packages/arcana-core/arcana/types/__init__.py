@@ -15,6 +15,7 @@ from arcana.types.memory import (
     AdapterHealth,
     EmbeddingMeta,
     MemoryAdapter,
+    MemoryEdge,
     MemoryEntry,
     MemoryQuery,
     MemoryScope,
@@ -66,6 +67,7 @@ __all__ = [
     "AgentConfig",
     # Memory
     "MemoryAdapter",
+    "MemoryEdge",
     "MemoryEntry",
     "MemoryQuery",
     "MemoryType",
