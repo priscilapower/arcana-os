@@ -89,7 +89,7 @@ def card_styled(card: Card, label: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Status vocabulary  (§2 — fixed: running · thinking · idle · reversed)
+# Status vocabulary  (fixed: running · thinking · idle · reversed)
 # ---------------------------------------------------------------------------
 def status_markup(status: str) -> str:
     """Rich markup string for an agent status dot + label."""
@@ -164,7 +164,7 @@ def prompt_line(command: str) -> str:
 
 
 def session_header(card_label: str, agent_name: str, model: str, session_id: str) -> str:
-    """Chat session header for `arcana chat` (CLI Reference §Interactive Chat)."""
+    """Chat session header for `arcana chat` (CLI Reference — Interactive Chat)."""
     return (
         f"\n[bold {ACCENT}]{PROMPT}  {card_label}[/]"
         f"  [{TXT3}]{SEP}[/]  "
