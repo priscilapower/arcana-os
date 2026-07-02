@@ -50,3 +50,9 @@ from arcana.types import Agent, ModelConnection, Session
 ::: arcana.types.memory.AdapterHealth
 
 ::: arcana.types.memory.EmbeddingMeta
+
+::: arcana.types.memory.PruneMode
+
+::: arcana.types.memory.PrunePolicy
+
+::: arcana.types.memory.PruneReport

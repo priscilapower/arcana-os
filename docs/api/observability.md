@@ -46,7 +46,27 @@ pip install arcana-core[observability]
 
 ::: arcana.observability.events.MemoryWriteEvent
 
+::: arcana.observability.events.MemoryPruneEvent
+
+::: arcana.observability.events.MemoryDegradedEvent
+
+## Emitters
+
+`emit_degraded` records a memory tier degradation to both the audit log and
+metrics. It is the default sink the resilience layer uses when a tier is skipped
+or drops out of an operation; the emission is best-effort and never raises, so
+observability can never break the memory path.
+
+::: arcana.observability.emit_degraded
+
 ## Metrics
+
+Alongside the session and model-call instruments, the memory federation
+publishes its resilience signals here: `arcana.memory.tier.degraded` (a counter
+labelled by tier / operation / reason), `arcana.memory.tier.latency_ms`,
+`arcana.memory.circuit.state` (`0=closed`, `1=half_open`, `2=open` per tier),
+and the background-queue gauges `arcana.memory.queue.depth` and
+`arcana.memory.queue.drain_seconds`.
 
 ::: arcana.observability.metrics.ArcanaMetrics
 
