@@ -102,6 +102,16 @@ class ArcanaMetrics:
             "arcana.memory.circuit.state",
             description="Per-tier circuit breaker state (0=closed, 1=half_open, 2=open)",
         )
+        self.memory_queue_depth = _create_gauge(
+            meter,
+            "arcana.memory.queue.depth",
+            description="Pending background memory jobs (extraction / consolidation)",
+        )
+        self.memory_queue_drain_seconds = _create_gauge(
+            meter,
+            "arcana.memory.queue.drain_seconds",
+            description="Estimated seconds to drain the background memory job queue",
+        )
 
     def record_memory_degraded(self, *, tier: str, operation: str, reason: str) -> None:
         self.memory_tier_degraded.add(1, {"tier": tier, "operation": operation, "reason": reason})
@@ -111,6 +121,12 @@ class ArcanaMetrics:
 
     def set_circuit_state(self, *, tier: str, state: int) -> None:
         self.memory_circuit_state.set(state, {"tier": tier})
+
+    def set_queue_depth(self, depth: int) -> None:
+        self.memory_queue_depth.set(depth)
+
+    def set_queue_drain_seconds(self, seconds: float) -> None:
+        self.memory_queue_drain_seconds.set(seconds)
 
     def record_session(
         self,

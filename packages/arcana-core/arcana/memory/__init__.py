@@ -19,6 +19,7 @@ from arcana.memory.errors import (
     TierWriteFailed,
 )
 from arcana.memory.federation import MemoryFederation
+from arcana.memory.jobs import BackgroundJobQueue, MemoryJob, MemoryJobKind
 from arcana.memory.resilience import BreakerState, CircuitBreaker, ResilientTier
 from arcana.memory.router import GLOBAL_PROMOTION_THRESHOLD, MemoryRouter, TierBackend
 
@@ -36,6 +37,10 @@ __all__ = [
     "BreakerState",
     "MemoryResilienceConfig",
     "TierResilienceConfig",
+    # Backpressure
+    "BackgroundJobQueue",
+    "MemoryJob",
+    "MemoryJobKind",
     # Errors
     "MemoryError",
     "MemoryStorageError",
