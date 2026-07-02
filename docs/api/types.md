@@ -37,6 +37,8 @@ from arcana.types import Agent, ModelConnection, Session
 
 ::: arcana.types.memory.MemoryEntry
 
+::: arcana.types.memory.MemoryEdge
+
 ::: arcana.types.memory.MemoryQuery
 
 ::: arcana.types.memory.MemoryScope

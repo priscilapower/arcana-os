@@ -209,6 +209,52 @@ results = await memory.search(
 An entry surfaced by only one leg contributes 0 for the other. With no healthy
 embedder, hybrid degrades to keyword-only (the BM25 leg alone).
 
+## Folder connector (Markdown)
+
+`MarkdownFolderAdapter` exposes a directory of Markdown notes as retrievable
+memory — the zero-setup way to make an Obsidian vault (or any notes folder)
+searchable by an agent. It implements the same `MemoryAdapter` protocol, so it
+registers as a federation tier or attaches to an agent's memory slot with
+nothing but a folder path: no plugin, no server, no sync job.
+
+One `.md`/`.markdown` file becomes one `MemoryEntry`. The id is a stable `uuid5`
+of the file's root-relative path, so re-reads — and any future ingest into
+SQLite — upsert instead of duplicating, and the federation dedups a folder note
+against an ingested copy by that shared id. YAML frontmatter maps to fields
+(`type`, `importance`, `pinned`, `tags`), Obsidian `#hashtags` fold into tags,
+and malformed frontmatter is tolerated — one bad note never fails the scan.
+
+The folder has no FTS5 or vector index, so every retrieval mode **collapses to
+keyword**: a `semantic` or `hybrid` query is served by the same in-process
+substring/token scan with a one-line degraded notice, never an error. Results
+rank pinned → lexical relevance → importance → recency. A process-local index
+cache keyed by path → (mtime, size) keeps a live read fresh — each `search()`
+restats the tree and re-parses only changed or new files — so the connector
+works standalone with zero sync infrastructure.
+
+It is **read-only**: reads never mutate files, and `write()` raises
+`MemoryWriteError` (the folder is an external source of truth, not a sink).
+Dotfiles and dot-dirs (`.obsidian/`, `.trash/`), symlinks, oversized files
+(`max_file_bytes`, default 1 MiB), and any configurable ignore-glob are skipped;
+`health_check()` is a cheap `stat` + readability probe on the root and never
+raises.
+
+```python
+from pathlib import Path
+from uuid import uuid4
+
+from arcana.memory import MarkdownFolderAdapter
+from arcana.types import MemoryQuery, MemoryScope
+
+vault = MarkdownFolderAdapter(
+    Path("~/Documents/MyVault").expanduser(),
+    agent_id=uuid4(),
+    scope=MemoryScope.SHARED,        # e.g. registered as a shared read tier
+    pool_name="vault",
+)
+results = await vault.search(MemoryQuery(text="metric units", limit=5))
+```
+
 ## Pruning
 
 `prune()` removes low-value entries per a
@@ -226,6 +272,57 @@ from arcana.types import PrunePolicy, PruneMode
 
 report = await memory.prune(PrunePolicy(min_importance=0.2, max_entries=10_000))
 ```
+
+## Knowledge graph (edges)
+
+Beyond similarity, memory carries an explicit graph: typed, directed **edges**
+between nodes, stored in a `memory_edges` table (migration `v4`) that lives in
+the same SQLite database as the rows — a property graph, no separate engine.
+`EdgeStore` is its read/write layer. An edge is a
+[`MemoryEdge`](types.md#arcana.types.memory.MemoryEdge): `src_id → dst_id` under
+a `relation`, tagged by the `source` that produced it and carrying a
+`confidence`. Endpoints are stable node ids, so an edge can relate nodes that
+live in any tier — a folder connector's `uuid5` note id is a valid endpoint even
+though it is not a stored row.
+
+The `(src_id, dst_id, relation)` primary key makes writes idempotent. A producer
+owns its `source` and rewrites exactly that set with `replace_source()`, so a
+re-index stays convergent as links are added, removed, or re-pointed.
+`neighbors()` returns the ids one hop away in either direction — the seed→expand
+primitive for graph-aware retrieval.
+
+### Wikilinks → edges
+
+`WikilinkEdgeExtractor` populates the graph from a Markdown folder: it parses
+Obsidian `[[wikilinks]]` (and `![[embeds]]`) out of the notes a
+`MarkdownFolderAdapter` already reads and writes them as `references` edges. It
+is fully **deterministic** — regex over text, resolution by filename or path, no
+model in the loop — so it carries none of the hallucinated-edge risk that
+inferred edges would. Targets resolve within the folder (a bare `[[Note]]` by
+basename, `[[folder/Note]]` by path); ambiguous and dangling links are skipped
+and counted, never guessed. Each `reindex()` rewrites the whole `wikilink` edge
+set and returns an `EdgeIndexReport` tally.
+
+```python
+from arcana.memory import (
+    EdgeStore,
+    MarkdownFolderAdapter,
+    SQLiteAdapter,
+    WikilinkEdgeExtractor,
+)
+
+reader = MarkdownFolderAdapter(vault_path, agent_id)
+edges = EdgeStore(SQLiteAdapter.for_agent(agent_id))
+await edges.connect()
+
+report = await WikilinkEdgeExtractor(reader, edges).reindex()
+neighbours = await edges.neighbors(note_id)   # ids one hop away
+```
+
+!!! note "Populates, doesn't traverse"
+    The extractor writes edges; consuming them at read time — seed by
+    vector/keyword, expand along edges, re-rank — is a federation concern and is
+    not wired into the read path yet.
 
 ## Federation across tiers
 
@@ -325,6 +422,18 @@ backlog's drain estimate (`depth × EWMA(service time)`) exceeds its headroom.
 ::: arcana.memory.adapters.sqlite.SQLiteAdapter
 
 ::: arcana.memory.adapters.vector.VectorAdapter
+
+::: arcana.memory.adapters.markdown.MarkdownFolderAdapter
+
+::: arcana.memory.adapters.markdown.ScannedNote
+
+## Knowledge graph
+
+::: arcana.memory.edges.EdgeStore
+
+::: arcana.memory.wikilinks.WikilinkEdgeExtractor
+
+::: arcana.memory.wikilinks.EdgeIndexReport
 
 ## Federation and routing
 
