@@ -45,6 +45,12 @@ arcana agent create --name researcher --card hermit --model local
 arcana run "summarize recent advances in RAG" --agent researcher --stream
 ```
 
+!!! tip "Agents remember"
+    `arcana run` gives each agent a private memory by default, so it recalls
+    earlier sessions. Add `--no-memory` to run stateless for a single turn, or
+    disable it globally via the `memory` block in `~/.arcana/config.json`. See
+    [Memory → Assembling a federation](api/memory.md#assembling-a-federation-for-an-agent).
+
 ## Your first agent (Python)
 
 ```python

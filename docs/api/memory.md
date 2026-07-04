@@ -368,6 +368,64 @@ await memory.write(entry)                    # fans out to every routed tier
 results = await memory.search(MemoryQuery(agent_id=agent_id))  # merged + ranked
 ```
 
+## Assembling a federation for an agent
+
+Wiring the router and tiers by hand (above) is the low-level API. In practice one
+call does the whole assembly: `build_federation()` turns an agent id plus the
+`~/.arcana` home into a ready `MemoryFederation`.
+
+```python
+from pathlib import Path
+from uuid import uuid4
+
+from arcana.memory import EmbeddingGateway, PoolConfig, build_federation
+from arcana.models.adapters.fastembed_embedding import FastEmbedEmbeddingAdapter
+
+federation = await build_federation(
+    uuid4(),
+    home=Path.home() / ".arcana",
+    embedding=EmbeddingGateway([FastEmbedEmbeddingAdapter()]),  # optional
+    pools=[PoolConfig("team-research", pool_adapter)],          # optional
+)
+# ... agent.run(...) ...
+await federation.aclose()   # release the private handle and any vector store
+```
+
+It builds the tiers the way the runtime expects:
+
+- **private** — per-agent SQLite at `~/.arcana/agents/{id}/memory.db`, opened
+  eagerly so [migrations](#schema-migrations) run and a corrupt store is
+  quarantined before first use. This tier is always present, the durability
+  anchor.
+- **global** — a shared vector store at `~/.arcana/vector/global.db`, wired only
+  when an `EmbeddingGateway` is supplied. It is semantic when the embedder is
+  healthy and keyword (FTS5) when not; with no embedder the tier is dropped and
+  the agent runs private-only, so a zero-config install still works.
+- **shared** — each `PoolConfig` is registered on the router by name.
+
+Degradations route to the [observability audit log](observability.md#events) by
+default (pass `on_degraded` to override), so a thinned `SHARED`/`GLOBAL` tier is
+visible without failing the run.
+
+### Injection and configuration
+
+Callers rarely invoke `build_federation` directly.
+[`AgentRegistry.build_runtime_with_memory()`](agent.md) assembles and injects a
+federation for a stored agent, returning `(agent, federation)` so the caller owns
+teardown. The CLI `arcana run` path uses it, so **agents remember across sessions
+by default**. Opt out of a single run with `--no-memory`, or globally via the
+`memory` block in `~/.arcana/config.json`:
+
+```json
+{
+  "memory": { "enabled": true, "private": "sqlite", "global": "vector", "pools": [] }
+}
+```
+
+The global vector tier activates when an embedding provider is available: the CLI
+uses in-process [fastembed](https://github.com/qdrant/fastembed) when the
+`arcana-os[embed]` extra is installed, and stays private-SQLite-only otherwise.
+
 ## Resilience
 
 The router wraps every tier in a `ResilientTier` before handing it to the
@@ -436,6 +494,12 @@ backlog's drain estimate (`depth × EWMA(service time)`) exceeds its headroom.
 ::: arcana.memory.wikilinks.EdgeIndexReport
 
 ## Federation and routing
+
+::: arcana.memory.assembly.build_federation
+
+::: arcana.memory.assembly.PoolConfig
+
+::: arcana.memory.assembly.MemoryConfig
 
 ::: arcana.memory.federation.MemoryFederation
 
