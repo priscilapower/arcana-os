@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json as _json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -12,6 +13,8 @@ from arcana.agents.agent import Agent as RuntimeAgent
 from arcana.cards.engine import CardEngine
 from arcana.cards.registry import get_registry
 from arcana.context.soul import read_soul
+from arcana.memory import build_federation
+from arcana.models.connection_store import ConnectionStore
 from arcana.models.gateway import ModelGateway
 from arcana.types.agent import Agent as AgentRecord
 from arcana.types.card import Card
@@ -19,7 +22,8 @@ from arcana.types.memory import MemoryAdapter
 
 if TYPE_CHECKING:
     from arcana.agents.session_manager import SessionManager
-    from arcana.models.connection_store import ConnectionStore
+    from arcana.memory import EmbeddingGateway, MemoryFederation, PoolConfig
+    from arcana.observability import MemoryDegradedEvent
 
 
 def _default_base() -> Path:
@@ -41,8 +45,6 @@ class AgentRegistry:
 
     def _connection_store(self) -> ConnectionStore:
         if self._connections is None:
-            from arcana.models.connection_store import ConnectionStore
-
             self._connections = ConnectionStore()
         return self._connections
 
@@ -150,6 +152,52 @@ class AgentRegistry:
             system_prompt_override=record.system_prompt,
             session_manager=session_manager,
         )
+
+    async def build_runtime_with_memory(
+        self,
+        record: AgentRecord,
+        gateway: ModelGateway,
+        *,
+        home: Path,
+        enabled: bool = True,
+        embedding: EmbeddingGateway | None = None,
+        pools: list[PoolConfig] | None = None,
+        on_degraded: Callable[[MemoryDegradedEvent], None] | None = None,
+        memory: MemoryAdapter | None = None,
+        session_manager: SessionManager | None = None,
+        soul: str | None = None,
+    ) -> tuple[RuntimeAgent, MemoryFederation | None]:
+        """Build a runtime Agent with its memory federation assembled and injected.
+
+        Memory is default-on: unless the caller opts out (``enabled=False``) or
+        passes an explicit ``memory`` override, this assembles a per-agent
+        federation via ``build_federation`` and wires it in. Returns the agent
+        together with the federation it created (``None`` when memory is off or
+        overridden) so the caller can close it when the run ends — the agent
+        stays transport-agnostic and does not own that lifecycle.
+
+        The explicit ``memory`` override is passed straight through untouched,
+        which keeps tests and specialised callers able to inject a fake adapter.
+        """
+        federation: MemoryFederation | None = None
+        if memory is None and enabled:
+            federation = await build_federation(
+                record.id,
+                home=home,
+                embedding=embedding,
+                pools=pools,
+                on_degraded=on_degraded,
+            )
+            memory = federation
+
+        agent = self.build_runtime(
+            record,
+            gateway,
+            memory=memory,
+            session_manager=session_manager,
+            soul=soul,
+        )
+        return agent, federation
 
     # ------------------------------------------------------------------
     # Private helpers

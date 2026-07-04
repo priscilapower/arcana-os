@@ -8,6 +8,7 @@ storage layer behind it.
 from arcana.memory.adapters.markdown import MarkdownFolderAdapter, ScannedNote
 from arcana.memory.adapters.sqlite import SQLiteAdapter
 from arcana.memory.adapters.vector import VectorAdapter
+from arcana.memory.assembly import MemoryConfig, PoolConfig, build_federation, load_memory_config
 from arcana.memory.config import MemoryResilienceConfig, TierResilienceConfig
 from arcana.memory.edges import EdgeStore
 from arcana.memory.embedding_gateway import EmbeddingGateway
@@ -47,6 +48,11 @@ __all__ = [
     "MemoryRouter",
     "TierBackend",
     "GLOBAL_PROMOTION_THRESHOLD",
+    # Assembly
+    "build_federation",
+    "PoolConfig",
+    "MemoryConfig",
+    "load_memory_config",
     # Resilience
     "ResilientTier",
     "CircuitBreaker",

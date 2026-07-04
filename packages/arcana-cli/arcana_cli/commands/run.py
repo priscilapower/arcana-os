@@ -1,6 +1,7 @@
 """Top-level CLI commands: init, status, run."""
 
 import asyncio
+import importlib.util
 import json
 from uuid import UUID
 
@@ -11,6 +12,8 @@ from rich.spinner import Spinner
 
 from arcana.agents.registry import AgentRegistry
 from arcana.agents.session_manager import SessionManager
+from arcana.memory import EmbeddingGateway, load_memory_config
+from arcana.models.adapters.fastembed_embedding import FastEmbedEmbeddingAdapter
 from arcana.models.connection_store import ConnectionStore
 from arcana.models.gateway import ModelGateway
 from arcana.types.agent import Agent as AgentRecord
@@ -53,6 +56,19 @@ def _find_agent(name_or_id: str, reg: AgentRegistry) -> AgentRecord | None:
     return matches[0]
 
 
+def _resolve_embedding_gateway() -> EmbeddingGateway | None:
+    """Best-effort embedder for the GLOBAL vector tier, or None for SQLite-only.
+
+    Uses in-process FastEmbed when the ``arcana-core[embed]`` extra is installed —
+    that install is the user's opt-in to embeddings, and the adapter needs no
+    running server. Absent it, the global tier is disabled and agents keep a
+    private SQLite memory, so a zero-config install still works.
+    """
+    if importlib.util.find_spec("fastembed") is None:
+        return None
+    return EmbeddingGateway([FastEmbedEmbeddingAdapter()])
+
+
 def init_cmd() -> None:
     """Initialise Arcana OS — creates ~/.arcana/ and sets up The World."""
     if ARCANA_HOME.exists():
@@ -68,10 +84,16 @@ def init_cmd() -> None:
         (ARCANA_HOME / "spreads").mkdir()
         (ARCANA_HOME / "vector").mkdir()
 
-        config = {
+        config: dict[str, object] = {
             "version": "0.1.0",
             "default_model": None,
             "briefing_time": "08:00",
+            "memory": {
+                "enabled": True,
+                "private": "sqlite",
+                "global": "vector",
+                "pools": [],
+            },
         }
         (ARCANA_HOME / "config.json").write_text(json.dumps(config, indent=2))
         (ARCANA_HOME / "world.json").write_text(json.dumps({"active_spread": None, "routing_rules": []}, indent=2))
@@ -111,6 +133,7 @@ def run_cmd(
     stream: bool = typer.Option(False, "--stream", "-s", help="Stream output token by token"),
     session_id: str | None = typer.Option(None, "--session", help="Resume a specific session by UUID"),
     continue_: bool = typer.Option(False, "--continue", help="Resume the agent's most recent session"),
+    no_memory: bool = typer.Option(False, "--no-memory", help="Run stateless — do not load or persist memory"),
 ) -> None:
     """Run a prompt specifying --agent directly."""
 
@@ -170,33 +193,49 @@ def run_cmd(
         else:
             session = sm.start(record.id)
 
+        memory_cfg = load_memory_config(ARCANA_HOME)
+        memory_enabled = memory_cfg.enabled and not no_memory
+        embedding = _resolve_embedding_gateway() if memory_enabled and memory_cfg.global_ == "vector" else None
+
         try:
             async with ModelGateway(connections=store) as gw:
-                runtime_agent = reg.build_runtime(record, gw, session_manager=sm)
-                if stream:
-                    live = Live(
-                        Spinner("dots", text=f"[bold {accent}]{PROMPT} thinking...[/]"),
-                        console=console,
-                        transient=True,
-                    )
-                    live.start()
-                    first = True
-                    async for chunk in runtime_agent.stream(prompt, session=session):
+                runtime_agent, federation = await reg.build_runtime_with_memory(
+                    record,
+                    gw,
+                    home=ARCANA_HOME,
+                    enabled=memory_enabled,
+                    embedding=embedding,
+                    session_manager=sm,
+                )
+                try:
+                    if stream:
+                        live = Live(
+                            Spinner("dots", text=f"[bold {accent}]{PROMPT} thinking...[/]"),
+                            console=console,
+                            transient=True,
+                        )
+                        live.start()
+                        first = True
+                        async for chunk in runtime_agent.stream(prompt, session=session):
+                            if first:
+                                live.stop()
+                                first = False
+                            print(chunk, end="", flush=True)
                         if first:
                             live.stop()
-                            first = False
-                        print(chunk, end="", flush=True)
-                    if first:
-                        live.stop()
-                    print()
-                else:
-                    with console.status(
-                        f"[bold {accent}]{PROMPT} thinking...[/]",
-                        spinner="dots",
-                        spinner_style=f"bold {accent}",
-                    ):
-                        response = await runtime_agent.run(prompt, session=session)
-                    console.print(make_panel(response, card=record.card))
+                        print()
+                    else:
+                        with console.status(
+                            f"[bold {accent}]{PROMPT} thinking...[/]",
+                            spinner="dots",
+                            spinner_style=f"bold {accent}",
+                        ):
+                            response = await runtime_agent.run(prompt, session=session)
+                        console.print(make_panel(response, card=record.card))
+                finally:
+                    # Release the private SQLite handle and any vector store with the run.
+                    if federation is not None:
+                        await federation.aclose()
         except Exception as exc:
             console.print(err(f"Error: {exc}"))
             raise typer.Exit(1) from exc
