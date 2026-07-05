@@ -13,7 +13,9 @@ from arcana.types.card import (
 from arcana.types.memory import (
     AdapterCapabilities,
     AdapterHealth,
+    ConfidenceSource,
     EmbeddingMeta,
+    ExtractionStrategy,
     MemoryAdapter,
     MemoryEdge,
     MemoryEntry,
@@ -72,6 +74,8 @@ __all__ = [
     "MemoryQuery",
     "MemoryType",
     "MemoryScope",
+    "ConfidenceSource",
+    "ExtractionStrategy",
     "RetrievalMode",
     "AdapterCapabilities",
     "AdapterHealth",

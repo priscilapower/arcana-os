@@ -21,6 +21,24 @@ from arcana.memory.errors import (
     MemoryWriteError,
     TierWriteFailed,
 )
+from arcana.memory.extraction import (
+    ExtractionConfig,
+    HeuristicExtractor,
+    LLMExtractor,
+    MemoryExtractor,
+    build_consolidated_entry,
+    build_extractor,
+    compute_importance,
+    filter_storable,
+    heuristic_summary,
+    trim_content,
+)
+from arcana.memory.extraction.signals import (
+    ENGLISH,
+    SignalPatterns,
+    get_signals,
+    register_language,
+)
 from arcana.memory.federation import MemoryFederation
 from arcana.memory.jobs import BackgroundJobQueue, MemoryJob, MemoryJobKind
 from arcana.memory.resilience import BreakerState, CircuitBreaker, ResilientTier
@@ -53,6 +71,22 @@ __all__ = [
     "PoolConfig",
     "MemoryConfig",
     "load_memory_config",
+    # Extraction
+    "MemoryExtractor",
+    "HeuristicExtractor",
+    "LLMExtractor",
+    "ExtractionConfig",
+    "build_extractor",
+    "build_consolidated_entry",
+    "filter_storable",
+    "heuristic_summary",
+    "compute_importance",
+    "trim_content",
+    # Extraction signals (i18n)
+    "SignalPatterns",
+    "ENGLISH",
+    "get_signals",
+    "register_language",
     # Resilience
     "ResilientTier",
     "CircuitBreaker",

@@ -14,6 +14,12 @@ from arcana.cards.engine import CardEngine
 from arcana.cards.registry import get_registry
 from arcana.context.soul import read_soul
 from arcana.memory import build_federation
+from arcana.memory.extraction import (
+    DEFAULT_MIN_CONFIDENCE_TO_STORE,
+    ExtractionConfig,
+    MemoryExtractor,
+    build_extractor,
+)
 from arcana.models.connection_store import ConnectionStore
 from arcana.models.gateway import ModelGateway
 from arcana.types.agent import Agent as AgentRecord
@@ -137,6 +143,9 @@ class AgentRegistry:
         memory: MemoryAdapter | None = None,
         session_manager: SessionManager | None = None,
         soul: str | None = None,
+        extractor: MemoryExtractor | None = None,
+        min_confidence_to_store: float = DEFAULT_MIN_CONFIDENCE_TO_STORE,
+        summarise_on_close: bool = True,
     ) -> RuntimeAgent:
         """Reconstruct a runtime Agent from a stored record and gateway."""
         return RuntimeAgent(
@@ -151,6 +160,9 @@ class AgentRegistry:
             soul=soul if soul is not None else read_soul(),
             system_prompt_override=record.system_prompt,
             session_manager=session_manager,
+            extractor=extractor,
+            min_confidence_to_store=min_confidence_to_store,
+            summarise_on_close=summarise_on_close,
         )
 
     async def build_runtime_with_memory(
@@ -166,6 +178,7 @@ class AgentRegistry:
         memory: MemoryAdapter | None = None,
         session_manager: SessionManager | None = None,
         soul: str | None = None,
+        extraction: ExtractionConfig | None = None,
     ) -> tuple[RuntimeAgent, MemoryFederation | None]:
         """Build a runtime Agent with its memory federation assembled and injected.
 
@@ -178,6 +191,10 @@ class AgentRegistry:
 
         The explicit ``memory`` override is passed straight through untouched,
         which keeps tests and specialised callers able to inject a fake adapter.
+
+        ``extraction`` selects the memory extraction strategy: the ``llm`` strategy
+        reuses this gateway and the record's model, and falls back to the
+        deterministic heuristic when no model is configured.
         """
         federation: MemoryFederation | None = None
         if memory is None and enabled:
@@ -190,12 +207,18 @@ class AgentRegistry:
             )
             memory = federation
 
+        extraction = extraction or ExtractionConfig()
+        extractor = build_extractor(extraction, gateway=gateway, model=record.model or None)
+
         agent = self.build_runtime(
             record,
             gateway,
             memory=memory,
             session_manager=session_manager,
             soul=soul,
+            extractor=extractor,
+            min_confidence_to_store=extraction.min_confidence_to_store,
+            summarise_on_close=extraction.summarise_on_close,
         )
         return agent, federation
 
