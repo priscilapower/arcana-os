@@ -2,21 +2,30 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from arcana.cards.engine import CardEngine
 from arcana.cards.registry import get_registry
+from arcana.memory.extraction import (
+    DEFAULT_MIN_CONFIDENCE_TO_STORE,
+    HeuristicExtractor,
+    MemoryExtractor,
+    filter_storable,
+)
 from arcana.models.adapters.base import CompletionRequest, MessageParam
 from arcana.models.gateway import ModelGateway
 from arcana.observability import SessionEvent, get_audit_log, get_metrics, get_tracer
 from arcana.types.card import Card
-from arcana.types.memory import MemoryAdapter, MemoryEntry, MemoryQuery, MemoryType
+from arcana.types.memory import MemoryAdapter, MemoryQuery
 from arcana.types.session import MessageRole, Session, SessionStatus, SessionTrigger
 
 if TYPE_CHECKING:
     from arcana.agents.session_manager import SessionManager
+
+logger = logging.getLogger("arcana.agents.agent")
 
 # Oldest turns are dropped from the replayed context window only; full transcript stays on disk.
 MAX_HISTORY_TURNS = 20
@@ -50,6 +59,9 @@ class Agent:
         system_prompt_override: str | None = None,
         id: UUID | None = None,
         session_manager: SessionManager | None = None,
+        extractor: MemoryExtractor | None = None,
+        min_confidence_to_store: float = DEFAULT_MIN_CONFIDENCE_TO_STORE,
+        summarise_on_close: bool = True,
     ) -> None:
         self.id = id or uuid4()
         self.name = name
@@ -61,6 +73,10 @@ class Agent:
         self.soul = soul
         self.description = description
         self._session_manager = session_manager
+        # Extraction strategy — heuristic by default (deterministic, model-free).
+        self._extractor = extractor or HeuristicExtractor()
+        self._min_confidence_to_store = min_confidence_to_store
+        self._summarise_on_close = summarise_on_close
 
         # Resolve config from card(s)
         registry = get_registry()
@@ -125,17 +141,14 @@ class Agent:
             session.total_input_tokens = response.input_tokens
             session.total_output_tokens = response.output_tokens
 
-            if self._session_manager:
-                self._session_manager.close(session, SessionStatus.COMPLETED)
-            else:
-                session.close(SessionStatus.COMPLETED)
+            await self._extract_memory(prompt, response.content, session)
+            await self._close_session(session, SessionStatus.COMPLETED)
 
             span.set_attribute("arcana.input_tokens", response.input_tokens)
             span.set_attribute("arcana.output_tokens", response.output_tokens)
             span.set_attribute("arcana.duration_ms", session.duration_ms)
 
         self._emit_session_event(session)
-        await self._extract_memory(prompt, response.content, session)
         self._sessions.append(session)
         return response.content
 
@@ -191,10 +204,8 @@ class Agent:
             session.add_message(MessageRole.ASSISTANT, full_content)
             session.total_input_tokens = input_tokens
             session.total_output_tokens = output_tokens
-            if self._session_manager:
-                self._session_manager.close(session, SessionStatus.COMPLETED)
-            else:
-                session.close(SessionStatus.COMPLETED)
+            await self._extract_memory(prompt, full_content, session)
+            await self._close_session(session, SessionStatus.COMPLETED)
             self._sessions.append(session)
             self._emit_session_event(session)
 
@@ -261,14 +272,36 @@ class Agent:
         return "\n".join(f"- {e.content}" for e in entries)
 
     async def _extract_memory(self, prompt: str, response: str, session: Session) -> None:
-        """Persist a basic episodic memory of this exchange."""
+        """Extract typed, confidence-scored memories from this turn and persist them.
+
+        Best-effort: the extractor produces candidate entries, sub-threshold ones
+        are dropped, and survivors fan out through the federation. Any
+        failure is logged and swallowed — extraction never fails a user-facing run.
+        """
         if not self.memory:
             return
-        entry = MemoryEntry(
-            agent_id=self.id,
-            type=MemoryType.EPISODIC,
-            content=f"User asked: {prompt[:200]}\nResponse summary: {response[:300]}",
-            source_session_id=session.id,
-            importance=0.5,
-        )
-        await self.memory.write(entry)
+        try:
+            candidates = await self._extractor.extract(prompt, response, session)
+            for entry in filter_storable(candidates, self._min_confidence_to_store):
+                await self.memory.write(entry)
+                session.memories_extracted.append(entry.id)
+        except Exception:
+            logger.warning("memory extraction failed; continuing without it", exc_info=True)
+
+    async def _close_session(self, session: Session, status: SessionStatus) -> None:
+        """Close the session, summarising and consolidating when a manager is wired.
+
+        With a ``SessionManager`` the close path optionally distils a summary into
+        ``session.summary`` and writes one consolidated memory; without one it is a
+        plain in-memory close.
+        """
+        if self._session_manager:
+            await self._session_manager.close_and_summarise(
+                session,
+                status,
+                summarise=self._summarise_on_close,
+                memory=self.memory,
+                extractor=self._extractor,
+            )
+        else:
+            session.close(status)

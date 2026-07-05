@@ -1,9 +1,19 @@
 """SessionManager — session lifecycle and persistence for agents."""
 
+import logging
 from pathlib import Path
 from uuid import UUID
 
+from arcana.memory.extraction import (
+    MemoryExtractor,
+    build_consolidated_entry,
+    heuristic_summary,
+)
+from arcana.memory.extraction.signals import ENGLISH
+from arcana.types.memory import MemoryAdapter
 from arcana.types.session import Message, MessageRole, Session, SessionStatus, SessionTrigger
+
+logger = logging.getLogger("arcana.agents.session_manager")
 
 
 def _default_base() -> Path:
@@ -15,10 +25,14 @@ class SessionManager:
     Manages agent sessions on disk.
 
     Sessions are persisted at ``~/.arcana/agents/{agent_id}/sessions/{session_id}.json``.
+
+    An optional ``extractor`` drives :meth:`summarise`; without one, summaries
+    fall back to a deterministic, model-free heuristic.
     """
 
-    def __init__(self, base_dir: Path | None = None) -> None:
+    def __init__(self, base_dir: Path | None = None, *, extractor: MemoryExtractor | None = None) -> None:
         self._base = base_dir or _default_base()
+        self._extractor = extractor
 
     # ------------------------------------------------------------------
     # Session lifecycle
@@ -41,9 +55,69 @@ class SessionManager:
         session: Session,
         status: SessionStatus = SessionStatus.COMPLETED,
     ) -> None:
-        """Close the session and persist it to disk."""
+        """Close the session and persist it to disk (no summarisation)."""
         session.close(status)
         self._persist(session)
+
+    async def summarise(
+        self,
+        session: Session,
+        *,
+        extractor: MemoryExtractor | None = None,
+    ) -> str:
+        """Distil the session into ``session.summary``, persist, and return it.
+
+        Uses *extractor* (or the manager's own), falling back to a deterministic
+        heuristic when neither is set or the extractor raises. Never propagates an
+        extractor failure — summarisation is best-effort.
+        """
+        ext = extractor or self._extractor
+        text = ""
+        if ext is not None:
+            try:
+                text = await ext.summarise(session)
+            except Exception:
+                logger.warning("session summarisation failed; using heuristic", exc_info=True)
+        if not text:
+            text = heuristic_summary(session.messages)
+        session.summary = text
+        self._persist(session)
+        return text
+
+    async def close_and_summarise(
+        self,
+        session: Session,
+        status: SessionStatus = SessionStatus.COMPLETED,
+        *,
+        summarise: bool = True,
+        memory: MemoryAdapter | None = None,
+        extractor: MemoryExtractor | None = None,
+    ) -> None:
+        """Close the session, optionally summarising and consolidating.
+
+        When ``summarise`` is set, distils ``session.summary`` and — given a
+        ``memory`` adapter — writes one consolidated memory carrying it. The whole
+        summarise/consolidate step is best-effort: a failure is logged, the
+        session is still closed and persisted, and the run is never affected.
+        """
+        session.close(status)
+        if not summarise:
+            self._persist(session)
+            return
+
+        try:
+            ext = extractor or self._extractor
+            await self.summarise(session, extractor=ext)
+            if memory is not None:
+                signals = ext.signals if ext is not None else ENGLISH
+                entry = build_consolidated_entry(session, signals=signals)
+                if entry is not None:
+                    await memory.write(entry)
+                    session.memories_extracted.append(entry.id)
+                    self._persist(session)
+        except Exception:
+            logger.warning("session close summarisation/consolidation failed", exc_info=True)
+            self._persist(session)
 
     # ------------------------------------------------------------------
     # Persistence

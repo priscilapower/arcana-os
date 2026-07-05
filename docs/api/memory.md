@@ -418,13 +418,111 @@ by default**. Opt out of a single run with `--no-memory`, or globally via the
 
 ```json
 {
-  "memory": { "enabled": true, "private": "sqlite", "global": "vector", "pools": [] }
+  "memory": {
+    "enabled": true,
+    "private": "sqlite",
+    "global": "vector",
+    "pools": [],
+    "extraction": {
+      "strategy": "heuristic",
+      "agent_confidence_cap": 0.7,
+      "summarise_on_close": true,
+      "min_confidence_to_store": 0.3
+    }
+  }
 }
 ```
+
+The `extraction` block selects the memory extractor and its thresholds: `strategy`
+is `"heuristic"` (default) or `"llm"`, `agent_confidence_cap` bounds agent-asserted
+confidence below `1.0`, `summarise_on_close` toggles the consolidated
+session-summary memory, and `min_confidence_to_store` drops weak entries before
+they are written. An absent block yields these defaults, and `"llm"` with no model
+provider falls back to the heuristic.
 
 The global vector tier activates when an embedding provider is available: the CLI
 uses in-process [fastembed](https://github.com/qdrant/fastembed) when the
 `arcana-os[embed]` extra is installed, and stays private-SQLite-only otherwise.
+
+## Extraction and summarisation
+
+What an agent *writes* to memory is decided by a `MemoryExtractor`: it turns one
+completed turn — `(prompt, response, session)` — into a small list of typed,
+confidence-scored [`MemoryEntry`](types.md#arcana.types.memory.MemoryEntry)s,
+rather than one blanket slice of the response. Correct typing matters because
+`MemoryType` selects the decay profile — episodic decays fast, semantic slow,
+procedural very slow — so a durable fact and a throwaway exchange are retained on
+different clocks.
+
+Two strategies sit behind one interface:
+
+- **`HeuristicExtractor`** — the default: deterministic and model-free. It records
+  one `EPISODIC` entry per turn, promotes a stated user preference to `SEMANTIC`,
+  and turns a how-to answer into a `PROCEDURAL` entry. Free, testable, and it adds
+  no round-trip.
+- **`LLMExtractor`** — opt-in: a single low-temperature gateway call returning a
+  small JSON list of candidate memories. Any model error, malformed JSON, or empty
+  result falls back to the heuristic for that turn, so extraction can never crash a
+  run.
+
+**Honest confidence** is the anti-poisoning guarantee: agent-generated text is
+capped below `1.0` and sourced as `AGENT` (so better evidence can override it
+later), while an explicit user statement ("remember that I …") is trusted higher
+and sourced as `USER_CONFIRMED`. Entries below `min_confidence_to_store` are
+dropped *before* the write. Importance is derived from signal — imperative or
+"remember" language, a pin — not a constant.
+
+Extraction is **best-effort throughout**: a failure is logged to the audit log and
+swallowed, never surfaced into the user-facing `run`.
+
+```python
+from arcana.memory import HeuristicExtractor, build_extractor, ExtractionConfig
+
+# The default, wired automatically by the runtime.
+extractor = HeuristicExtractor()
+entries = await extractor.extract(prompt, response, session)   # list[MemoryEntry]
+
+# Or select by config; "llm" with no model configured falls back to heuristic.
+extractor = build_extractor(ExtractionConfig(strategy="llm"), gateway=gw, model="ollama/hermes-3")
+```
+
+**Session summaries.** `SessionManager` distils a whole session into
+`Session.summary` and writes one consolidated memory on close. `summarise()` sets
+the summary (using the extractor, or a deterministic heuristic fallback) and
+persists it; `close_and_summarise()` then writes a single consolidated entry —
+`SEMANTIC` when the session stated a durable fact, else `EPISODIC` — carrying that
+summary at a higher baseline importance. `close()` stays synchronous and does
+neither, so a sync caller never triggers a model call by accident.
+
+```python
+summary = await session_manager.summarise(session)            # sets session.summary
+await session_manager.close_and_summarise(session, memory=federation)
+```
+
+Selection and thresholds live in the `extraction` sub-block of the `memory`
+config (see below); with no model provider, extraction is forced to the
+deterministic heuristic. `strategy` is the
+[`ExtractionStrategy`](types.md#arcana.types.memory.ExtractionStrategy) enum
+(`heuristic` / `llm`).
+
+**Env-overridable tunables.** The scoring knobs — confidence caps, importance
+baselines, and the per-entry content cap (`MAX_ENTRY_CONTENT`, the ceiling
+`trim_content` enforces) — ship as defaults but read `ARCANA_EXTRACTION_*`
+environment variables at import time, so code built on Arcana can tune extraction
+without a release. Precedence, high to low: `config.json` → `ARCANA_EXTRACTION_*`
+env → built-in default. For example, `ARCANA_EXTRACTION_MAX_CONTENT=1000` widens
+stored entries and `ARCANA_EXTRACTION_AGENT_CONFIDENCE_CAP=0.6` lowers the
+agent-confidence ceiling. Bounds are validated: `agent_confidence_cap` must stay
+strictly below `1.0` — a value of `1.0` would let agent-asserted text become
+un-overridable, defeating anti-poisoning, so it is rejected at load rather than
+silently accepted.
+
+**Language signals.** The heuristic's surface cues (imperative/"remember"
+language, stated preferences, how-to questions, step lists) are language-specific
+and live in `arcana.memory.extraction.signals`, decoupled from the extractor.
+English ships as the default; a new language is a `SignalPatterns` registered via
+`register_language()` (or passed straight to `HeuristicExtractor(signals=...)`) —
+the extractor itself never changes.
 
 ## Resilience
 
@@ -470,10 +568,11 @@ a user-confirmed preference) while shedding **non-critical** jobs once the
 backlog's drain estimate (`depth × EWMA(service time)`) exceeds its headroom.
 
 !!! note "Design-ahead, not yet wired"
-    Extraction is still an inline synchronous write in `Agent`; nothing drains
-    this queue in the live path yet. Only the queue interface and its
-    depth/drain metrics ship today — the consumer loop lands when consolidation
-    actually moves off the request path.
+    [Extraction](#extraction-and-summarisation) runs inline on every agent turn
+    (`Agent.run` and `Agent.stream`) via the memory extractor; nothing drains this
+    queue in the live path yet. Only the
+    queue interface and its depth/drain metrics ship today — the consumer loop
+    lands when extraction and consolidation actually move off the request path.
 
 ## Adapters
 
@@ -506,6 +605,24 @@ backlog's drain estimate (`depth × EWMA(service time)`) exceeds its headroom.
 ::: arcana.memory.router.MemoryRouter
 
 ::: arcana.memory.router.TierBackend
+
+## Extraction and summarisation
+
+::: arcana.memory.extraction.MemoryExtractor
+
+::: arcana.memory.extraction.HeuristicExtractor
+
+::: arcana.memory.extraction.LLMExtractor
+
+::: arcana.memory.extraction.build_extractor
+
+::: arcana.memory.extraction.trim_content
+
+::: arcana.memory.extraction.config.ExtractionConfig
+
+::: arcana.memory.extraction.signals.SignalPatterns
+
+::: arcana.memory.extraction.signals.register_language
 
 ## Resilience
 

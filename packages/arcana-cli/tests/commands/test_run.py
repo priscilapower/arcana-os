@@ -77,7 +77,18 @@ def test_init_writes_memory_config_block(tmp_path, monkeypatch):
     result = runner.invoke(app, ["init"])
     assert result.exit_code == 0
     config = json.loads((fake_home / "config.json").read_text())
-    assert config["memory"] == {"enabled": True, "private": "sqlite", "global": "vector", "pools": []}
+    assert config["memory"] == {
+        "enabled": True,
+        "private": "sqlite",
+        "global": "vector",
+        "pools": [],
+        "extraction": {
+            "strategy": "heuristic",
+            "agent_confidence_cap": 0.7,
+            "summarise_on_close": True,
+            "min_confidence_to_store": 0.3,
+        },
+    }
     assert (fake_home / "vector").is_dir()
 
 

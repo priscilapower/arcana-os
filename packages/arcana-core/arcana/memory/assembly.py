@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 from arcana.memory.adapters.sqlite import SQLiteAdapter
 from arcana.memory.adapters.vector import VectorAdapter
 from arcana.memory.embedding_gateway import EmbeddingGateway
+from arcana.memory.extraction import ExtractionConfig
 from arcana.memory.federation import MemoryFederation
 from arcana.memory.router import MemoryRouter
 from arcana.observability import MemoryDegradedEvent
@@ -56,6 +57,7 @@ class MemoryConfig(BaseModel):
     private: str = "sqlite"
     global_: str = Field(default="vector", alias="global")
     pools: list[str] = Field(default_factory=list)
+    extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
 
     model_config = {"populate_by_name": True}
 

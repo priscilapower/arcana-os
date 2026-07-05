@@ -93,6 +93,12 @@ def init_cmd() -> None:
                 "private": "sqlite",
                 "global": "vector",
                 "pools": [],
+                "extraction": {
+                    "strategy": "heuristic",
+                    "agent_confidence_cap": 0.7,
+                    "summarise_on_close": True,
+                    "min_confidence_to_store": 0.3,
+                },
             },
         }
         (ARCANA_HOME / "config.json").write_text(json.dumps(config, indent=2))
@@ -206,6 +212,7 @@ def run_cmd(
                     enabled=memory_enabled,
                     embedding=embedding,
                     session_manager=sm,
+                    extraction=memory_cfg.extraction,
                 )
                 try:
                     if stream:

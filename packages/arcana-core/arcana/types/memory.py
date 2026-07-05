@@ -46,6 +46,13 @@ class RetrievalMode(StrEnum):
     keyword = "keyword"  # BM25 keyword search only (FTS5)
 
 
+class ExtractionStrategy(StrEnum):
+    """Which strategy turns a completed turn into memories."""
+
+    HEURISTIC = "heuristic"  # deterministic, model-free (default)
+    LLM = "llm"  # low-temperature model call, heuristic fallback on error
+
+
 # ---------------------------------------------------------------------------
 # Decay
 # ---------------------------------------------------------------------------
