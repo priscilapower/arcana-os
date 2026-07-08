@@ -101,6 +101,13 @@ class MemoryPruneEvent:
     timestamp: str = field(default_factory=_now_iso)
 
 
+# Memory-degradation vocabulary — the single source of truth shared by
+# MemoryDegradedEvent, TierWriteFailed.reason, and the resilience/federation
+# paths that construct them.
+MemoryOperation = Literal["read", "write", "promote"]
+MemoryDegradeReason = Literal["timeout", "breaker_open", "backend_error", "corruption"]
+
+
 @dataclass
 class MemoryDegradedEvent:
     """Emitted when a memory tier is skipped or drops out of an operation.
@@ -113,8 +120,8 @@ class MemoryDegradedEvent:
     agent_id: str
     session_id: str
     tier: str  # "private" | "shared:{pool}" | "global"
-    operation: Literal["read", "write", "promote"]
-    reason: Literal["timeout", "breaker_open", "backend_error", "corruption"]
+    operation: MemoryOperation
+    reason: MemoryDegradeReason
     message: str = ""
     type: Literal["memory_degraded"] = field(default="memory_degraded", init=False)
     timestamp: str = field(default_factory=_now_iso)

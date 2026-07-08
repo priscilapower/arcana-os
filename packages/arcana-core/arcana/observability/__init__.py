@@ -19,6 +19,8 @@ from arcana.observability.audit import AuditLog
 from arcana.observability.events import (
     AuditEvent,
     MemoryDegradedEvent,
+    MemoryDegradeReason,
+    MemoryOperation,
     MemoryPruneEvent,
     MemoryReadEvent,
     MemoryWriteEvent,
@@ -95,5 +97,7 @@ __all__ = [
     "MemoryWriteEvent",
     "MemoryPruneEvent",
     "MemoryDegradedEvent",
+    "MemoryOperation",
+    "MemoryDegradeReason",
     "event_to_dict",
 ]

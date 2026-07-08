@@ -28,7 +28,7 @@ from uuid import UUID
 from arcana.memory.errors import MemoryWriteError, TierWriteFailed
 from arcana.memory.resilience import ResilientTier
 from arcana.memory.router import MemoryRouter, TierBackend
-from arcana.observability import MemoryDegradedEvent, emit_degraded
+from arcana.observability import MemoryDegradedEvent, MemoryOperation, emit_degraded
 from arcana.types import AdapterHealth, MemoryAdapter, MemoryEntry, MemoryQuery, MemoryScope, PrunePolicy, PruneReport
 
 logger = logging.getLogger("arcana.memory.federation")
@@ -97,13 +97,13 @@ class MemoryFederation:
                 continue
             raise result  # an unwrapped backend or unexpected error — surface it
 
-    def _emit_degraded(self, tier: TierBackend, operation: str, failure: TierWriteFailed) -> None:
+    def _emit_degraded(self, tier: TierBackend, operation: MemoryOperation, failure: TierWriteFailed) -> None:
         event = MemoryDegradedEvent(
             agent_id="",
             session_id="",
             tier=_tier_label(tier),
-            operation=operation,  # type: ignore[arg-type]
-            reason=failure.reason,  # type: ignore[arg-type]
+            operation=operation,
+            reason=failure.reason,
             message=str(failure.cause),
         )
         self._on_degraded(event)

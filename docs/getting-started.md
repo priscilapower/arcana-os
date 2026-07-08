@@ -51,6 +51,23 @@ arcana run "summarize recent advances in RAG" --agent researcher --stream
     disable it globally via the `memory` block in `~/.arcana/config.json`. See
     [Memory → Assembling a federation](api/memory.md#assembling-a-federation-for-an-agent).
 
+!!! note "Relocating state"
+    Everything Arcana stores, agents, sessions, connections, and secrets, lives
+    under `~/.arcana`. Set the `ARCANA_HOME` environment variable to point it
+    elsewhere, which is handy for separate profiles, CI, or containers.
+
+## Chat interactively
+
+For a back-and-forth session instead of one-shot `run`, open the chat:
+
+```bash
+arcana chat --agent researcher
+```
+
+You get a full-screen transcript with streaming replies, slash commands
+(`/help`, `/switch`, `/memory`, …), newline and paste editing, and per-agent
+history. See [Interactive chat](chat.md) for the full command and key reference.
+
 ## Your first agent (Python)
 
 ```python

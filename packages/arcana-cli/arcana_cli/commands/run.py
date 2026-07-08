@@ -10,9 +10,11 @@ from rich.console import Console
 from rich.live import Live
 from rich.spinner import Spinner
 
+from arcana.agents.agent import Agent as RuntimeAgent
 from arcana.agents.registry import AgentRegistry
 from arcana.agents.session_manager import SessionManager
 from arcana.memory import EmbeddingGateway, load_memory_config
+from arcana.memory.federation import MemoryFederation
 from arcana.models.adapters.fastembed_embedding import FastEmbedEmbeddingAdapter
 from arcana.models.connection_store import ConnectionStore
 from arcana.models.gateway import ModelGateway
@@ -35,7 +37,7 @@ from arcana_cli.ui.theme import (
 console = Console()
 
 
-def _find_agent(name_or_id: str, reg: AgentRegistry) -> AgentRecord | None:
+def find_agent(name_or_id: str, reg: AgentRegistry) -> AgentRecord | None:
     """Look up an agent by UUID or exact name. Returns None if not found."""
     try:
         uid = UUID(name_or_id)
@@ -67,6 +69,36 @@ def _resolve_embedding_gateway() -> EmbeddingGateway | None:
     if importlib.util.find_spec("fastembed") is None:
         return None
     return EmbeddingGateway([FastEmbedEmbeddingAdapter()])
+
+
+async def build_session_runtime(
+    reg: AgentRegistry,
+    record: AgentRecord,
+    gateway: ModelGateway,
+    sm: SessionManager,
+    *,
+    no_memory: bool,
+) -> tuple[RuntimeAgent, MemoryFederation | None]:
+    """Assemble a runtime agent + its memory federation for `run` and `chat`.
+
+    Reads the memory block from ``config.json``, resolves the GLOBAL-tier
+    embedder, and delegates to ``build_runtime_with_memory``. Both the one-shot
+    ``run`` and the interactive ``chat`` drive the exact same agent+memory path
+    through here so they never diverge. Returns the agent together with the
+    federation it created (``None`` when memory is off) so the caller closes it.
+    """
+    memory_cfg = load_memory_config(ARCANA_HOME)
+    memory_enabled = memory_cfg.enabled and not no_memory
+    embedding = _resolve_embedding_gateway() if memory_enabled and memory_cfg.global_ == "vector" else None
+    return await reg.build_runtime_with_memory(
+        record,
+        gateway,
+        home=ARCANA_HOME,
+        enabled=memory_enabled,
+        embedding=embedding,
+        session_manager=sm,
+        extraction=memory_cfg.extraction,
+    )
 
 
 def init_cmd() -> None:
@@ -157,7 +189,7 @@ def run_cmd(
             raise typer.Exit(1)
 
         reg = AgentRegistry(ARCANA_HOME / "agents")
-        record = _find_agent(agent, reg)
+        record = find_agent(agent, reg)
         if record is None:
             console.print(err(f"No agent '{agent}'."))
             raise typer.Exit(1)
@@ -199,21 +231,9 @@ def run_cmd(
         else:
             session = sm.start(record.id)
 
-        memory_cfg = load_memory_config(ARCANA_HOME)
-        memory_enabled = memory_cfg.enabled and not no_memory
-        embedding = _resolve_embedding_gateway() if memory_enabled and memory_cfg.global_ == "vector" else None
-
         try:
             async with ModelGateway(connections=store) as gw:
-                runtime_agent, federation = await reg.build_runtime_with_memory(
-                    record,
-                    gw,
-                    home=ARCANA_HOME,
-                    enabled=memory_enabled,
-                    embedding=embedding,
-                    session_manager=sm,
-                    extraction=memory_cfg.extraction,
-                )
+                runtime_agent, federation = await build_session_runtime(reg, record, gw, sm, no_memory=no_memory)
                 try:
                     if stream:
                         live = Live(

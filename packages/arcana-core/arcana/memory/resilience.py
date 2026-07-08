@@ -16,7 +16,13 @@ from enum import StrEnum
 
 from arcana.memory.config import TierResilienceConfig
 from arcana.memory.errors import MemoryCorruptError, TierWriteFailed
-from arcana.observability import MemoryDegradedEvent, emit_degraded, get_metrics
+from arcana.observability import (
+    MemoryDegradedEvent,
+    MemoryDegradeReason,
+    MemoryOperation,
+    emit_degraded,
+    get_metrics,
+)
 from arcana.types import AdapterHealth, MemoryAdapter, MemoryEntry, MemoryQuery, MemoryScope, RetrievalMode
 
 
@@ -232,13 +238,13 @@ class ResilientTier:
             return self._config.semantic_timeout_ms / 1000
         return self._config.read_timeout_ms / 1000
 
-    def _degrade(self, operation: str, reason: str, message: str) -> None:
+    def _degrade(self, operation: MemoryOperation, reason: MemoryDegradeReason, message: str) -> None:
         event = MemoryDegradedEvent(
             agent_id="",
             session_id="",
             tier=self._label,
-            operation=operation,  # type: ignore[arg-type]
-            reason=reason,  # type: ignore[arg-type]
+            operation=operation,
+            reason=reason,
             message=message,
         )
 
