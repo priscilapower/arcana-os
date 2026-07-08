@@ -3,7 +3,7 @@
 import typer
 from rich.console import Console
 
-from arcana_cli.commands import agent, cards, providers, run, soul
+from arcana_cli.commands import agent, cards, chat, providers, run, soul
 
 app = typer.Typer(
     name="arcana",
@@ -19,6 +19,7 @@ app.add_typer(providers.app, name="providers")
 app.add_typer(soul.app, name="soul")
 
 app.command(name="run")(run.run_cmd)
+app.command(name="chat")(chat.chat_cmd)
 app.command(name="init")(run.init_cmd)
 app.command(name="status")(run.status_cmd)
 

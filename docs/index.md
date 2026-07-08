@@ -30,8 +30,8 @@ arcana run "what are the tradeoffs between RAG and fine-tuning?" --agent researc
 
 -   __`arcana-cli`__ — the command line
 
-    A thin Typer wrapper: `init`, `status`, `providers`, `agent`, `run`, `cards`.
-    See the [CLI reference](cli.md).
+    A thin Typer wrapper: `init`, `status`, `providers`, `agent`, `run`, `chat`,
+    `cards`. See the [CLI reference](cli.md).
 
 </div>
 

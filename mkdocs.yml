@@ -97,6 +97,7 @@ plugins:
 nav:
   - Home: index.md
   - Getting started: getting-started.md
+  - Interactive chat: chat.md
   - The 22 Major Arcana: cards.md
   - CLI reference: cli.md
   - API reference:

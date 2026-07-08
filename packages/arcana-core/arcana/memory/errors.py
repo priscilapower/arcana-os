@@ -8,6 +8,7 @@ the ``ModelAdapter._translate`` contract in ``arcana.models``.
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from arcana.observability.events import MemoryDegradeReason
     from arcana.types import MemoryScope
 
 
@@ -66,8 +67,10 @@ class TierWriteFailed(MemoryError):
     ``write`` vs ``promote`` and suppress it entirely for the fatal PRIVATE case.
     """
 
-    def __init__(self, scope: "MemoryScope", cause: BaseException, reason: str = "backend_error") -> None:
+    def __init__(
+        self, scope: "MemoryScope", cause: BaseException, reason: "MemoryDegradeReason" = "backend_error"
+    ) -> None:
         self.scope = scope
         self.cause = cause
-        self.reason = reason
+        self.reason: MemoryDegradeReason = reason
         super().__init__(f"write to {scope} tier failed ({reason}): {cause!r}")

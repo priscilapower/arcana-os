@@ -319,11 +319,15 @@ class ModelGateway:
                     span.record_exception(exc)
                     raise
 
-            if last_exc is not None:
-                span.record_exception(last_exc)
+            # Every path that leaves the retry loop without returning or raising
+            # assigns last_exc first; the None case is unreachable, but guard it
+            # explicitly rather than raise a possibly-None value.
+            if last_exc is None:
+                raise ModelUnavailableError(f"Connection {model!r} failed without a captured error.")
+            span.record_exception(last_exc)
             if isinstance(last_exc, ModelUnavailableError):
                 entry.mark_unhealthy()
-            raise last_exc  # type: ignore[misc]
+            raise last_exc
 
     async def stream(self, model: str, request: CompletionRequest) -> AsyncGenerator[ModelChunk, None]:
         """Stream a response as ``ModelChunk`` deltas.

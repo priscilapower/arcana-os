@@ -10,6 +10,7 @@ Arcana's design system. Design System v3.0 — Cyan + Amber canonical pairing, d
 from rich.console import RenderableType
 from rich.panel import Panel
 from rich.table import Table
+from rich.theme import Theme
 
 from arcana.types.card import Card
 
@@ -47,6 +48,35 @@ ORANGE = "#f97316"  # oklch(70% 0.18  50)  warning
 TXT = "#f5f0e6"  # --txt   primary text (warm white on dark)
 TXT2 = "#94a3b8"  # --txt2  muted
 TXT3 = "#64748b"  # --txt3  subtle / placeholder
+
+# Surfaces  (dark-first: raised container fills, pre-composited since terminals
+# can't alpha-blend). SURFACE_ACCENT is the faint cyan wash on user message bubbles.
+SURFACE = "#11151c"  # neutral raised surface (panels, boxes) — the app canvas
+SURFACE_ACCENT = "#0e2830"  # cyan-tinted surface — ACCENT at low opacity over dark
+SURFACE_HI = "#222937"  # elevated surface — inline-code chips, kept a step above SURFACE so they stay visible on it
+
+# ---------------------------------------------------------------------------
+# Markdown theme  — maps Rich's markdown.* styles onto brand tokens so rendered
+# replies stay on-palette (cyan + amber), not Rich's default magenta headings.
+# Applied to the chat Console; inherits Rich defaults for anything unlisted.
+# ---------------------------------------------------------------------------
+MARKDOWN_THEME = Theme(
+    {
+        "markdown.h1": f"bold {ACCENT}",
+        "markdown.h2": f"bold {ACCENT}",
+        "markdown.h3": f"bold {TXT}",
+        "markdown.h4": f"bold {TXT2}",
+        "markdown.h5": f"bold {TXT2}",
+        "markdown.h6": f"bold {TXT2}",
+        "markdown.code": f"{ACCENT_BRIGHT} on {SURFACE_HI}",
+        "markdown.link": f"underline {ACCENT}",
+        "markdown.link_url": TXT3,
+        "markdown.item.bullet": ACCENT,
+        "markdown.item.number": ACCENT,
+        "markdown.hr": TXT3,
+        "markdown.block_quote": TXT2,
+    }
+)
 
 # ---------------------------------------------------------------------------
 # Per-card accent hues  (the 22 Major Arcana, fixed hues)
@@ -161,16 +191,6 @@ def eyebrow(label: str) -> str:
 def prompt_line(command: str) -> str:
     """✦ cyan + amber command — styled CLI example prompt line."""
     return f"[{ACCENT}]{PROMPT}[/] [bold {AMBER}]{command}[/]"
-
-
-def session_header(card_label: str, agent_name: str, model: str, session_id: str) -> str:
-    """Chat session header for `arcana chat` (CLI Reference — Interactive Chat)."""
-    return (
-        f"\n[bold {ACCENT}]{PROMPT}  {card_label}[/]"
-        f"  [{TXT3}]{SEP}[/]  "
-        f"[bold {ACCENT}]{agent_name}[/]\n"
-        f"[{TXT3}]{model}  {SEP}  Session #{session_id[:4]}[/]\n"
-    )
 
 
 # ---------------------------------------------------------------------------

@@ -36,6 +36,7 @@ from arcana.evals.types import (
     EvalCase,
     EvalResult,
     EvalRunSummary,
+    JudgeType,
     JudgeVerdict,
     RegressionDetail,
     RegressionReport,
@@ -144,7 +145,7 @@ class EvalHarness:
                 model_id="skipped",
                 response="",
                 verdict=JudgeVerdict(
-                    judge_type="rule",  # type: ignore
+                    judge_type=JudgeType.RULE,
                     dimension_scores=[],
                     overall_score=0.0,
                     passed=False,

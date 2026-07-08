@@ -1,9 +1,17 @@
-"""Package-wide constants shared across commands and UI modules."""
+"""Package-wide constants shared across commands and UI modules.
 
+Runtime state lives under ``~/.arcana`` by default; setting the ``ARCANA_HOME``
+environment variable relocates it (agents, sessions, connections, secrets),
+which is handy for separate profiles, CI, and containers. It's read once at
+import — the standard state-root override convention (cf. ``GIT_DIR``,
+``CARGO_HOME``), not a general settings surface.
+"""
+
+import os
 from collections.abc import Mapping
 from pathlib import Path
 
-ARCANA_HOME: Path = Path.home() / ".arcana"
+ARCANA_HOME: Path = Path(os.environ.get("ARCANA_HOME", Path.home() / ".arcana"))
 AGENTS_BASE: Path = ARCANA_HOME / "agents"
 CONNECTIONS_PATH: Path = ARCANA_HOME / "connections" / "models.json"
 
