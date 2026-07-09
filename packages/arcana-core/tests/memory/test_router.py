@@ -1,7 +1,6 @@
 """Unit tests for MemoryRouter. Pure routing decisions — no I/O, no LLM calls."""
 
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
 
 import pytest
 
@@ -15,6 +14,7 @@ from arcana.types import (
     MemoryType,
     MemoryWeights,
 )
+from tests.support.factories import make_entry
 
 # --------------------------------------------------------------------------
 # Fixtures / helpers
@@ -39,16 +39,8 @@ class _FakeAdapter:
         return AdapterHealth(adapter_id=self.name, healthy=True)
 
 
-def _entry(**overrides) -> MemoryEntry:
-    base = dict(
-        agent_id=uuid4(),
-        type=MemoryType.SEMANTIC,
-        content="the sky is blue",
-        importance=0.5,
-        scope=MemoryScope.PRIVATE,
-    )
-    base.update(overrides)
-    return MemoryEntry(**base)  # type: ignore[arg-type]
+def _entry(**overrides: object) -> MemoryEntry:
+    return make_entry(**{"content": "the sky is blue", **overrides})
 
 
 def _router(*, with_global: bool = True, pools: list[str] | None = None) -> MemoryRouter:

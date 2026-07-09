@@ -40,7 +40,8 @@ from arcana.types import (
 )
 from arcana.types.session import Session
 from tests.agents._federation import MakeFederatedAgent
-from tests.memory._fakes import FailingAdapter, FakeEmbedding, StubExtractor
+from tests.support.factories import make_entry
+from tests.support.fakes import FailingAdapter, KeywordEmbedder, StubExtractor
 
 # The vector GLOBAL tier needs the optional ``vector`` extra (sqlite-vec). Its one
 # test skips without it; every private-tier test below runs regardless.
@@ -48,17 +49,16 @@ _HAS_VECTOR = importlib.util.find_spec("sqlite_vec") is not None
 
 
 def _entry(agent_id: UUID | None, content: str, **overrides: Any) -> MemoryEntry:
-    base: dict[str, Any] = dict(
-        agent_id=agent_id or uuid4(),
-        type=MemoryType.SEMANTIC,
-        content=content,
-        importance=0.5,
-        confidence=0.9,
-        confidence_source=ConfidenceSource.USER_CONFIRMED,
-        scope=MemoryScope.PRIVATE,
+    """A USER_CONFIRMED entry for a given agent — the shape these tests reach for most."""
+    return make_entry(
+        **{
+            "agent_id": agent_id or uuid4(),
+            "content": content,
+            "confidence": 0.9,
+            "confidence_source": ConfidenceSource.USER_CONFIRMED,
+            **overrides,
+        }
     )
-    base.update(overrides)
-    return MemoryEntry(**base)
 
 
 # ---------------------------------------------------------------------------
@@ -306,20 +306,22 @@ async def test_summary_memory_written_on_close(make_federated_agent: MakeFederat
 async def test_global_vector_tier_semantic_recall(make_federated_agent: MakeFederatedAgent):
     """A GLOBAL semantic memory is recalled into the prompt via the real vector tier.
 
-    Assembled through ``build_federation`` with a deterministic fake embedder, so
-    the semantic path is exercised end-to-end without a live embedding provider.
+    Assembled through ``build_federation`` with a deterministic keyword embedder,
+    so the semantic path is exercised end-to-end without a live embedding provider.
+    The content shares axis words with the query, so the fake embedder ranks it a
+    genuine semantic match rather than a degenerate one.
     """
-    fa = await make_federated_agent(embedding=FakeEmbedding())
+    fa = await make_federated_agent(embedding=KeywordEmbedder())
 
     fact = _entry(
         fa.agent_id,
-        "the mission codename is Nightingale",
+        "GLOBALFACT alpha alpha beta",
         importance=0.8,
         scope=MemoryScope.GLOBAL,
     )
     await fa.federation.write(fact)
 
-    await fa.agent.run("what is the mission codename?")
+    await fa.agent.run("recall alpha beta")
 
     system = fa.gateway.complete.call_args[0][1].system
-    assert "Nightingale" in system
+    assert "GLOBALFACT" in system

@@ -2,7 +2,6 @@
 
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -12,38 +11,17 @@ from arcana.agents.registry import AgentRegistry
 from arcana.agents.session_manager import SessionManager
 from arcana.memory import EmbeddingGateway, MemoryFederation, MemoryRouter, build_federation
 from arcana.memory.extraction import MemoryExtractor
-from arcana.models.adapters.base import CompletionResponse, ModelChunk
 from arcana.models.adapters.embedding import EmbeddingAdapter
-from arcana.models.gateway import ModelGateway
 from arcana.observability import MemoryDegradedEvent
 from arcana.types import MemoryAdapter
 from arcana.types.card import Card
 from tests.agents._federation import FederatedAgent, MakeFederatedAgent
-
-
-def _make_gateway(*, content: str = "Hello from the agent.") -> MagicMock:
-    """Return a mock ModelGateway with canned responses."""
-    gw = MagicMock(spec=ModelGateway)
-    gw.complete = AsyncMock(return_value=CompletionResponse(content=content, input_tokens=10, output_tokens=5))
-
-    words = content.split()
-
-    async def _stream(_model: str, _req: object) -> AsyncGenerator[ModelChunk, None]:
-        for i, word in enumerate(words):
-            is_last = i == len(words) - 1
-            yield ModelChunk(
-                text=word + " ",
-                input_tokens=10 if is_last else 0,
-                output_tokens=5 if is_last else 0,
-            )
-
-    gw.stream = _stream
-    return gw
+from tests.support.fakes import make_gateway
 
 
 @pytest.fixture
 def gateway():
-    return _make_gateway()
+    return make_gateway()
 
 
 @pytest.fixture
@@ -91,7 +69,7 @@ async def make_federated_agent(tmp_path: Path) -> AsyncGenerator[MakeFederatedAg
     ) -> FederatedAgent:
         agent_id = uuid4()
         degraded: list[MemoryDegradedEvent] = []
-        gateway = _make_gateway(content=content)
+        gateway = make_gateway(content=content)
 
         if private is not None or global_ is not None:
             # Direct construction — the seam that lets us drop in a failing tier.

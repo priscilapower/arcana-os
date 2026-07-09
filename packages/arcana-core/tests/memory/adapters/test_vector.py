@@ -16,79 +16,23 @@ import pytest
 from arcana.memory import EmbeddingGateway, MemoryStorageError, SQLiteAdapter, VectorAdapter
 from arcana.models.adapters.embedding import EmbeddingAdapter
 from arcana.types import (
-    AdapterHealth,
     MemoryEntry,
     MemoryQuery,
     MemoryScope,
-    MemoryType,
     PruneMode,
     PrunePolicy,
     RetrievalMode,
 )
+from tests.support.factories import make_entry
+from tests.support.fakes import KeywordEmbedder
 
 # --------------------------------------------------------------------------
 # Fixtures / helpers
 # --------------------------------------------------------------------------
 
-_AXES = ("alpha", "beta", "gamma", "delta")
-
-
-class KeywordEmbedder(EmbeddingAdapter):
-    """Deterministic embedder: vector[i] = count of ``_AXES[i]`` in the text.
-
-    Configurable model_name/family/health/dims so the same class drives the
-    pinning, family-fallback, dimension-guard, and health-fallback tests.
-    """
-
-    def __init__(
-        self,
-        *,
-        name: str = "kw-embed",
-        family: str | None = None,
-        healthy: bool = True,
-        dims: int = 4,
-    ) -> None:
-        self._name = name
-        self._family = family or name
-        self._healthy = healthy
-        self._dims = dims
-        self.embed_calls = 0
-
-    @property
-    def model_name(self) -> str:
-        return self._name
-
-    @property
-    def dimensions(self) -> int:
-        return self._dims
-
-    @property
-    def model_family(self) -> str:
-        return self._family
-
-    async def embed(self, text: str) -> list[float]:
-        self.embed_calls += 1
-        low = text.lower()
-        vec = [float(low.count(ax)) for ax in _AXES]
-        # Pad/truncate to the declared dimension (drives the dim-mismatch test).
-        vec = (vec + [0.0] * self._dims)[: self._dims]
-        if not any(vec):
-            vec[0] = 1.0  # avoid a zero vector — cosine distance is undefined for it
-        return vec
-
-    async def health_check(self) -> AdapterHealth:
-        return AdapterHealth(adapter_id=self._name, healthy=self._healthy)
-
 
 def _entry(**overrides: object) -> MemoryEntry:
-    base: dict[str, object] = dict(
-        agent_id=uuid4(),
-        type=MemoryType.SEMANTIC,
-        content="alpha",
-        importance=0.5,
-    )
-    base.update(overrides)
-    return MemoryEntry(**base)  # type: ignore[arg-type]
+    return make_entry(**overrides)
 
 
 async def _build(db_path: Path, *embedders: EmbeddingAdapter) -> VectorAdapter:

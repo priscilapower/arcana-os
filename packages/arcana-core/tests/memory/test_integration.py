@@ -12,9 +12,6 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-import pytest
-
-import arcana.observability as obs
 from arcana.memory import (
     EmbeddingGateway,
     MemoryFederation,
@@ -22,59 +19,21 @@ from arcana.memory import (
     SQLiteAdapter,
     VectorAdapter,
 )
-from arcana.models.adapters.embedding import AdapterHealth, EmbeddingAdapter
+from arcana.models.adapters.embedding import EmbeddingAdapter
 from arcana.types import (
     MemoryEntry,
     MemoryQuery,
     MemoryScope,
-    MemoryType,
     PruneMode,
     PrunePolicy,
     RetrievalMode,
 )
+from tests.support.factories import make_entry
+from tests.support.fakes import KeywordEmbedder
 
 # --------------------------------------------------------------------------
 # Fixtures / helpers
 # --------------------------------------------------------------------------
-
-_AXES = ("alpha", "beta", "gamma", "delta")
-
-
-class KeywordEmbedder(EmbeddingAdapter):
-    """Deterministic embedder: vector[i] = count of ``_AXES[i]`` in the text.
-
-    Same shape as the vector-adapter suite's stand-in, so semantic ranking is
-    exact. ``healthy``/``family``/``name`` drive the gateway-through-federation
-    health and pinning paths.
-    """
-
-    def __init__(self, *, name: str = "kw-embed", family: str | None = None, healthy: bool = True) -> None:
-        self._name = name
-        self._family = family or name
-        self._healthy = healthy
-        self.embed_calls = 0
-
-    @property
-    def model_name(self) -> str:
-        return self._name
-
-    @property
-    def dimensions(self) -> int:
-        return len(_AXES)
-
-    @property
-    def model_family(self) -> str:
-        return self._family
-
-    async def embed(self, text: str) -> list[float]:
-        self.embed_calls += 1
-        vec = [float(text.lower().count(ax)) for ax in _AXES]
-        if not any(vec):
-            vec[0] = 1.0  # cosine distance is undefined for a zero vector
-        return vec
-
-    async def health_check(self) -> AdapterHealth:
-        return AdapterHealth(adapter_id=self._name, healthy=self._healthy)
 
 
 async def _vector_tier(db_path: Path, *embedders: EmbeddingAdapter) -> VectorAdapter:
@@ -84,32 +43,13 @@ async def _vector_tier(db_path: Path, *embedders: EmbeddingAdapter) -> VectorAda
 
 
 def _entry(**overrides: Any) -> MemoryEntry:
-    base: dict[str, Any] = dict(
-        agent_id=uuid4(),
-        type=MemoryType.SEMANTIC,
-        content="alpha",
-        importance=0.5,
-        scope=MemoryScope.PRIVATE,
-    )
-    base.update(overrides)
-    return MemoryEntry(**base)
+    return make_entry(**overrides)
 
 
 async def _vector_count(tier: VectorAdapter) -> int:
     conn = tier._sqlite.connection
     rows = await (await conn.execute("SELECT COUNT(*) FROM memory_vectors")).fetchall()
     return int(rows[0][0])
-
-
-@pytest.fixture
-def audit_log(tmp_path: Path):
-    """Configure the global audit log to a temp dir, restoring it afterwards."""
-    previous = obs.get_audit_log()
-    obs.configure_observability(tmp_path / "obs")
-    log = obs.get_audit_log()
-    assert log is not None
-    yield log
-    obs._audit_log = previous
 
 
 # --------------------------------------------------------------------------

@@ -30,26 +30,18 @@ from arcana.memory.extraction.signals import (
     has_durable_signal,
     register_language,
 )
-from arcana.models.adapters.base import CompletionResponse
 from arcana.models.gateway import ModelGateway
-from arcana.types import ConfidenceSource, ExtractionStrategy, MemoryEntry, MemoryType, MessageRole, Session
+from arcana.types import ConfidenceSource, ExtractionStrategy, MemoryEntry, MemoryType, MessageRole
+from tests.support.factories import make_session as _session
+from tests.support.fakes import make_gateway
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _session(*turns: tuple[MessageRole, str]) -> Session:
-    session = Session(agent_id=uuid4())
-    for role, content in turns:
-        session.add_message(role, content)
-    return session
-
-
 def _gateway(content: str) -> MagicMock:
-    gw = MagicMock(spec=ModelGateway)
-    gw.complete = AsyncMock(return_value=CompletionResponse(content=content, input_tokens=5, output_tokens=5))
-    return gw
+    return make_gateway(content=content, input_tokens=5, output_tokens=5)
 
 
 # ---------------------------------------------------------------------------

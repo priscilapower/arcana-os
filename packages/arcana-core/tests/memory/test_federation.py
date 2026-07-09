@@ -19,6 +19,7 @@ from arcana.types import (
     PrunePolicy,
     PruneReport,
 )
+from tests.support.factories import make_entry
 
 # --------------------------------------------------------------------------
 # Fixtures / helpers
@@ -61,16 +62,8 @@ class _PrunableAdapter(_RecordingAdapter):
         return self.report
 
 
-def _entry(**overrides) -> MemoryEntry:
-    base = dict(
-        agent_id=uuid4(),
-        type=MemoryType.SEMANTIC,
-        content="the sky is blue",
-        importance=0.5,
-        scope=MemoryScope.PRIVATE,
-    )
-    base.update(overrides)
-    return MemoryEntry(**base)  # type: ignore[arg-type]
+def _entry(**overrides: object) -> MemoryEntry:
+    return make_entry(**{"content": "the sky is blue", **overrides})
 
 
 # --------------------------------------------------------------------------
