@@ -30,6 +30,11 @@ logger = logging.getLogger("arcana.agents.agent")
 # Oldest turns are dropped from the replayed context window only; full transcript stays on disk.
 MAX_HISTORY_TURNS = 20
 
+# Retrieved entries below this confidence are never injected into the prompt.
+# Mirrors ``MemoryProfile.min_confidence_for_context``; the store-side floor
+# is ``min_confidence_to_store`` (entries below it are never persisted).
+DEFAULT_MIN_CONFIDENCE_FOR_CONTEXT = 0.5
+
 
 class Agent:
     """
@@ -61,6 +66,7 @@ class Agent:
         session_manager: SessionManager | None = None,
         extractor: MemoryExtractor | None = None,
         min_confidence_to_store: float = DEFAULT_MIN_CONFIDENCE_TO_STORE,
+        min_confidence_for_context: float = DEFAULT_MIN_CONFIDENCE_FOR_CONTEXT,
         summarise_on_close: bool = True,
     ) -> None:
         self.id = id or uuid4()
@@ -76,6 +82,7 @@ class Agent:
         # Extraction strategy — heuristic by default (deterministic, model-free).
         self._extractor = extractor or HeuristicExtractor()
         self._min_confidence_to_store = min_confidence_to_store
+        self._min_confidence_for_context = min_confidence_for_context
         self._summarise_on_close = summarise_on_close
 
         # Resolve config from card(s)
@@ -265,7 +272,7 @@ class Agent:
     async def _retrieve_memory_context(self, prompt: str) -> str:
         if not self.memory:
             return ""
-        query = MemoryQuery(text=prompt, limit=5)
+        query = MemoryQuery(text=prompt, limit=5, min_confidence=self._min_confidence_for_context)
         entries = await self.memory.search(query)
         if not entries:
             return ""

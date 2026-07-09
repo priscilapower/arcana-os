@@ -1,17 +1,16 @@
 """Integration tests: Agent + MemoryAdapter — search, inject, write."""
 
-from collections.abc import AsyncGenerator
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from arcana.agents.agent import Agent
 from arcana.agents.session_manager import SessionManager
 from arcana.memory import SQLiteAdapter
-from arcana.models.adapters.base import CompletionResponse, ModelChunk
-from arcana.models.gateway import ModelGateway
 from arcana.types.card import Card
 from arcana.types.memory import ConfidenceSource, MemoryEntry, MemoryQuery, MemoryType, RetrievalMode
+from tests.support.factories import make_entry
+from tests.support.fakes import make_gateway
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -19,18 +18,7 @@ from arcana.types.memory import ConfidenceSource, MemoryEntry, MemoryQuery, Memo
 
 
 def _gateway(content: str = "The answer is 42.") -> MagicMock:
-    gw = MagicMock(spec=ModelGateway)
-    gw.complete = AsyncMock(return_value=CompletionResponse(content=content, input_tokens=8, output_tokens=4))
-
-    words = content.split()
-
-    async def _stream(_model: str, _req: object) -> AsyncGenerator[ModelChunk, None]:
-        for i, word in enumerate(words):
-            is_last = i == len(words) - 1
-            yield ModelChunk(text=word + " ", input_tokens=8 if is_last else 0, output_tokens=4 if is_last else 0)
-
-    gw.stream = _stream
-    return gw
+    return make_gateway(content=content, input_tokens=8, output_tokens=4)
 
 
 def _memory_adapter(search_results: list[MemoryEntry] | None = None) -> MagicMock:
@@ -40,13 +28,8 @@ def _memory_adapter(search_results: list[MemoryEntry] | None = None) -> MagicMoc
     return adapter
 
 
-def _make_entry(content: str, agent_id=None) -> MemoryEntry:
-    return MemoryEntry(
-        agent_id=agent_id or uuid4(),
-        type=MemoryType.EPISODIC,
-        content=content,
-        importance=0.6,
-    )
+def _make_entry(content: str, agent_id: UUID | None = None) -> MemoryEntry:
+    return make_entry(agent_id=agent_id or uuid4(), type=MemoryType.EPISODIC, content=content, importance=0.6)
 
 
 # ---------------------------------------------------------------------------

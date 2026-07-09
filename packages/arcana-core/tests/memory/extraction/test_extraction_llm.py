@@ -14,14 +14,14 @@ Each test skips gracefully when no backend is reachable.
 
 import os
 from collections.abc import AsyncIterator
-from uuid import uuid4
 
 import pytest
 
 from arcana.memory.extraction import MAX_ENTRY_CONTENT, LLMExtractor
 from arcana.models.connection_store import ConnectionStore
 from arcana.models.gateway import ModelGateway
-from arcana.types import ConfidenceSource, MemoryType, MessageRole, Session
+from arcana.types import ConfidenceSource, MemoryType, MessageRole
+from tests.support.factories import make_session as _session
 
 pytestmark = pytest.mark.llm_eval
 
@@ -38,13 +38,6 @@ async def gateway(tmp_path) -> AsyncIterator[ModelGateway]:
         pytest.skip(f"no reachable model backend for {_MODEL!r} — set ARCANA_EXTRACTION_TEST_MODEL or start Ollama")
     yield gw
     await gw.aclose()
-
-
-def _session(*turns: tuple[MessageRole, str]) -> Session:
-    session = Session(agent_id=uuid4())
-    for role, content in turns:
-        session.add_message(role, content)
-    return session
 
 
 async def test_llm_extract_returns_typed_capped_entries(gateway: ModelGateway):

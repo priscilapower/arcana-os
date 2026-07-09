@@ -11,6 +11,7 @@ from arcana.memory import SQLiteAdapter
 from arcana.memory.migrations import MIGRATIONS, migrate_to_latest
 from arcana.types import MemoryEntry, MemoryQuery, MemoryType
 from arcana.types.memory import RetrievalMode
+from tests.support.factories import make_entry
 
 
 @pytest.fixture
@@ -21,10 +22,8 @@ async def adapter(tmp_path: Path):
     await a.aclose()
 
 
-def _entry(**overrides) -> MemoryEntry:
-    base = dict(agent_id=uuid4(), type=MemoryType.SEMANTIC, content="placeholder", importance=0.5)
-    base.update(overrides)
-    return MemoryEntry(**base)  # type: ignore[arg-type]
+def _entry(**overrides: object) -> MemoryEntry:
+    return make_entry(**{"content": "placeholder", **overrides})
 
 
 # --------------------------------------------------------------------------
