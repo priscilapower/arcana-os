@@ -14,6 +14,7 @@ from arcana.cards.engine import CardEngine
 from arcana.cards.registry import get_registry
 from arcana.context.soul import read_soul
 from arcana.memory import build_federation
+from arcana.memory.decay import resolve_decay_profiles
 from arcana.memory.extraction import (
     DEFAULT_MIN_CONFIDENCE_TO_STORE,
     ExtractionConfig,
@@ -198,11 +199,17 @@ class AgentRegistry:
         """
         federation: MemoryFederation | None = None
         if memory is None and enabled:
+            # Card-driven decay: the agent's card (blended with any modifiers)
+            # sets the per-type half-lives retrieval ranks with; The World never
+            # forgets (DecayStrategy.NONE on every type).
+            config = CardEngine(get_registry()).resolve(record.card, record.modifier_cards)
+            decay_profiles = resolve_decay_profiles(config.decay_config, world=record.card == Card.WORLD)
             federation = await build_federation(
                 record.id,
                 home=home,
                 embedding=embedding,
                 pools=pools,
+                decay_profiles=decay_profiles,
                 on_degraded=on_degraded,
             )
             memory = federation

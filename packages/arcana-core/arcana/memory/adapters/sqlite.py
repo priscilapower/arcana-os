@@ -364,7 +364,14 @@ class SQLiteAdapter:
     async def _refresh_access(self, entries: list[MemoryEntry]) -> None:
         """Bump access tracking for the read entries, driving decay refresh.
 
-        Access tracking drives decay refresh (DecayProfile.refresh_on_access).
+        Access tracking drives decay refresh (``DecayProfile.refresh_on_access``):
+        the persisted row's ``last_accessed_at`` is reset to now so a *future*
+        read observes a fresh clock. The returned entry keeps its read-time
+        ``last_accessed_at`` on purpose — decay ranking downstream must see the
+        entry's true age at *this* read, not a clock the read itself just reset,
+        or nothing would ever age out of retrieval. Only ``access_count`` is
+        bumped in place.
+
         Trade-off: every read becomes a small write; batched into one UPDATE and
         toggleable per-instance. Shared with ``VectorAdapter``, whose semantic
         path bypasses ``search`` but still needs the same refresh.
@@ -372,7 +379,7 @@ class SQLiteAdapter:
         if self._refresh_on_access and entries:
             await self._touch([e.id for e in entries])
             for entry in entries:
-                entry.bump_access()
+                entry.access_count += 1
 
     async def _touch(self, ids: list[UUID]) -> None:
         conn = await self._ensure()

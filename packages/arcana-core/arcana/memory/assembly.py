@@ -32,7 +32,7 @@ from arcana.memory.extraction import ExtractionConfig
 from arcana.memory.federation import MemoryFederation
 from arcana.memory.router import MemoryRouter
 from arcana.observability import MemoryDegradedEvent
-from arcana.types import MemoryAdapter
+from arcana.types import DecayProfile, MemoryAdapter, MemoryType
 
 logger = logging.getLogger("arcana.memory.assembly")
 
@@ -84,6 +84,7 @@ async def build_federation(
     home: Path,
     embedding: EmbeddingGateway | None = None,
     pools: list[PoolConfig] | None = None,
+    decay_profiles: dict[MemoryType, DecayProfile] | None = None,
     on_degraded: Callable[[MemoryDegradedEvent], None] | None = None,
 ) -> MemoryFederation:
     """Assemble the tier stack for one agent and return its federation.
@@ -97,6 +98,10 @@ async def build_federation(
       entirely and the agent runs private-only. Shared across agents, so its
       open-time integrity check is off (it detects corruption on read instead).
     * **SHARED** — each pool in ``pools`` is registered on the router by name.
+
+    ``decay_profiles`` sets the per-type half-lives the router ranks retrieval
+    with; when omitted the system defaults apply. Callers derive these from a
+    card via :func:`~arcana.memory.decay.resolve_decay_profiles`.
 
     ``on_degraded`` defaults, inside the federation, to the observability audit
     log, so a degraded SHARED/GLOBAL tier is recorded without failing the run.
@@ -113,7 +118,7 @@ async def build_federation(
     else:
         logger.info("no embedding provider — global memory tier disabled (private SQLite only)")
 
-    router = MemoryRouter(private=private, global_=global_)
+    router = MemoryRouter(private=private, global_=global_, decay_profiles=decay_profiles)
     for pool in pools or []:
         router.register_pool(pool.name, pool.adapter)
 

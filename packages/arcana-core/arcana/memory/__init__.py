@@ -10,6 +10,12 @@ from arcana.memory.adapters.sqlite import SQLiteAdapter
 from arcana.memory.adapters.vector import VectorAdapter
 from arcana.memory.assembly import MemoryConfig, PoolConfig, build_federation, load_memory_config
 from arcana.memory.config import MemoryResilienceConfig, TierResilienceConfig
+from arcana.memory.decay import (
+    decay_sorted,
+    effective_importance,
+    resolve_decay_profiles,
+    should_consolidate,
+)
 from arcana.memory.edges import EdgeStore
 from arcana.memory.embedding_gateway import EmbeddingGateway
 from arcana.memory.errors import (
@@ -66,6 +72,11 @@ __all__ = [
     "MemoryRouter",
     "TierBackend",
     "GLOBAL_PROMOTION_THRESHOLD",
+    # Decay
+    "effective_importance",
+    "should_consolidate",
+    "decay_sorted",
+    "resolve_decay_profiles",
     # Assembly
     "build_federation",
     "PoolConfig",
