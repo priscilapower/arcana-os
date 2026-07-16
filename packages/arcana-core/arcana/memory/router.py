@@ -14,18 +14,25 @@ candidates. It never performs I/O; the federation layer awaits the adapters and
 applies any scope rewrite a promotion target calls for.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 
 from arcana.memory.config import MemoryResilienceConfig
+from arcana.memory.decay import effective_importance, should_consolidate
 from arcana.memory.errors import MemoryRoutingError
 from arcana.memory.resilience import CircuitBreaker, ResilientTier
 from arcana.types import (
+    DEFAULT_DECAY_PROFILES,
+    DecayProfile,
     MemoryAdapter,
     MemoryEntry,
     MemoryQuery,
     MemoryScope,
+    MemoryType,
     MemoryWeights,
 )
+from arcana.types._utils import now_utc
 
 #: Importance at or above which a PRIVATE entry is also written to GLOBAL.
 #: Mirrors ``SQLiteAdapter.PROMOTION_THRESHOLD`` and
@@ -61,6 +68,8 @@ class MemoryRouter:
         global_: MemoryAdapter | None = None,
         pools: dict[str, MemoryAdapter] | None = None,
         weights: MemoryWeights | None = None,
+        decay_profiles: dict[MemoryType, DecayProfile] | None = None,
+        clock: Callable[[], datetime] = now_utc,
         resilience: MemoryResilienceConfig | None = None,
     ) -> None:
         # Each tier is wrapped once here so every routing decision hands the
@@ -68,6 +77,11 @@ class MemoryRouter:
         # reporting — without the federation knowing which backend is underneath.
         self._resilience = resilience or MemoryResilienceConfig.load()
         self._weights = weights or MemoryWeights()
+        # A caller may override only some types; fall back to the system default
+        # for the rest so ranking always has a full per-type profile map. The
+        # clock is injected so decay is deterministic in tests (no sleeps).
+        self._decay_profiles = {**DEFAULT_DECAY_PROFILES, **(decay_profiles or {})}
+        self._clock = clock
         self._private = self._wrap(private, MemoryScope.PRIVATE)
         self._global = self._wrap(global_, MemoryScope.GLOBAL) if global_ is not None else None
         self._pools: dict[str, MemoryAdapter] = {
@@ -167,22 +181,31 @@ class MemoryRouter:
     # ------------------------------------------------------------------
 
     def rank(self, entries: list[MemoryEntry], query: MemoryQuery) -> list[MemoryEntry]:
-        """Re-rank merged candidates by the agent's memory weights.
+        """Re-rank merged candidates by decayed effective importance and weights.
 
-        Layers card preference on top of each adapter's own ordering:
+        Layers card preference on top of each adapter's own ordering, using the
+        age-discounted importance (decay is a score, not a delete) rather than the
+        raw stored value:
 
-            score = importance × weights.for_type(type)
+            score = effective_importance(entry, profile, now) × weights.for_type(type)
 
-        Pinned entries always sort first; ties break on score then recency.
-        Assumes the input is already deduplicated by ``id`` (the federation
-        merges per-tier results before ranking). Truncates to ``query.limit``.
+        Entries that have aged out — decayed below their consolidation threshold
+        (:func:`~arcana.memory.decay.should_consolidate`) — are dropped from the
+        result, so a fast-decaying type stops surfacing once stale. Pinned entries
+        are exempt from decay and always sort first; ties break on score then
+        recency. Assumes the input is already deduplicated by ``id`` (the
+        federation merges per-tier results before ranking). Truncates to
+        ``query.limit``.
         """
+        now = self._clock()
 
         def sort_key(entry: MemoryEntry) -> tuple[bool, float, float]:
-            score = entry.importance * self._weights.for_type(entry.type)
+            profile = self._decay_profiles[entry.type]
+            score = effective_importance(entry, profile, now) * self._weights.for_type(entry.type)
             return (entry.pinned, score, entry.last_accessed_at.timestamp())
 
-        ranked = sorted(entries, key=sort_key, reverse=True)
+        live = [e for e in entries if not should_consolidate(e, self._decay_profiles[e.type], now)]
+        ranked = sorted(live, key=sort_key, reverse=True)
         return ranked[: query.limit]
 
     # ------------------------------------------------------------------

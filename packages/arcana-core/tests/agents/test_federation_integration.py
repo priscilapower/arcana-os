@@ -141,22 +141,13 @@ async def test_context_confidence_filter_excludes_subthreshold(make_federated_ag
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Retrieval applies no time-decay: memory half-lives are config only "
-        "(DecayProfile / CardDecayConfig), and nothing computes effective "
-        "importance from age or drops aged entries at read time. Both entries "
-        "come back, so the episodic-decays assertion fails. A strict xfail so it "
-        "flips to a real pass the moment decayed retrieval is wired."
-    ),
-    strict=True,
-)
 async def test_typed_retention_episodic_decays_semantic_persists(make_federated_agent: MakeFederatedAgent):
-    """Given the decay profiles, an old EPISODIC entry should drop while SEMANTIC stays.
+    """Given the decay profiles, an old EPISODIC entry drops while SEMANTIC stays.
 
     Time is seeded (no sleeps): both entries are written ~120 days in the past.
-    With EPISODIC's 14-day half-life vs SEMANTIC's 180-day, only the semantic
-    entry should survive retrieval — once decay-at-read exists.
+    With EPISODIC's 14-day half-life vs SEMANTIC's 180-day, the episodic entry has
+    decayed below its consolidation threshold and ages out of retrieval, while the
+    semantic entry survives — decay-at-read applied in the ranking path.
     """
     fa = await make_federated_agent(summarise_on_close=False)
     old = datetime.now(UTC) - timedelta(days=120)
@@ -180,7 +171,10 @@ async def test_typed_retention_episodic_decays_semantic_persists(make_federated_
     await fa.federation.write(episodic)
     await fa.federation.write(semantic)
 
-    results = await fa.federation.search(MemoryQuery(text="note fact", limit=10))
+    # A plain filtered read returns both candidates; decay-at-read is what drops
+    # the aged-out episodic entry (below its consolidation threshold) while the
+    # slower-decaying semantic entry survives.
+    results = await fa.federation.search(MemoryQuery(limit=10))
     contents = " ".join(e.content for e in results)
     assert "SEMANTICFACT" in contents
     assert "EPISODICNOTE" not in contents
