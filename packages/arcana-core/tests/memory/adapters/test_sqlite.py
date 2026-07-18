@@ -277,6 +277,29 @@ async def test_lazy_connect_and_double_close(tmp_path: Path):
     await a.aclose()  # idempotent
 
 
+async def test_aclose_checkpoints_wal_so_reopen_sees_writes(tmp_path: Path):
+    """aclose folds the WAL into the main db, so a fresh reopen reads committed rows.
+
+    Guards the close→reopen path an agent restart takes: a ``TRUNCATE`` checkpoint
+    on close leaves no un-folded WAL frames for the next open to race against.
+    """
+    db = tmp_path / "m.db"
+    agent = uuid4()
+    writer = SQLiteAdapter(db)
+    await writer.write(_entry(agent_id=agent, content="alpha"))
+    await writer.aclose()
+
+    # The write-ahead log was checkpointed on close — nothing left pending to fold.
+    wal = tmp_path / "m.db-wal"
+    assert not wal.exists() or wal.stat().st_size == 0
+
+    # A brand-new adapter on the same file finds the row immediately (keyword path).
+    reader = SQLiteAdapter(db)
+    hits = await reader.search(MemoryQuery(agent_id=agent, text="alpha", retrieval_mode=RetrievalMode.keyword))
+    assert [e.content for e in hits] == ["alpha"]
+    await reader.aclose()
+
+
 async def test_for_agent_path(tmp_path: Path):
     agent_id = uuid4()
     a = SQLiteAdapter.for_agent(agent_id, base_dir=tmp_path)
