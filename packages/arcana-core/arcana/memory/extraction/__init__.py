@@ -40,6 +40,7 @@ from arcana.memory.extraction.extractors import (
 from arcana.memory.extraction.scoring import (
     build_consolidated_entry,
     compute_importance,
+    distill_semantic_clause,
     filter_storable,
     heuristic_summary,
     trim_content,
@@ -62,6 +63,7 @@ __all__ = [
     "heuristic_summary",
     "compute_importance",
     "trim_content",
+    "distill_semantic_clause",
     "has_durable_signal",
     # Tunable constants
     "DEFAULT_AGENT_CONFIDENCE_CAP",

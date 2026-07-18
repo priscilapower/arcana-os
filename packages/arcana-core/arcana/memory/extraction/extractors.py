@@ -42,6 +42,7 @@ from arcana.memory.extraction.config import (
 from arcana.memory.extraction.prompts import EXTRACT_SYSTEM, SUMMARISE_SYSTEM
 from arcana.memory.extraction.scoring import (
     compute_importance,
+    distill_semantic_clause,
     heuristic_summary,
     trim_content,
 )
@@ -175,7 +176,7 @@ class HeuristicExtractor:
         return MemoryEntry(
             agent_id=session.agent_id,
             type=MemoryType.SEMANTIC,
-            content=trim_content(prompt),
+            content=distill_semantic_clause(prompt, self._signals),
             importance=compute_importance(prompt, base=BASE_IMPORTANCE_SEMANTIC, signals=self._signals),
             # The user stated this — user-sourced and trusted above agent text.
             confidence=USER_CONFIRMED_CONFIDENCE,
