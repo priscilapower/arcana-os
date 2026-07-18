@@ -6,6 +6,8 @@ model-free session summary/consolidation. Kept apart from the strategy classes
 so they stay independently testable and free of any gateway dependency.
 """
 
+import re
+
 from arcana.memory.extraction.config import (
     DEFAULT_AGENT_CONFIDENCE_CAP,
     MAX_ENTRY_CONTENT,
@@ -42,6 +44,34 @@ def trim_content(text: str, limit: int = MAX_ENTRY_CONTENT) -> str:
     """
     text = " ".join(text.split())
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+#: Sentence boundaries for isolating the clause that carries the durable cue.
+#: Terminal ``.!?`` only when followed by whitespace or end-of-text (plus any
+#: newline), so a mid-token dot — ``a@b.com``, ``v1.2``, a URL — is never split.
+_SENTENCE_SPLIT = re.compile(r"[.!?]+(?:\s+|$)|\n+")
+
+
+def distill_semantic_clause(text: str, signals: SignalPatterns = ENGLISH) -> str:
+    """Reduce a durable user statement to the clause worth storing as SEMANTIC.
+
+    A stated fact usually arrives wrapped in conversational framing — *"by the
+    way, please remember that my project is called Arcana"*. Persisting the whole
+    prompt carries that framing into memory and back into every future prompt
+    injection; this keeps the fact itself: *"my project is called Arcana"*.
+
+    It picks the sentence bearing the durable ``preference`` cue (the same signal
+    that classified the turn as SEMANTIC) and strips a leading ``framing`` wrapper,
+    then trims. Falls back to the full trimmed text whenever stripping would leave
+    nothing — so a bare *"remember that."* is never reduced to an empty memory.
+
+    Pure and deterministic; ``signals`` selects the language, so a non-English cue
+    set distils in its own language (or, absent framing cues, simply trims).
+    """
+    sentences = [s.strip() for s in _SENTENCE_SPLIT.split(text) if s.strip()]
+    clause = next((s for s in sentences if signals.preference.search(s)), text.strip())
+    distilled = signals.framing.sub("", clause, count=1).strip(" ,.:;")
+    return trim_content(distilled or clause)
 
 
 def compute_importance(
