@@ -37,4 +37,30 @@ ENGLISH = SignalPatterns(
         r"(?:^|\n)\s*(?:\d+[.)]|-\s|\*\s|step\s+\d+|first[,:]|then[,:]|finally[,:])",
         re.IGNORECASE,
     ),
+    # A leading conversational/imperative wrapper around a stated fact, stripped
+    # when distilling the durable clause ("remember that my project is Arcana" →
+    # "my project is Arcana"). Anchored at the clause start: an optional discourse
+    # marker ("also,", "oh,"), an optional "please", then a framing phrase, then a
+    # trailing "that" and separators. Only these lead-ins are stripped — emphasis
+    # words like "always"/"important" stay, since they belong to the fact itself.
+    framing=re.compile(
+        r"^[\s,.:;-]*"
+        r"(?:(?:also|and|so|well|oh|hey|okay|ok|btw)[\s,:]+)?"
+        r"(?:please[\s,:]+)?"
+        r"(?:"
+        r"i\s+(?:just\s+)?want(?:ed)?\s+you\s+to\s+know"
+        r"|(?:just\s+)?so\s+you\s+know"
+        r"|for\s+the\s+record"
+        r"|by\s+the\s+way"
+        r"|fyi"
+        r"|remember"
+        r"|note"
+        r"|keep\s+in\s+mind"
+        r"|don'?t\s+forget"
+        r"|do\s+not\s+forget"
+        r")"
+        r"(?:[\s,:]+that)?"
+        r"[\s,.:;-]+",
+        re.IGNORECASE,
+    ),
 )

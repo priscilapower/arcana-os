@@ -22,7 +22,12 @@ from arcana.memory.extraction import (
     heuristic_summary,
     trim_content,
 )
-from arcana.memory.extraction.config import BASE_IMPORTANCE_EPISODIC, ExtractionTunables
+from arcana.memory.extraction.config import (
+    BASE_IMPORTANCE_EPISODIC,
+    BASE_IMPORTANCE_SEMANTIC,
+    ExtractionTunables,
+)
+from arcana.memory.extraction.scoring import distill_semantic_clause
 from arcana.memory.extraction.signals import (
     ENGLISH,
     SignalPatterns,
@@ -87,6 +92,25 @@ async def test_heuristic_promotes_user_preference_to_semantic():
     assert len(semantic) == 1
     assert semantic[0].confidence_source == ConfidenceSource.USER_CONFIRMED
     assert semantic[0].confidence == USER_CONFIRMED_CONFIDENCE
+    # The stored fact is the distilled clause, not the framed prompt: the leading
+    # "Remember that" wrapper is stripped.
+    assert semantic[0].content == "I prefer concise answers"
+
+
+async def test_heuristic_semantic_keeps_emphasis_importance_after_distilling():
+    """Stripping "Remember" from the stored clause still credits its emphasis bonus."""
+    ext = HeuristicExtractor()
+    prompt = "Remember that I use PostgreSQL"
+    session = _session((MessageRole.USER, prompt))
+
+    entries = await ext.extract(prompt, "Noted.", session)
+
+    semantic = next(e for e in entries if e.type == MemoryType.SEMANTIC)
+    assert semantic.content == "I use PostgreSQL"  # framing stripped from content
+    # ...yet importance is computed from the full prompt, so the imperative
+    # "Remember" bonus is still applied (it outranks the same fact stated plainly).
+    plain = compute_importance("I use PostgreSQL", base=BASE_IMPORTANCE_SEMANTIC)
+    assert semantic.importance > plain
 
 
 async def test_heuristic_promotes_howto_answer_to_procedural():
@@ -342,6 +366,59 @@ def test_trim_content_never_exceeds_limit():
 def test_trim_content_default_limit_is_the_entry_cap():
     out = trim_content("x " * (MAX_ENTRY_CONTENT * 2))
     assert len(out) <= MAX_ENTRY_CONTENT
+
+
+# ---------------------------------------------------------------------------
+# distill_semantic_clause — the durable fact, minus its framing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("prompt", "expected"),
+    [
+        # Leading imperative wrappers are stripped, including a trailing "that".
+        ("Remember that I prefer concise answers", "I prefer concise answers"),
+        ("Note that I am based in Berlin", "I am based in Berlin"),
+        ("Keep in mind that my goal is to ship weekly", "my goal is to ship weekly"),
+        ("Please remember that my name is Sam", "my name is Sam"),
+        # Conversational lead-ins.
+        ("By the way, my email is a@b.com", "my email is a@b.com"),
+        ("For the record, call me Alex", "call me Alex"),
+        ("I want you to know that my timezone is CET", "my timezone is CET"),
+        # A discourse marker in front of the wrapper is also stripped.
+        ("Also, remember I use Notion", "I use Notion"),
+        # No framing → returned unchanged (still the durable clause).
+        ("I prefer tea", "I prefer tea"),
+        ("my name is Sam", "my name is Sam"),
+        # Emphasis words that belong to the fact are NOT treated as framing.
+        ("I always use Python", "I always use Python"),
+    ],
+)
+def test_distill_semantic_clause_strips_framing(prompt: str, expected: str):
+    assert distill_semantic_clause(prompt) == expected
+
+
+def test_distill_semantic_clause_picks_the_sentence_bearing_the_cue():
+    """Multi-sentence input distils to the sentence carrying the durable signal."""
+    text = "How is it going? Also, remember I use Python."
+    assert distill_semantic_clause(text) == "I use Python"
+
+
+def test_distill_semantic_clause_does_not_split_mid_token_dots():
+    """A dot inside an email / version / URL is not a sentence boundary."""
+    assert distill_semantic_clause("I use version v1.2 of the tool") == "I use version v1.2 of the tool"
+    assert distill_semantic_clause("my email is first.last@example.com") == "my email is first.last@example.com"
+
+
+def test_distill_semantic_clause_falls_back_when_stripping_empties():
+    """A contentless "remember that" never distils to an empty memory."""
+    assert distill_semantic_clause("Please remember that.")  # non-empty, not ""
+
+
+def test_distill_semantic_clause_respects_injected_language():
+    """A non-English cue set with no framing pattern simply trims — never mangles."""
+    pt = _portuguese_signals()
+    assert distill_semantic_clause("Eu prefiro respostas curtas", pt) == "Eu prefiro respostas curtas"
 
 
 # ---------------------------------------------------------------------------
