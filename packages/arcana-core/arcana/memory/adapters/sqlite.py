@@ -157,8 +157,21 @@ class SQLiteAdapter:
         return MemoryStorageError(f"{prefix}: {exc}")
 
     async def aclose(self) -> None:
-        """Close the connection. Safe to call more than once."""
+        """Close the connection, checkpointing the WAL first. Safe to call repeatedly.
+
+        A ``TRUNCATE`` checkpoint folds the write-ahead log back into the main
+        database file (and truncates ``-wal``) before the connection drops, so the
+        next process to open this store — an agent restarting against its
+        ``memory.db`` — sees every committed entry immediately, without relying on
+        SQLite's implicit close-time checkpoint winning a race with the reopen. The
+        checkpoint is best-effort: on failure (e.g. another reader still attached)
+        the committed data stays durable in the WAL, so it never blocks the close.
+        """
         if self._conn is not None:
+            try:
+                await self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except aiosqlite.Error:
+                pass
             await self._conn.close()
             self._conn = None
 
