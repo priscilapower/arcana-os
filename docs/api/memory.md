@@ -458,8 +458,11 @@ Two strategies sit behind one interface:
 
 - **`HeuristicExtractor`** — the default: deterministic and model-free. It records
   one `EPISODIC` entry per turn, promotes a stated user preference to `SEMANTIC`,
-  and turns a how-to answer into a `PROCEDURAL` entry. Free, testable, and it adds
-  no round-trip.
+  and turns a how-to answer into a `PROCEDURAL` entry. A promoted `SEMANTIC` entry
+  stores the **distilled clause** — the fact itself with its conversational framing
+  ("by the way, remember that …") stripped — rather than the whole prompt, so the
+  stored memory (and every later prompt injection of it) is the fact, not the
+  wrapper. Free, testable, and it adds no round-trip.
 - **`LLMExtractor`** — opt-in: a single low-temperature gateway call returning a
   small JSON list of candidate memories. Any model error, malformed JSON, or empty
   result falls back to the heuristic for that turn, so extraction can never crash a
@@ -518,8 +521,9 @@ un-overridable, defeating anti-poisoning, so it is rejected at load rather than
 silently accepted.
 
 **Language signals.** The heuristic's surface cues (imperative/"remember"
-language, stated preferences, how-to questions, step lists) are language-specific
-and live in `arcana.memory.extraction.signals`, decoupled from the extractor.
+language, stated preferences, how-to questions, step lists, and the leading
+framing stripped when distilling a durable clause) are language-specific and live
+in `arcana.memory.extraction.signals`, decoupled from the extractor.
 English ships as the default; a new language is a `SignalPatterns` registered via
 `register_language()` (or passed straight to `HeuristicExtractor(signals=...)`) —
 the extractor itself never changes.
@@ -617,6 +621,8 @@ backlog's drain estimate (`depth × EWMA(service time)`) exceeds its headroom.
 ::: arcana.memory.extraction.build_extractor
 
 ::: arcana.memory.extraction.trim_content
+
+::: arcana.memory.extraction.distill_semantic_clause
 
 ::: arcana.memory.extraction.config.ExtractionConfig
 
