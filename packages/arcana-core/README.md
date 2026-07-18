@@ -72,7 +72,7 @@ agent = Agent(
 )
 ```
 
-Each run records a `Session` (messages + token totals). Sessions are stateless in this release — multi-turn continuity within a session is supported; cross-session memory is not yet wired (see the roadmap).
+Each run records a `Session` (messages + token totals). Pass an `Agent` a `MemoryAdapter` (typically a `MemoryFederation`) and it recalls relevant memory before answering and extracts new memory afterwards, so continuity carries across sessions — not just within one. Omit the adapter and the agent runs statelessly.
 
 ---
 
@@ -160,4 +160,4 @@ uv run pytest packages/arcana-core/tests/ -v -m "not llm_eval"
 
 ## Roadmap
 
-This release ships the **Phase 1a MVP**: card-configured, stateless agents on the model gateway. The **federated memory layer** now lives in `arcana-core` (tiered backends, folder connectors, and a knowledge-graph edge layer — see the module map), usable directly as a library. Wiring it into the agent run path — plus a tool/MCP gateway and The World meta-agent — lands in Phase 1b as additive work, not a rewrite.
+Card-configured agents now run on the model gateway with persistent sessions and the **federated memory layer** wired into the run path — an `Agent` given a `MemoryAdapter` recalls and extracts memory across sessions (tiered backends, folder connectors, and a knowledge-graph edge layer — see the module map). Still ahead, as additive work rather than a rewrite: a tool/MCP gateway and **The World** meta-agent (card XXI) that routes work across agents.

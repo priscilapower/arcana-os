@@ -123,14 +123,70 @@ Run a prompt against a specific agent. `--agent` is required.
 ```bash
 arcana run "Summarise the latest on LLM evals" --agent researcher
 arcana run "Refactor this module" --agent my-agent --stream
+arcana run "Where did we leave off?" --agent researcher --continue
+arcana run "One-off, don't remember this" --agent researcher --no-memory
 ```
 
 | Flag | Default | Description                      |
 |------|---------|----------------------------------|
 | `--agent / -a` | — (required) | Target agent by name or UUID |
 | `--stream / -s` | off | Stream output token by token     |
+| `--session` | new session | Resume a specific session by UUID |
+| `--continue` | off | Resume the agent's most recent session |
+| `--no-memory` | off | Run stateless — don't load or persist memory |
 
-The agent is rebuilt from its stored record and run through a `ModelGateway` using its configured connection.
+The agent is rebuilt from its stored record and run through a `ModelGateway` using its configured connection. Each run is recorded to a session under the agent, and — unless `--no-memory` is passed — the agent recalls relevant memory before answering and extracts new memory afterwards through its `MemoryFederation`. The command prints the session id so you can resume it later with `--session` or `--continue`. `--session` and `--continue` are mutually exclusive.
+
+---
+
+### `arcana chat`
+
+Start an interactive, full-screen REPL with a card-configured agent — a scrolling transcript above a pinned input box. It drives the same agent + session + memory path as `arcana run`. `--agent` is required.
+
+```bash
+arcana chat --agent researcher
+arcana chat --agent researcher --session <uuid>   # resume a session
+arcana chat --agent researcher --no-memory        # stateless session
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--agent / -a` | — (required) | Target agent by name or UUID |
+| `--session` | new session | Resume a specific session by UUID |
+| `--no-memory` | off | Run stateless — don't load or persist memory |
+
+Inside the session, slash commands are available (type `/help` to list them):
+
+| Command | Description |
+|---------|-------------|
+| `/help` | List the in-session commands |
+| `/memory` | Show what this agent recalls from this session |
+| `/card` | Print the resolved card config — temperature, tone, weights |
+| `/switch <name>` | Load another agent in a new session |
+| `/retry` | Re-run your last message |
+| `/save` | Force a session snapshot to disk now |
+| `/clear` | Clear the transcript (history is kept) |
+| `/fresh` | Start a new session |
+| `/no-memory` | Start a new stateless session (memory off) |
+| `/exit` | Close the session and quit |
+
+`Ctrl+C` cancels the current turn (or quits when idle); `Ctrl+D` quits at an empty prompt.
+
+---
+
+### `arcana soul`
+
+Manage `soul.md` — your global user context, injected into every agent's session.
+
+```bash
+arcana soul edit   # open in $EDITOR, seeded from a template on first use
+arcana soul show   # print the current soul.md
+```
+
+| Subcommand | Description |
+|-----------|-------------|
+| `edit` | Open `soul.md` in `$EDITOR`, creating it from a template on first use |
+| `show` | Print the current `soul.md`, or a hint if it doesn't exist |
 
 ---
 
@@ -158,8 +214,11 @@ All state lives under `~/.arcana/`, created by `arcana init`:
 ~/.arcana/
 ├── config.json
 ├── world.json
-├── agents/{id}/        ← agent.json + sessions/
+├── soul.md             ← optional global user context (arcana soul edit)
+├── agents/{id}/        ← agent.json + memory.db + sessions/
 ├── connections/        ← models.json
+├── vector/             ← global-tier vector store
+├── spreads/            ← active agent configurations
 └── cards/{core,custom}/
 ```
 
@@ -181,4 +240,4 @@ uv run pytest packages/arcana-cli/tests/ -v
 
 ## Roadmap
 
-This is the **Phase 1a MVP** command set. Phase 1b adds the commands whose backends land later — `arcana memory`, `arcana world`, `arcana spread`, `arcana mcp`, and an interactive `arcana chat` REPL.
+Agents now run with persistent sessions and the federated memory layer wired into `run` and `chat`. Still to come are the commands whose backends land later — `arcana world`, `arcana spread`, and `arcana mcp` (the tool/MCP gateway and **The World** meta-agent).

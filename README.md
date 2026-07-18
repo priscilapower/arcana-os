@@ -55,7 +55,7 @@ It includes the card engine and all 22 Major Arcana, the model gateway with adap
 
 ### [`arcana-cli`](packages/arcana-cli/README.md) — the command line
 
-A thin Typer wrapper around the library: `init`, `status`, `providers`, `agent`, `run`, and `cards`. Create and manage agents, connect models, and run prompts without writing Python. See the [`arcana-cli` README](packages/arcana-cli/README.md) for every command.
+A thin Typer wrapper around the library: `init`, `status`, `providers`, `agent`, `run`, `chat`, `cards`, and `soul`. Create and manage agents, connect models, hold an interactive memory-backed `chat` session, and run prompts without writing Python. See the [`arcana-cli` README](packages/arcana-cli/README.md) for every command.
 
 ---
 
@@ -112,7 +112,7 @@ Requirements: Python 3.11+ (the curl installer fetches a managed one for you). F
 
 ## Roadmap
 
-This is the **Phase 1a MVP** — card-configured agents that run statelessly today. The federated memory layer already ships in `arcana-core` (usable as a library); the next phase wires it into the agent run path and adds a tool/MCP gateway and **The World**, a meta-agent (card XXI) that routes work across agents.
+Card-configured agents now run with persistent sessions and the federated memory layer wired into the run path — recalling and extracting memory across sessions, in both `arcana run` and the interactive `arcana chat`. Still ahead: a tool/MCP gateway and **The World**, a meta-agent (card XXI) that routes work across agents.
 
 ---
 
