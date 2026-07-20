@@ -19,12 +19,17 @@ try:
     from openai.types.chat import (
         ChatCompletionAssistantMessageParam,
         ChatCompletionChunk,
+        ChatCompletionMessageFunctionToolCallParam,
         ChatCompletionSystemMessageParam,
+        ChatCompletionToolMessageParam,
         ChatCompletionToolParam,
         ChatCompletionUserMessageParam,
     )
     from openai.types.chat.chat_completion_message_function_tool_call import (
         ChatCompletionMessageFunctionToolCall,
+    )
+    from openai.types.chat.chat_completion_message_function_tool_call_param import (
+        Function as OpenAIFunctionCallParam,
     )
     from openai.types.shared_params import FunctionDefinition
 except ImportError as e:
@@ -63,7 +68,32 @@ def _to_openai_message(msg: MessageParam) -> ChatCompletionMessageParam:
     content = msg["content"]
     if role == "system":
         return ChatCompletionSystemMessageParam(role="system", content=content)
+    if role == "tool":
+        return ChatCompletionToolMessageParam(
+            role="tool",
+            tool_call_id=msg.get("tool_call_id", ""),
+            content=content,
+        )
     if role == "assistant":
+        tool_calls = msg.get("tool_calls")
+        if tool_calls:
+            assistant: ChatCompletionAssistantMessageParam = {
+                "role": "assistant",
+                "tool_calls": [
+                    ChatCompletionMessageFunctionToolCallParam(
+                        id=tc["id"],
+                        type="function",
+                        function=OpenAIFunctionCallParam(
+                            name=tc["function"]["name"],
+                            arguments=tc["function"]["arguments"],
+                        ),
+                    )
+                    for tc in tool_calls
+                ],
+            }
+            if content:
+                assistant["content"] = content
+            return assistant
         return ChatCompletionAssistantMessageParam(role="assistant", content=content)
     return ChatCompletionUserMessageParam(role="user", content=content)
 

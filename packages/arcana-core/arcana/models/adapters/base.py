@@ -3,17 +3,28 @@
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TypedDict
+from typing import Any, NotRequired, Required, TypedDict
+
+from pydantic import TypeAdapter, ValidationError
 
 from arcana.models.errors import ModelBadRequestError
 from arcana.types._utils import JsonObject
 
+_ARGS_ADAPTER: TypeAdapter[dict[str, Any]] = TypeAdapter(dict[str, Any])
 
-class MessageParam(TypedDict):
-    """A single chat message in the canonical adapter wire format."""
 
-    role: str
-    content: str
+def parse_tool_arguments(raw: str) -> dict[str, Any]:
+    """Best-effort decode of a model-produced tool-call ``arguments`` string.
+
+    Arguments are model-controlled and may be malformed or a non-object; this
+    is used when re-serializing tool-call turns into an adapter's wire format,
+    where a raw ``json.loads`` would let a bad payload crash the whole request.
+    Falls back to an empty object so the turn always round-trips.
+    """
+    try:
+        return _ARGS_ADAPTER.validate_json(raw or "{}")
+    except ValidationError:
+        return {}
 
 
 class FunctionCall(TypedDict):
@@ -29,6 +40,28 @@ class ToolCallResult(TypedDict):
     id: str
     type: str
     function: FunctionCall
+
+
+class MessageParam(TypedDict):
+    """A single chat message in the canonical adapter wire format.
+
+    ``role``/``content`` cover the single-turn path. The optional fields carry
+    multi-turn tool state so a tool loop round-trips through history:
+
+    - ``tool_calls`` — set on an ``assistant`` turn that requested tools.
+    - ``tool_call_id`` / ``name`` — set on a ``tool`` turn carrying one tool's
+      result back to the model (``content`` holds the serialized output).
+
+    Each adapter's translation layer maps these to its SDK's shape (Anthropic
+    tool_use / tool_result blocks; OpenAI-style ``tool`` role). Messages without
+    the optional fields are ordinary text turns and behave exactly as before.
+    """
+
+    role: str
+    content: str
+    tool_calls: NotRequired[list[ToolCallResult]]
+    tool_call_id: NotRequired[str]
+    name: NotRequired[str]
 
 
 class ToolParam(TypedDict):
@@ -58,6 +91,22 @@ class OpenAIToolParam(TypedDict):
 
     type: str  # always "function"
     function: OpenAIFunctionDef
+
+
+class OpenAILikeMessage(TypedDict, total=False):
+    """An OpenAI-style chat message as sent on the wire by raw-REST adapters.
+
+    ``role`` is always present; the other fields vary by turn:
+    - ``content`` — the text, or ``None`` on an assistant turn that only calls tools.
+    - ``tool_calls`` — on an assistant turn, reusing ``ToolCallResult``'s
+      ``{id, type, function: {name, arguments}}`` shape.
+    - ``tool_call_id`` — on a ``tool`` result turn, linking it to its call.
+    """
+
+    role: Required[str]
+    content: str | None
+    tool_calls: list[ToolCallResult]
+    tool_call_id: str
 
 
 @dataclass

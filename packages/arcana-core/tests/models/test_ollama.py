@@ -265,3 +265,34 @@ async def test_ollama_tools_supported_or_raises(adapter, mock_http):
     assert len(result.tool_calls) == 1
     assert result.tool_calls[0]["function"]["name"] == "get_weather"
     assert result.content == ""
+
+
+async def test_complete_maps_tool_call_and_tool_result_turns(adapter, mock_http):
+    mock_http.post.return_value = _ok_response()
+    await adapter.complete(
+        _req(
+            system="",
+            messages=[
+                {"role": "user", "content": "weather?"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {"name": "echo", "arguments": '{"message": "hi"}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "content": "hi", "tool_call_id": "call-1", "name": "echo"},
+            ],
+        )
+    )
+
+    messages = mock_http.post.call_args.kwargs["json"]["messages"]
+    assert [m["role"] for m in messages] == ["user", "assistant", "tool"]
+    # Ollama exchanges tool-call arguments as an object, not a JSON string.
+    assert messages[1]["tool_calls"][0]["function"]["arguments"] == {"message": "hi"}
+    assert messages[2]["content"] == "hi"
+    assert messages[2]["tool_name"] == "echo"

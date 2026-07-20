@@ -17,6 +17,7 @@ from arcana.models.adapters.base import (
     OpenAIFunctionDef,
     OpenAIToolParam,
     ToolCallResult,
+    parse_tool_arguments,
 )
 from arcana.models.errors import (
     ModelBadRequestError,
@@ -34,25 +35,39 @@ class _OllamaOptions(TypedDict):
     temperature: float
 
 
-class _OllamaChatPayload(TypedDict, total=False):
-    model: Required[str]
-    messages: Required[list[MessageParam]]
-    stream: Required[bool]
-    options: Required[_OllamaOptions]
-    tools: list[OpenAIToolParam]
-
-
 class _OllamaToolCallFn(TypedDict):
     """Function sub-object inside an Ollama tool_call entry (always present)."""
 
     name: str
-    arguments: Any  # Ollama returns arguments as a dict, not a JSON string
+    arguments: Any  # Ollama exchanges arguments as a dict, not a JSON string
 
 
 class _OllamaToolCall(TypedDict):
-    """A single tool_call entry in an Ollama /api/chat response (always has function)."""
+    """A single tool_call entry in an Ollama /api/chat message (always has function)."""
 
     function: _OllamaToolCallFn
+
+
+class _OllamaMessage(TypedDict, total=False):
+    """A chat message in Ollama's /api/chat wire format.
+
+    Extends the plain ``{role, content}`` turn with the tool fields Ollama
+    expects: ``tool_calls`` on an assistant turn (arguments as an object) and
+    ``tool_name`` on a ``tool`` result turn.
+    """
+
+    role: Required[str]
+    content: Required[str]
+    tool_calls: list[_OllamaToolCall]
+    tool_name: str
+
+
+class _OllamaChatPayload(TypedDict, total=False):
+    model: Required[str]
+    messages: Required[list[_OllamaMessage]]
+    stream: Required[bool]
+    options: Required[_OllamaOptions]
+    tools: list[OpenAIToolParam]
 
 
 # ---------------------------------------------------------------------------
@@ -204,9 +219,37 @@ class OllamaAdapter(ModelAdapter):
         except Exception as e:
             return ModelHealth(healthy=False, model_id=model, message=str(e))
 
-    def _build_messages(self, request: CompletionRequest) -> list[MessageParam]:
-        messages: list[MessageParam] = []
+    def _build_messages(self, request: CompletionRequest) -> list[_OllamaMessage]:
+        messages: list[_OllamaMessage] = []
         if request.system:
             messages.append({"role": "system", "content": request.system})
-        messages.extend(request.messages)
+        for msg in request.messages:
+            messages.append(self._to_ollama_message(msg))
         return messages
+
+    @staticmethod
+    def _to_ollama_message(msg: MessageParam) -> _OllamaMessage:
+        role = msg["role"]
+        content = msg["content"]
+        if role == "tool":
+            out: _OllamaMessage = {"role": "tool", "content": content}
+            name = msg.get("name")
+            if name:
+                out["tool_name"] = name
+            return out
+        tool_calls = msg.get("tool_calls")
+        if role == "assistant" and tool_calls:
+            return {
+                "role": "assistant",
+                "content": content,
+                "tool_calls": [
+                    _OllamaToolCall(
+                        function=_OllamaToolCallFn(
+                            name=tc["function"]["name"],
+                            arguments=parse_tool_arguments(tc["function"]["arguments"]),
+                        )
+                    )
+                    for tc in tool_calls
+                ],
+            }
+        return {"role": role, "content": content}
