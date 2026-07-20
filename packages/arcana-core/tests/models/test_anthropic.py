@@ -177,8 +177,7 @@ async def test_complete_passes_multi_turn_messages():
     assert msgs[2] == {"role": "user", "content": "Tell me more"}
 
 
-@pytest.mark.asyncio
-async def test_complete_filters_unknown_role():
+async def test_complete_filters_genuinely_unknown_role():
     sdk = _mock_sdk_client()
     with patch("arcana.models.adapters.anthropic.AsyncAnthropic", return_value=sdk):
         adapter = AnthropicAdapter(api_key="test-key")
@@ -186,7 +185,7 @@ async def test_complete_filters_unknown_role():
             _req(
                 messages=[
                     {"role": "user", "content": "Hello"},
-                    {"role": "tool", "content": "result"},
+                    {"role": "banana", "content": "dropped"},
                     {"role": "user", "content": "Thanks"},
                 ]
             )
@@ -195,6 +194,69 @@ async def test_complete_filters_unknown_role():
     msgs = sdk.messages.create.call_args.kwargs["messages"]
     assert len(msgs) == 2
     assert all(m["role"] in ("user", "assistant", "system") for m in msgs)
+
+
+async def test_complete_maps_assistant_tool_call_and_tool_result_turns():
+    sdk = _mock_sdk_client()
+    with patch("arcana.models.adapters.anthropic.AsyncAnthropic", return_value=sdk):
+        adapter = AnthropicAdapter(api_key="test-key")
+        await adapter.complete(
+            _req(
+                messages=[
+                    {"role": "user", "content": "weather?"},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "echo", "arguments": '{"message": "hi"}'},
+                            }
+                        ],
+                    },
+                    {"role": "tool", "content": "hi", "tool_call_id": "call-1", "name": "echo"},
+                ]
+            )
+        )
+
+    msgs = sdk.messages.create.call_args.kwargs["messages"]
+    # user, assistant(tool_use), user(tool_result)
+    assert [m["role"] for m in msgs] == ["user", "assistant", "user"]
+    tool_use = msgs[1]["content"][0]
+    assert tool_use["type"] == "tool_use"
+    assert tool_use["id"] == "call-1"
+    assert tool_use["name"] == "echo"
+    assert tool_use["input"] == {"message": "hi"}
+    tool_result = msgs[2]["content"][0]
+    assert tool_result["type"] == "tool_result"
+    assert tool_result["tool_use_id"] == "call-1"
+    assert tool_result["content"] == "hi"
+
+
+async def test_complete_tolerates_malformed_tool_arguments():
+    # A model-produced tool call may carry non-JSON arguments; building the
+    # request must not raise — the input degrades to an empty object.
+    sdk = _mock_sdk_client()
+    with patch("arcana.models.adapters.anthropic.AsyncAnthropic", return_value=sdk):
+        adapter = AnthropicAdapter(api_key="test-key")
+        await adapter.complete(
+            _req(
+                messages=[
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {"id": "c1", "type": "function", "function": {"name": "echo", "arguments": "not-json"}}
+                        ],
+                    },
+                    {"role": "tool", "content": "x", "tool_call_id": "c1", "name": "echo"},
+                ]
+            )
+        )
+
+    msgs = sdk.messages.create.call_args.kwargs["messages"]
+    assert msgs[0]["content"][0]["input"] == {}
 
 
 @pytest.mark.asyncio

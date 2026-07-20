@@ -188,6 +188,39 @@ async def test_complete_maps_unknown_role_as_user():
     assert messages[0]["content"] == "Hi"
 
 
+async def test_complete_maps_tool_call_and_tool_result_turns():
+    sdk = _mock_openai_client()
+    with patch("arcana.models.adapters.openai_compat.AsyncOpenAI", return_value=sdk):
+        adapter = OpenAICompatAdapter(model="llama3", api_key="k")
+        await adapter.complete(
+            _req(
+                system="",
+                messages=[
+                    {"role": "user", "content": "weather?"},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "echo", "arguments": '{"message": "hi"}'},
+                            }
+                        ],
+                    },
+                    {"role": "tool", "content": "hi", "tool_call_id": "call-1", "name": "echo"},
+                ],
+            )
+        )
+
+    messages = sdk.chat.completions.create.call_args.kwargs["messages"]
+    assert [m["role"] for m in messages] == ["user", "assistant", "tool"]
+    assert messages[1]["tool_calls"][0]["id"] == "call-1"
+    assert messages[1]["tool_calls"][0]["function"]["name"] == "echo"
+    assert messages[2]["tool_call_id"] == "call-1"
+    assert messages[2]["content"] == "hi"
+
+
 @pytest.mark.asyncio
 async def test_complete_maps_stop_reason_length():
     sdk = _mock_openai_client()

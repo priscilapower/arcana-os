@@ -90,6 +90,37 @@ def test_request_builder_sets_model_and_params():
     assert body["max_tokens"] == 512
 
 
+def test_request_builder_translates_tool_turns():
+    build = _openai_like_request_builder("m")
+    body = build(
+        _req(
+            system="",
+            messages=[
+                {"role": "user", "content": "weather?"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "c1", "type": "function", "function": {"name": "echo", "arguments": '{"m": "hi"}'}}
+                    ],
+                },
+                {"role": "tool", "content": "hi", "tool_call_id": "c1", "name": "echo"},
+            ],
+        )
+    )
+
+    messages = body["messages"]
+    assert [m["role"] for m in messages] == ["user", "assistant", "tool"]
+    assistant = messages[1]
+    assert assistant["content"] is None  # only calls tools, no text
+    assert assistant["tool_calls"][0] == {
+        "id": "c1",
+        "type": "function",
+        "function": {"name": "echo", "arguments": '{"m": "hi"}'},
+    }
+    assert messages[2] == {"role": "tool", "tool_call_id": "c1", "content": "hi"}
+
+
 # ---------------------------------------------------------------------------
 # _openai_like_response_parser
 # ---------------------------------------------------------------------------

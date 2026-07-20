@@ -23,6 +23,7 @@ from arcana.memory.extraction import (
 )
 from arcana.models.connection_store import ConnectionStore
 from arcana.models.gateway import ModelGateway
+from arcana.tools.gateway import ToolGateway, default_tool_gateway
 from arcana.types.agent import Agent as AgentRecord
 from arcana.types.card import Card
 from arcana.types.memory import MemoryAdapter
@@ -147,8 +148,14 @@ class AgentRegistry:
         extractor: MemoryExtractor | None = None,
         min_confidence_to_store: float = DEFAULT_MIN_CONFIDENCE_TO_STORE,
         summarise_on_close: bool = True,
+        tool_gateway: ToolGateway | None = None,
     ) -> RuntimeAgent:
-        """Reconstruct a runtime Agent from a stored record and gateway."""
+        """Reconstruct a runtime Agent from a stored record and gateway.
+
+        A ``ToolGateway`` is wired by default (builtin tools only); the agent
+        exposes tools only for the record's ``tool_subscriptions``, so an agent
+        with none behaves exactly as a tool-less one.
+        """
         return RuntimeAgent(
             id=record.id,
             name=record.name,
@@ -164,6 +171,8 @@ class AgentRegistry:
             extractor=extractor,
             min_confidence_to_store=min_confidence_to_store,
             summarise_on_close=summarise_on_close,
+            tool_gateway=tool_gateway or default_tool_gateway(),
+            tool_subscriptions=record.tool_subscriptions,
         )
 
     async def build_runtime_with_memory(
@@ -180,6 +189,7 @@ class AgentRegistry:
         session_manager: SessionManager | None = None,
         soul: str | None = None,
         extraction: ExtractionConfig | None = None,
+        tool_gateway: ToolGateway | None = None,
     ) -> tuple[RuntimeAgent, MemoryFederation | None]:
         """Build a runtime Agent with its memory federation assembled and injected.
 
@@ -226,6 +236,7 @@ class AgentRegistry:
             extractor=extractor,
             min_confidence_to_store=extraction.min_confidence_to_store,
             summarise_on_close=extraction.summarise_on_close,
+            tool_gateway=tool_gateway,
         )
         return agent, federation
 

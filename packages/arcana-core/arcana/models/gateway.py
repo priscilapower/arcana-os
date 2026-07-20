@@ -347,6 +347,16 @@ class ModelGateway:
             async for chunk in gen:
                 yield chunk
 
+    async def supports_tools(self, model: str) -> bool:
+        """Whether the adapter behind ``model`` can accept tool calls.
+
+        Lets a caller decide up front whether to pass ``tools=`` at all, so a
+        tool-less model never trips the adapter's ``_guard_tools``.
+        """
+        conn = self.resolve(model)
+        entry = await self._get_cache_entry(conn)
+        return entry.adapter.supports_tools
+
     async def health(self, model: str | None = None) -> dict[str, ModelHealth]:
         """Check health for one model string or all cached adapters.
 

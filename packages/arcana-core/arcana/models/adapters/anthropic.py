@@ -8,8 +8,17 @@ from uuid import UUID
 try:
     import anthropic as _anthropic_mod
     from anthropic import AsyncAnthropic
-    from anthropic.types import MessageParam as AnthropicMessageParam
-    from anthropic.types import TextBlock, ToolUseBlock
+    from anthropic.types import (
+        ContentBlockParam,
+        TextBlock,
+        TextBlockParam,
+        ToolResultBlockParam,
+        ToolUseBlock,
+        ToolUseBlockParam,
+    )
+    from anthropic.types import (
+        MessageParam as AnthropicMessageParam,
+    )
     from anthropic.types import ToolParam as AnthropicToolParam
 except ImportError as e:
     raise ImportError("Install arcana-core[anthropic] to use AnthropicAdapter") from e
@@ -23,6 +32,7 @@ from arcana.models.adapters.base import (
     ModelHealth,
     ToolCallResult,
     ToolParam,
+    parse_tool_arguments,
 )
 from arcana.models.connection_store import resolve_api_key
 from arcana.models.errors import (
@@ -122,15 +132,48 @@ class AnthropicAdapter(ModelAdapter):
 
     def _build_messages(self, request: CompletionRequest) -> list[AnthropicMessageParam]:
         result: list[AnthropicMessageParam] = []
+        pending_results: list[ContentBlockParam] = []
+
+        def _flush() -> None:
+            if pending_results:
+                result.append(AnthropicMessageParam(role="user", content=list(pending_results)))
+                pending_results.clear()
+
         for msg in request.messages:
             role = msg["role"]
             content = msg["content"]
-            if role == "user":
+            if role == "tool":
+                pending_results.append(
+                    ToolResultBlockParam(
+                        type="tool_result",
+                        tool_use_id=msg.get("tool_call_id", ""),
+                        content=content,
+                    )
+                )
+                continue
+            _flush()
+            tool_calls = msg.get("tool_calls")
+            if role == "assistant" and tool_calls:
+                blocks: list[ContentBlockParam] = []
+                if content:
+                    blocks.append(TextBlockParam(type="text", text=content))
+                for tc in tool_calls:
+                    blocks.append(
+                        ToolUseBlockParam(
+                            type="tool_use",
+                            id=tc["id"],
+                            name=tc["function"]["name"],
+                            input=parse_tool_arguments(tc["function"]["arguments"]),
+                        )
+                    )
+                result.append(AnthropicMessageParam(role="assistant", content=blocks))
+            elif role == "user":
                 result.append(AnthropicMessageParam(role="user", content=content))
             elif role == "assistant":
                 result.append(AnthropicMessageParam(role="assistant", content=content))
             elif role == "system":
                 result.append(AnthropicMessageParam(role="system", content=content))
+        _flush()
         return result
 
     async def complete(self, request: CompletionRequest) -> CompletionResponse:

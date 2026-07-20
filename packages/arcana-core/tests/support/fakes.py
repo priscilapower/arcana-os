@@ -42,6 +42,7 @@ def make_gateway(
     gateway.complete = AsyncMock(
         return_value=CompletionResponse(content=content, input_tokens=input_tokens, output_tokens=output_tokens)
     )
+    gateway.supports_tools = AsyncMock(return_value=True)
 
     words = content.split()
 

@@ -16,6 +16,7 @@ from arcana.models.adapters.base import (
     ModelChunk,
     ModelHealth,
     OpenAIFunctionDef,
+    OpenAILikeMessage,
     OpenAIToolParam,
     ToolCallResult,
 )
@@ -54,12 +55,34 @@ _STOP_REASON_MAP = {
 }
 
 
+def _to_openai_like_message(msg: MessageParam) -> OpenAILikeMessage:
+    """Translate a canonical message (including tool turns) to an OpenAI-style message."""
+    role = msg["role"]
+    if role == "tool":
+        return OpenAILikeMessage(role="tool", tool_call_id=msg.get("tool_call_id", ""), content=msg["content"])
+    tool_calls = msg.get("tool_calls")
+    if role == "assistant" and tool_calls:
+        return OpenAILikeMessage(
+            role="assistant",
+            content=msg["content"] or None,
+            tool_calls=[
+                ToolCallResult(
+                    id=tc["id"],
+                    type="function",
+                    function=FunctionCall(name=tc["function"]["name"], arguments=tc["function"]["arguments"]),
+                )
+                for tc in tool_calls
+            ],
+        )
+    return OpenAILikeMessage(role=role, content=msg["content"])
+
+
 def _openai_like_request_builder(model: str) -> _RequestBuilder:
     def build(request: CompletionRequest) -> dict[str, Any]:
-        messages: list[MessageParam] = []
+        messages: list[OpenAILikeMessage] = []
         if request.system:
-            messages.append({"role": "system", "content": request.system})
-        messages.extend(request.messages)
+            messages.append(OpenAILikeMessage(role="system", content=request.system))
+        messages.extend(_to_openai_like_message(m) for m in request.messages)
         body: dict[str, Any] = {
             "model": request.model_id or model,
             "messages": messages,
