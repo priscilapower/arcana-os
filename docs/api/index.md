@@ -23,7 +23,7 @@ from arcana.observability import configure_observability, get_audit_log
 | `arcana.cards` | `Card`, `CardRegistry`, `CardEngine` | [Cards](cards.md) |
 | `arcana.types` | Pydantic models — `ModelConnection`, `AgentRecord`, `Session`, … | [Types](types.md) |
 | `arcana.models` | `ModelGateway`, `ConnectionStore`, adapters, errors, pricing | [Models](models.md) |
-| `arcana.tools` | `ToolGateway`, `ToolAdapter`, `BuiltinToolAdapter`, `MCPRegistry`, `WebToolsConfig` — builtin `web_search` / `fetch_url` with an SSRF-guarded egress envelope | [Tools](tools.md) |
+| `arcana.tools` | `ToolGateway`, `ToolAdapter`, `BuiltinToolAdapter`, `MCPToolAdapter`, `MCPRegistry`, `WebToolsConfig` — builtin `web_search` / `fetch_url` with an SSRF-guarded egress envelope, plus external MCP servers (SSE / stdio) as auto-discovered, fail-closed tool surfaces | [Tools](tools.md) |
 | `arcana.memory` | `SQLiteAdapter`, `VectorAdapter`, `MemoryFederation`, `MemoryRouter`, resilience, schema migrations, errors | [Memory](memory.md) |
 | `arcana.evals` | `EvalHarness`, judges, `EvalCase` | [Evals](evals.md) |
 | `arcana.observability` | `AuditLog`, events, metrics, tracing | [Observability](observability.md) |

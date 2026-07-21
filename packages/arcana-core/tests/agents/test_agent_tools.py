@@ -11,10 +11,17 @@ from arcana.models.adapters.base import (
     ToolCallResult,
 )
 from arcana.models.gateway import ModelGateway
+from arcana.tools.adapters.mcp import MCPToolAdapter
 from arcana.tools.gateway import ToolGateway
 from arcana.tools.registry import MCPRegistry
 from arcana.types.card import Card
-from tests.support.tools import EchoAdapter
+from tests.support.tools import (
+    EchoAdapter,
+    FakeMCPSession,
+    connected_mcp_config,
+    session_factory,
+    text_result,
+)
 
 
 def _tool_call(name: str, arguments: str = "{}") -> ToolCallResult:
@@ -226,3 +233,40 @@ async def test_model_without_tool_support_omits_tools():
     assert gateway.complete.await_count == 1
     request: CompletionRequest = gateway.complete.await_args_list[0].args[1]
     assert request.tools is None
+
+
+# ---------------------------------------------------------------------------
+# MCP integration — an agent drives a tool from an MCP server end to end
+# ---------------------------------------------------------------------------
+
+
+def _mcp_gateway(session: FakeMCPSession) -> ToolGateway:
+    cfg = connected_mcp_config("notion-mcp", "search_pages")
+    registry = MCPRegistry()
+    registry._register_builtins()  # pyright: ignore[reportPrivateUsage]
+    registry._servers[cfg.name] = cfg  # pyright: ignore[reportPrivateUsage]
+    registry._loaded = True  # pyright: ignore[reportPrivateUsage]
+    adapter = MCPToolAdapter(cfg, session_factory=session_factory(session))
+    return ToolGateway(registry, [EchoAdapter(), adapter])
+
+
+async def test_run_drives_mcp_tool_then_answers():
+    session = FakeMCPSession(results={"search_pages": text_result("Found 2 pages")})
+    gateway = _sequenced_gateway(
+        [_tool_response("notion-mcp__search_pages", '{"q": "roadmap"}'), _text_response("Here are the pages")]
+    )
+    agent = Agent(
+        name="researcher",
+        card=Card.HERMIT,
+        gateway=gateway,
+        model="ollama/test-model",
+        tool_gateway=_mcp_gateway(session),
+        tool_subscriptions=["notion-mcp/search_pages"],
+    )
+
+    result = await agent.run("find the roadmap")
+
+    assert result == "Here are the pages"
+    assert gateway.complete.await_count == 2
+    # The live MCP session ran the local tool name with the model's arguments.
+    assert session.calls == [("search_pages", {"q": "roadmap"})]

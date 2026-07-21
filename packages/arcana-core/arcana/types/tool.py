@@ -13,6 +13,19 @@ class ToolType(StrEnum):
     CUSTOM = "custom"
 
 
+class ToolStatus(StrEnum):
+    """Approval state of a discovered tool.
+
+    ``ACTIVE`` tools resolve normally. ``CHANGED`` marks a tool whose
+    description or input schema differs from the copy approved at first
+    discovery — a potential rug-pull — and is withheld from resolution until
+    re-approved, so mutated third-party metadata never reaches the model.
+    """
+
+    ACTIVE = "active"
+    CHANGED = "changed"
+
+
 class ToolDefinition(BaseModel):
     """Schema for a callable tool. Injected into agent context at session start."""
 
@@ -22,6 +35,7 @@ class ToolDefinition(BaseModel):
     output_schema: JsonObject = {}
     type: ToolType = ToolType.BUILTIN
     mcp_server_name: str | None = None  # e.g. "notion-mcp"
+    status: ToolStatus = ToolStatus.ACTIVE
 
     @property
     def qualified_name(self) -> str:
@@ -60,6 +74,21 @@ class MCPTransport(StrEnum):
     WEBSOCKET = "websocket"
 
 
+class MCPServerStatus(StrEnum):
+    """Connection state of a registered MCP server.
+
+    ``CONNECTED`` and ``CHANGED`` are resolvable — their active tools inject
+    into agent context (a ``CHANGED`` server has at least one rug-pulled tool
+    withheld, but its other tools resolve normally). ``DISCONNECTED`` (never
+    discovered) and ``UNREACHABLE`` (discovery failed) withhold all tools.
+    """
+
+    DISCONNECTED = "disconnected"
+    CONNECTED = "connected"
+    UNREACHABLE = "unreachable"
+    CHANGED = "changed"
+
+
 class MCPServerConfig(BaseModel):
     """
     An MCP server registered at the OS level.
@@ -68,11 +97,30 @@ class MCPServerConfig(BaseModel):
     """
 
     name: str  # human key: "notion-mcp", "gmail-mcp"
-    server_url: str
+    server_url: str = ""  # remote endpoint for SSE; unused for stdio
     transport: MCPTransport = MCPTransport.SSE
     discovered_tools: list[ToolDefinition] = []  # populated on connect
-    status: str = "disconnected"  # connected | error | discovering
+    status: MCPServerStatus = MCPServerStatus.DISCONNECTED
     description: str = ""
+
+    # stdio transport: the child is exec'd by argv (never a shell) with a
+    # scoped environment — only ``env_allowlist`` names inherited from the
+    # parent plus the explicit (non-secret) ``env`` entries.
+    command: str | None = None
+    args: list[str] = []
+    env: dict[str, str] = {}
+    env_allowlist: list[str] = []
+
+    # SSE transport auth: a keyring reference (never the token itself). The
+    # secret is resolved from the OS keyring at connect and injected as a
+    # header; it is never persisted here, logged, or placed on a span.
+    auth_key_ref: str | None = None
+
+    # Per-server overrides for the adapter's env-backed defaults. ``None`` means
+    # "use the ARCANA_MCP_* default".
+    call_timeout_s: float | None = None
+    max_result_bytes: int | None = None
+    ephemeral_stdio: bool = False  # spawn a fresh stdio process per call
 
     @property
     def tool_names(self) -> list[str]:
