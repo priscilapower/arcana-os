@@ -33,7 +33,8 @@ Three layers with a clean split of responsibility:
   failure comes back as a `ToolResult(success=False, …)` fed to the model — the
   loop never raises.
 - **`ToolAdapter`** owns *execution*. `BuiltinToolAdapter` hosts the builtin
-  tools behind one shared HTTP client.
+  tools behind one shared HTTP client; `MCPToolAdapter` hosts one external MCP
+  server, connecting on demand over SSE or stdio.
 
 An agent only ever sees the tools it subscribed to, and the gateway denies any
 call outside that set — defense-in-depth against a model that names a tool it
@@ -67,6 +68,54 @@ and again on **every redirect hop**, it enforces:
 A blocked, oversized, or timed-out fetch is a `ToolResult` error the model can
 adapt to — never an exception. An HTTP 404 is a *successful* tool result, not a
 tool error.
+
+## MCP servers
+
+Beyond the builtins, an agent can subscribe to tools hosted by any **MCP
+server** — Notion, GitHub, a local stdio server, your own. Each configured
+server becomes an `MCPToolAdapter` registered alongside the builtin adapter, so
+a subscription like `"notion-mcp/search_pages"` runs end-to-end through the same
+bounded loop.
+
+- **Auto-discovery.** `registry.discover(cfg)` opens the transport, lists the
+  server's tools, and persists them into `MCPServerConfig.discovered_tools`
+  (`~/.arcana/connections/mcps.json`). Runtime schema injection then reads that
+  cache — an agent pays a connect cost only to *execute* a tool, never to *see*
+  one.
+- **Two transports.** `transport="sse"` connects to a remote endpoint
+  (`server_url`, `https` required off loopback); `transport="stdio"` spawns a
+  local server by `command` + `args`.
+- **Wire-safe names.** The model sees a provider-legal function name
+  (`notion-mcp__search_pages`); the gateway restores the canonical
+  `notion-mcp/search_pages` before permission and routing. The qualified name
+  is the source of truth everywhere else.
+
+### The MCP threat model
+
+An MCP server is third-party code *and* third-party context, so the adapter
+treats it as untrusted by construction:
+
+- **Namespace isolation.** Every MCP tool is addressed only as
+  `{server}/{tool}` and each adapter owns exactly its own prefix, so a server
+  can never register `web_search` and shadow a builtin.
+- **Rug-pull detection.** Each discovery diffs a tool's `description` and
+  `input_schema` against the approved copy; any change flips it to
+  `status="changed"` and the tool is **withheld from resolution until
+  re-approved**, so mutated third-party metadata is never silently injected.
+- **stdio hygiene.** The child is exec'd by argv (never a shell) with a scoped
+  environment — a safe base plus an explicit `env_allowlist` — never the
+  parent's full environment and secrets.
+- **SSE auth from keyring.** A bearer token is resolved from the OS keyring by
+  reference at connect and sent as a header; it is never written to
+  `mcps.json`, logged, or placed on a span.
+- **Fail closed.** A server that is down, crashes, times out, or returns
+  `isError` becomes a `ToolResult(success=False, …)`; `execute` never raises,
+  and a dead server never blocks other adapters or startup. Tool *results* are
+  size-capped untrusted content.
+
+MCP execution knobs — per-call timeout, result cap, connect timeout — are
+overridable via `ARCANA_MCP_*` environment variables, and a per-server config
+may override the timeout and cap.
 
 ## Configuration
 
@@ -120,6 +169,8 @@ export ARCANA_TOOLS_TAVILY_SEARCH_URL="https://tavily-gw.internal/search"
 ::: arcana.tools.ToolAdapter
 
 ::: arcana.tools.BuiltinToolAdapter
+
+::: arcana.tools.MCPToolAdapter
 
 ## Registry
 

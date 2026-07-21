@@ -19,13 +19,20 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
+from arcana.tools.adapters.mcp import MCPToolAdapter, diff_discovered
 from arcana.tools.builtins.definitions import BUILTIN_DEFINITIONS
 from arcana.types.tool import (
     MCPServerConfig,
+    MCPServerStatus,
     ToolDefinition,
+    ToolStatus,
     ToolSubscription,
     ToolType,
 )
+
+# Server states whose tools are eligible for resolution. A CHANGED server has
+# at least one flagged tool but its unchanged tools still resolve normally.
+_RESOLVABLE_STATUSES = frozenset({MCPServerStatus.CONNECTED, MCPServerStatus.CHANGED})
 
 
 class MCPRegistry:
@@ -56,9 +63,16 @@ class MCPRegistry:
         self._loaded = True
 
     def save(self) -> None:
-        """Persist server configs to disk (no secrets)."""
+        """Persist server configs to disk (no secrets).
+
+        The discovered-tool cache and the server's last-known ``status`` are
+        persisted so schema injection stays connection-free across restarts —
+        a server last seen ``connected`` reloads resolvable, without paying a
+        connect cost just to see its tools. Auth material lives only in the
+        keyring (``auth_key_ref`` is a reference, never the token).
+        """
         self.CONNECTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        data = {"servers": [s.model_dump(exclude={"status"}) for s in self._servers.values()]}
+        data = {"servers": [s.model_dump() for s in self._servers.values()]}
         self.CONNECTIONS_FILE.write_text(json.dumps(data, indent=2))
 
     # ------------------------------------------------------------------
@@ -111,9 +125,36 @@ class MCPRegistry:
         self._ensure_loaded()
         tools = list(self._builtins.values())
         for server in self._servers.values():
-            if server.status == "connected":
+            if server.status in _RESOLVABLE_STATUSES:
                 tools.extend(server.discovered_tools)
         return tools
+
+    async def discover(self, cfg: MCPServerConfig) -> MCPServerConfig:
+        """Connect to ``cfg``, list its tools, diff, persist, and register it.
+
+        The live session is used only here; runtime schema injection reads the
+        persisted ``discovered_tools``. Re-discovery flags rug-pulled tools as
+        ``CHANGED`` (see :func:`diff_discovered`), which ``resolve`` then
+        withholds. A server that fails to connect is persisted ``unreachable``
+        with its last-known tools intact — never raising.
+        """
+        adapter = MCPToolAdapter(cfg)
+        try:
+            fresh = await adapter.discover()
+        except Exception:
+            cfg.status = MCPServerStatus.UNREACHABLE
+            self._servers[cfg.name] = cfg
+            self.save()
+            return cfg
+        finally:
+            await adapter.aclose()
+
+        cfg.discovered_tools = diff_discovered(cfg.discovered_tools, fresh)
+        has_changed = any(t.status is ToolStatus.CHANGED for t in cfg.discovered_tools)
+        cfg.status = MCPServerStatus.CHANGED if has_changed else MCPServerStatus.CONNECTED
+        self._servers[cfg.name] = cfg
+        self.save()
+        return cfg
 
     def get_server(self, name: str) -> MCPServerConfig | None:
         self._ensure_loaded()
@@ -128,10 +169,15 @@ class MCPRegistry:
             return self._builtins.get(sub.tool_name)
 
         server = self._servers.get(sub.server_name or "")
-        if not server or server.status != "connected":
+        if not server or server.status not in _RESOLVABLE_STATUSES:
             return None
 
-        return server.get_tool(sub.tool_name)
+        tool = server.get_tool(sub.tool_name)
+        # Withhold rug-pulled tools: a mutated third-party schema must never be
+        # injected into the model until it is re-approved.
+        if tool is None or tool.status is not ToolStatus.ACTIVE:
+            return None
+        return tool
 
     def _ensure_loaded(self) -> None:
         if not self._loaded:

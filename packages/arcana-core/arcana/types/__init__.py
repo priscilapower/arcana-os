@@ -49,10 +49,12 @@ from arcana.types.session import (
 )
 from arcana.types.tool import (
     MCPServerConfig,
+    MCPServerStatus,
     MCPTransport,
     Skill,
     ToolDefinition,
     ToolResult,
+    ToolStatus,
     ToolSubscription,
     ToolType,
 )
@@ -110,10 +112,12 @@ __all__ = [
     # Tool
     "ToolDefinition",
     "ToolResult",
+    "ToolStatus",
     "ToolType",
     "ToolSubscription",
     "Skill",
     "MCPServerConfig",
+    "MCPServerStatus",
     "MCPTransport",
     # World
     "RoutingRule",

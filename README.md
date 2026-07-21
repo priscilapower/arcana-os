@@ -112,7 +112,7 @@ Requirements: Python 3.11+ (the curl installer fetches a managed one for you). F
 
 ## Roadmap
 
-Card-configured agents now run with persistent sessions, the federated memory layer wired into the run path (recalling and extracting memory across sessions, in both `arcana run` and the interactive `arcana chat`), and a tool gateway that gives them builtin web-search and URL-fetch tools with an SSRF-guarded egress envelope. Still ahead: connecting external **MCP servers** through the gateway, and **The World**, a meta-agent (card XXI) that routes work across agents.
+Card-configured agents now run with persistent sessions, the federated memory layer wired into the run path (recalling and extracting memory across sessions, in both `arcana run` and the interactive `arcana chat`), and a tool gateway that gives them builtin web-search and URL-fetch tools with an SSRF-guarded egress envelope — plus external **MCP servers** (Notion, GitHub, your own; SSE or stdio) as auto-discovered, fail-closed tool surfaces. Still ahead: **The World**, a meta-agent (card XXI) that routes work across agents.
 
 ---
 
