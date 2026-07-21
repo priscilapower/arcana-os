@@ -30,7 +30,7 @@ from arcana.observability.events import (
     event_to_dict,
 )
 from arcana.observability.metrics import ArcanaMetrics, get_metrics
-from arcana.observability.tracer import configure_tracing, get_tracer
+from arcana.observability.tracer import configure_tracing, get_current_span, get_tracer
 
 _audit_log: AuditLog | None = None
 
@@ -82,6 +82,7 @@ __all__ = [
     # Getters
     "get_audit_log",
     "get_tracer",
+    "get_current_span",
     "get_metrics",
     # Emitters
     "emit_degraded",

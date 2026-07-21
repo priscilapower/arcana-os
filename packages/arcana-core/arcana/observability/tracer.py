@@ -37,6 +37,7 @@ class _NoOpTracer:
 
 
 _NOOP = _NoOpTracer()
+_NOOP_SPAN = _NoOpSpan()
 
 
 # ---------------------------------------------------------------------------
@@ -74,3 +75,19 @@ def get_tracer(name: str = "arcana") -> Any:
         return trace.get_tracer(name)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
     except ImportError:
         return _NOOP
+
+
+def get_current_span() -> Any:
+    """Return the active span so callers can annotate it, or a no-op span.
+
+    Lets code deep in a call stack add attributes to the span a caller opened
+    (e.g. a tool handler enriching the gateway's ``tool.dispatch`` span) without
+    threading the span object through. Falls back to a no-op when
+    opentelemetry-api is not installed or no span is active.
+    """
+    try:
+        from opentelemetry import trace  # type: ignore[import]
+
+        return trace.get_current_span()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    except ImportError:
+        return _NOOP_SPAN

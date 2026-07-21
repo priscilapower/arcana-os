@@ -19,6 +19,7 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
+from arcana.tools.builtins.definitions import BUILTIN_DEFINITIONS
 from arcana.types.tool import (
     MCPServerConfig,
     ToolDefinition,
@@ -137,28 +138,17 @@ class MCPRegistry:
             self.load()
 
     def _register_builtins(self) -> None:
-        """Register always-available built-in tools."""
+        """Register always-available built-in tools.
+
+        ``web_search`` / ``fetch_url`` come from the shared ``BUILTIN_DEFINITIONS``
+        the ``BuiltinToolAdapter`` executes, so the model-visible and executable
+        schemas cannot drift. The filesystem/exec builtins are declaration-only:
+        the model can see their schemas but no adapter executes them yet.
+        """
+        for definition in BUILTIN_DEFINITIONS.values():
+            self._builtins[definition.name] = definition
+
         builtins = [
-            ToolDefinition(
-                name="web_search",
-                description="Search the web for current information",
-                input_schema={
-                    "type": "object",
-                    "properties": {"query": {"type": "string"}},
-                    "required": ["query"],
-                },
-                type=ToolType.BUILTIN,
-            ),
-            ToolDefinition(
-                name="fetch_url",
-                description="Fetch the content of a URL",
-                input_schema={
-                    "type": "object",
-                    "properties": {"url": {"type": "string"}},
-                    "required": ["url"],
-                },
-                type=ToolType.BUILTIN,
-            ),
             ToolDefinition(
                 name="read_file",
                 description="Read a file from the local filesystem",
