@@ -106,6 +106,7 @@ nav:
       - Cards: api/cards.md
       - Types: api/types.md
       - Models: api/models.md
+      - Tools: api/tools.md
       - Memory: api/memory.md
       - Evals: api/evals.md
       - Observability: api/observability.md

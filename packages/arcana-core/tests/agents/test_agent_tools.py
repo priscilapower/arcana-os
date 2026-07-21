@@ -11,10 +11,10 @@ from arcana.models.adapters.base import (
     ToolCallResult,
 )
 from arcana.models.gateway import ModelGateway
-from arcana.tools.adapters.base import BuiltinToolAdapter
 from arcana.tools.gateway import ToolGateway
 from arcana.tools.registry import MCPRegistry
 from arcana.types.card import Card
+from tests.support.tools import EchoAdapter
 
 
 def _tool_call(name: str, arguments: str = "{}") -> ToolCallResult:
@@ -37,7 +37,7 @@ def _sequenced_gateway(responses: Sequence[CompletionResponse], *, supports_tool
 
 
 def _tool_gateway() -> ToolGateway:
-    return ToolGateway(MCPRegistry(), [BuiltinToolAdapter()])
+    return ToolGateway(MCPRegistry(), [EchoAdapter()])
 
 
 def _agent(gateway: MagicMock, *, subscriptions: list[str] | None = None, max_tool_iterations: int = 5) -> Agent:

@@ -4,10 +4,11 @@ import asyncio
 from typing import Any
 
 from arcana.models.adapters.base import FunctionCall, ToolCallResult
-from arcana.tools.adapters.base import BuiltinToolAdapter, ToolAdapter
+from arcana.tools.adapters.base import ToolAdapter
 from arcana.tools.gateway import ToolGateway
 from arcana.tools.registry import MCPRegistry
 from arcana.types.tool import ToolDefinition, ToolResult, ToolSubscription, ToolType
+from tests.support.tools import EchoAdapter
 
 
 def _call(name: str, arguments: str = "{}") -> ToolCallResult:
@@ -41,7 +42,7 @@ class SpyAdapter(ToolAdapter):
 
 
 def _gateway(adapters: list[ToolAdapter] | None = None, **kwargs: Any) -> ToolGateway:
-    return ToolGateway(MCPRegistry(), adapters if adapters is not None else [BuiltinToolAdapter()], **kwargs)
+    return ToolGateway(MCPRegistry(), adapters if adapters is not None else [EchoAdapter()], **kwargs)
 
 
 # ---------------------------------------------------------------------------

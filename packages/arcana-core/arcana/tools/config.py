@@ -6,6 +6,9 @@ can tune tool execution without waiting for a release. :class:`ToolTunables` is 
 ``pydantic-settings`` model: it reads ``ARCANA_TOOLS_*`` env vars once at import
 (typed, coerced, and validated — a malformed or out-of-bounds value fails fast)
 and its values seed the module-level constants the rest of the package imports.
+
+The builtin web tools carry their own egress/search knobs — see
+:mod:`arcana.tools.builtins.web.config` (same ``ARCANA_TOOLS_`` prefix).
 """
 
 from pydantic import Field
