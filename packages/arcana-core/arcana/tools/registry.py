@@ -5,7 +5,7 @@ This is a singleton owned by the OS, not by any individual agent.
 Agents subscribe to tools from here by qualified name.
 
 Connect once:
-    arcana connect mcp --name notion --url https://mcp.notion.com/mcp
+    arcana mcp add --name notion --url https://mcp.notion.com/mcp
     # → discovers tools, stores in ~/.arcana/connections/mcps.json
 
 Agents subscribe:
@@ -43,7 +43,11 @@ class MCPRegistry:
 
     CONNECTIONS_FILE = Path.home() / ".arcana" / "connections" / "mcps.json"
 
-    def __init__(self) -> None:
+    def __init__(self, connections_file: Path | None = None) -> None:
+        # Path injection mirrors ConnectionStore / AgentRegistry so a caller (the
+        # CLI, tests) can point the registry at an ARCANA_HOME other than the
+        # default ~/.arcana; omitted, it falls back to the module default.
+        self.connections_file = connections_file or MCPRegistry.CONNECTIONS_FILE
         self._servers: dict[str, MCPServerConfig] = {}
         self._builtins: dict[str, ToolDefinition] = {}
         self._loaded = False
@@ -55,8 +59,8 @@ class MCPRegistry:
     def load(self) -> None:
         """Load server configs from disk. Builtins are always registered."""
         self._register_builtins()
-        if self.CONNECTIONS_FILE.exists():
-            data = json.loads(self.CONNECTIONS_FILE.read_text())
+        if self.connections_file.exists():
+            data = json.loads(self.connections_file.read_text())
             for entry in data.get("servers", []):
                 server = MCPServerConfig(**entry)
                 self._servers[server.name] = server
@@ -71,16 +75,16 @@ class MCPRegistry:
         connect cost just to see its tools. Auth material lives only in the
         keyring (``auth_key_ref`` is a reference, never the token).
         """
-        self.CONNECTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        self.connections_file.parent.mkdir(parents=True, exist_ok=True)
         data = {"servers": [s.model_dump() for s in self._servers.values()]}
-        self.CONNECTIONS_FILE.write_text(json.dumps(data, indent=2))
+        self.connections_file.write_text(json.dumps(data, indent=2))
 
     # ------------------------------------------------------------------
     # Registration
     # ------------------------------------------------------------------
 
     def register_server(self, server: MCPServerConfig) -> None:
-        """Register an MCP server. Called after `arcana connect mcp`."""
+        """Register an MCP server. Called after `arcana mcp add`."""
         self._servers[server.name] = server
         self.save()
 
@@ -108,11 +112,16 @@ class MCPRegistry:
 
         self._ensure_loaded()
         tools: list[ToolDefinition] = []
+        seen: set[str] = set()
 
         for sub in subscriptions:
-            tool = self._resolve_one(sub)
-            if tool:
-                tools.append(tool)
+            resolved = self._resolve_wildcard(sub) if sub.is_wildcard else self._resolve_singleton(sub)
+            for tool in resolved:
+                # Dedup so a `server/*` wildcard plus an explicit `server/tool`
+                # for the same tool yields it once.
+                if tool.qualified_name not in seen:
+                    seen.add(tool.qualified_name)
+                    tools.append(tool)
 
         return tools
 
@@ -160,9 +169,64 @@ class MCPRegistry:
         self._ensure_loaded()
         return self._servers.get(name)
 
+    def approve(self, name: str, tool_names: list[str] | None = None) -> list[str]:
+        """Re-approve a server's ``CHANGED`` tools, admitting their new metadata.
+
+        This is the human side of the default-closed diff gate: a tool whose
+        third-party ``description``/``input_schema`` mutated since it was first
+        trusted is flagged ``CHANGED`` and withheld from resolution until it is
+        approved here. Approving flips it back to ``ACTIVE`` — accepting its
+        current schema as the new trusted baseline — and recomputes the server's
+        status to ``CONNECTED`` once no ``CHANGED`` tool remains (a status only
+        recomputed for an already-resolvable server, so approving never
+        fabricates connectivity for an unreachable one). ``tool_names`` (bare
+        tool names) narrows the set; ``None`` approves every changed tool.
+        Returns the names actually flipped. Unknown server → ``KeyError``; names
+        that are absent or not ``CHANGED`` are left untouched.
+        """
+        self._ensure_loaded()
+        server = self._servers.get(name)
+        if server is None:
+            raise KeyError(name)
+
+        wanted = set(tool_names) if tool_names is not None else None
+        approved: list[str] = []
+        updated: list[ToolDefinition] = []
+        for tool in server.discovered_tools:
+            if tool.status is ToolStatus.CHANGED and (wanted is None or tool.name in wanted):
+                updated.append(tool.model_copy(update={"status": ToolStatus.ACTIVE}))
+                approved.append(tool.name)
+            else:
+                updated.append(tool)
+
+        if approved:
+            server.discovered_tools = updated
+            if server.status in _RESOLVABLE_STATUSES:
+                still_changed = any(t.status is ToolStatus.CHANGED for t in updated)
+                server.status = MCPServerStatus.CHANGED if still_changed else MCPServerStatus.CONNECTED
+            self.save()
+        return approved
+
     # ------------------------------------------------------------------
     # Private
     # ------------------------------------------------------------------
+
+    def _resolve_singleton(self, sub: ToolSubscription) -> list[ToolDefinition]:
+        """A single subscription resolved to zero or one tool."""
+        tool = self._resolve_one(sub)
+        return [tool] if tool else []
+
+    def _resolve_wildcard(self, sub: ToolSubscription) -> list[ToolDefinition]:
+        """Every ACTIVE tool of a ``server/*`` subscription's server.
+
+        Withheld (``CHANGED``) tools are excluded, and an unresolvable server
+        (unreachable / disconnected) contributes nothing — the same fail-closed
+        posture as an explicit per-tool subscription.
+        """
+        server = self._servers.get(sub.server_name or "")
+        if not server or server.status not in _RESOLVABLE_STATUSES:
+            return []
+        return [t for t in server.discovered_tools if t.status is ToolStatus.ACTIVE]
 
     def _resolve_one(self, sub: ToolSubscription) -> ToolDefinition | None:
         if sub.is_builtin:

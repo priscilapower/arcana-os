@@ -255,7 +255,7 @@ async def test_unreachable_mcp_server_resolves_to_clear_error():
 def test_default_gateway_registers_one_adapter_per_server(tmp_path: Path):
     get_mcp_registry.cache_clear()
     reg = get_mcp_registry()
-    reg.CONNECTIONS_FILE = tmp_path / "mcps.json"  # pyright: ignore[reportPrivateUsage,assignment]
+    reg.connections_file = tmp_path / "mcps.json"
     reg._servers.clear()  # pyright: ignore[reportPrivateUsage]
     reg._servers["notion-mcp"] = _connected_config()  # pyright: ignore[reportPrivateUsage]
     try:

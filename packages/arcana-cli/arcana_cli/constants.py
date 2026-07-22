@@ -14,6 +14,7 @@ from pathlib import Path
 ARCANA_HOME: Path = Path(os.environ.get("ARCANA_HOME", Path.home() / ".arcana"))
 AGENTS_BASE: Path = ARCANA_HOME / "agents"
 CONNECTIONS_PATH: Path = ARCANA_HOME / "connections" / "models.json"
+MCPS_PATH: Path = ARCANA_HOME / "connections" / "mcps.json"
 
 ROMAN: Mapping[int, str] = {
     0: "0",

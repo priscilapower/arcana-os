@@ -116,6 +116,92 @@ The `--model` flag refers to a connection **name** created with `arcana provider
 
 ---
 
+### `arcana mcp`
+
+Register and manage external [MCP](https://modelcontextprotocol.io) servers, and
+re-approve tools whose third-party schema has changed. Read commands work offline
+from persisted state; only `add` / `refresh` need the server reachable.
+
+```bash
+arcana mcp add --name notion-mcp --url https://mcp.notion.com/sse
+arcana mcp add --name notion-mcp --url https://mcp.notion.com/sse \
+  --header "Authorization=Bearer $NOTION_TOKEN"          # token → keyring
+arcana mcp add --name local-mcp --command my-server --arg --stdio
+arcana mcp list
+arcana mcp show notion-mcp
+arcana mcp refresh notion-mcp                 # re-discover + diff
+arcana mcp approve notion-mcp --all           # trust changed tools' new schema
+arcana mcp approve notion-mcp --tool notion-mcp/search_pages
+arcana mcp remove notion-mcp --force          # scans dependent agents first
+```
+
+| Subcommand | Description |
+|-----------|-------------|
+| `add` | Register a server, discover its tools, and persist them (transport inferred) |
+| `list` | List servers with transport, tool count, and status |
+| `show <name>` | Server detail + discovered tools (auth reference redacted) |
+| `refresh <name>` | Re-discover tools; a mutated schema is flagged `changed` and withheld |
+| `approve <name>` | Re-approve `changed` tools (`--tool <qn>` repeatable, or `--all`) |
+| `remove <name>` | Remove a server, its tools, and any keyring credential |
+
+`add` infers the transport (`--url` → SSE, `--command` → stdio). Auth material
+goes to the OS keyring — `mcps.json` stores only a reference, and a token is never
+echoed, logged, or written to disk.
+
+| `mcp add` flag | Description |
+|------|-------------|
+| `--name / -n` | Server name (e.g. `notion-mcp`) |
+| `--url` | SSE endpoint URL (implies `--transport sse`) |
+| `--command` | stdio server command (implies `--transport stdio`) |
+| `--arg` | stdio command argument (repeatable) |
+| `--transport` | `sse` or `stdio` (inferred from `--url` / `--command`) |
+| `--header` | SSE auth `Authorization=Bearer <token>` — stored in the keyring |
+| `--auth-key` | Existing keyring reference holding the bearer token |
+
+A tool whose description or input schema changes since it was first trusted is
+marked `changed` and withheld from agents until you `approve` it — the human
+checkpoint on a third-party rug-pull. `remove` prints which agents lose which
+tools and aborts unless `--force` is given (`--yes` skips the confirmation).
+
+---
+
+### `arcana tools`
+
+Inspect the subscribable tool inventory (builtins + discovered MCP tools) and
+manage a per-agent subscription list.
+
+```bash
+arcana tools list
+arcana tools list --agent researcher          # adds a subscribed ✓ column
+arcana tools subscribe researcher builtin/web_search
+arcana tools subscribe researcher notion-mcp/search_pages
+arcana tools subscribe researcher notion-mcp    # whole server → stored as notion-mcp/*
+arcana tools unsubscribe researcher notion-mcp/search_pages --yes
+```
+
+| Subcommand | Description |
+|-----------|-------------|
+| `list` | List subscribable tools; `--agent <name>` marks which are subscribed |
+| `subscribe <agent> <qualified_name>` | Subscribe an agent to a tool (validated) |
+| `unsubscribe <agent> <qualified_name>` | Remove a subscription |
+
+**Whole-server subscriptions.** Pass a bare server name (`notion-mcp`) or an
+explicit wildcard (`notion-mcp/*`) to subscribe an agent to *every* active tool
+on that server. It's stored as `notion-mcp/*` and expanded at session start, so
+tools discovered later flow in automatically (and `changed`/unapproved tools stay
+excluded until you `approve` them). `unsubscribe researcher notion-mcp` removes it.
+
+`subscribe` validates the name against the live registry: an unknown tool exits
+`2`, and a `changed`/unapproved MCP tool exits `3` (pointing you at `arcana mcp
+approve`). If the agent's model can't accept tool calls, the subscription still
+writes but warns that the tools won't be injected.
+
+**Scripting.** `mcp` and `tools` commands accept `--json` for machine-readable
+output and use uniform exit codes: `0` ok, `1` error, `2` not-found, `3`
+denied/unapproved. Secrets are keyring-only and never appear in any output.
+
+---
+
 ### `arcana run`
 
 Run a prompt against a specific agent. `--agent` is required.

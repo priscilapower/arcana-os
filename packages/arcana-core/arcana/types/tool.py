@@ -92,7 +92,7 @@ class MCPServerStatus(StrEnum):
 class MCPServerConfig(BaseModel):
     """
     An MCP server registered at the OS level.
-    Registered once via `arcana connect mcp` — shared across all agents.
+    Registered once via `arcana mcp add` — shared across all agents.
     Persisted to ~/.arcana/connections/mcps.json (no secrets here).
     """
 
@@ -132,9 +132,10 @@ class MCPServerConfig(BaseModel):
 
 class ToolSubscription(BaseModel):
     """
-    An agent's subscription to a specific tool from the OS-level registry.
+    An agent's subscription to a tool (or a whole server) from the OS-level registry.
     Format: "server_name/tool_name" e.g. "notion-mcp/search_pages"
     OR a builtin: "builtin/web_search"
+    OR a whole-server wildcard: "notion-mcp/*" (every active tool on that server)
     """
 
     qualified_name: str  # "notion-mcp/search_pages"
@@ -152,6 +153,15 @@ class ToolSubscription(BaseModel):
     @property
     def is_builtin(self) -> bool:
         return self.qualified_name.startswith("builtin/")
+
+    @property
+    def is_wildcard(self) -> bool:
+        """True for a ``server/*`` subscription — every active tool on that server.
+
+        Expanded at resolution time so tools discovered *after* the subscription
+        flow in automatically, while withheld (``CHANGED``) tools stay excluded.
+        """
+        return self.server_name is not None and self.tool_name == "*"
 
     def __str__(self) -> str:
         return self.qualified_name

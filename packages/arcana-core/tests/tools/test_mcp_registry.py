@@ -22,9 +22,7 @@ from tests.support.tools import FakeMCPSession, mcp_tool, session_factory
 
 def _make_registry(tmp_path: Path) -> MCPRegistry:
     """Return a fresh MCPRegistry pointing at a temp connections file."""
-    reg = MCPRegistry()
-    reg.CONNECTIONS_FILE = tmp_path / "mcps.json"  # type: ignore[assignment]
-    return reg
+    return MCPRegistry(connections_file=tmp_path / "mcps.json")
 
 
 def _connected_server(name: str = "test-mcp", tool_name: str = "do_thing") -> MCPServerConfig:
@@ -163,6 +161,59 @@ def test_resolve_mixed_builtin_and_mcp(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# resolve() — whole-server wildcard subscriptions
+# ---------------------------------------------------------------------------
+
+
+def _multi_tool_server(name: str = "notion-mcp") -> MCPServerConfig:
+    def _tool(tool_name: str, status: ToolStatus = ToolStatus.ACTIVE) -> ToolDefinition:
+        return ToolDefinition(
+            name=tool_name,
+            description="d",
+            input_schema={},
+            type=ToolType.MCP,
+            mcp_server_name=name,
+            status=status,
+        )
+
+    return MCPServerConfig(
+        name=name,
+        server_url="https://a/sse",
+        status=MCPServerStatus.CHANGED,  # resolvable; one tool withheld
+        discovered_tools=[_tool("search_pages"), _tool("create_page"), _tool("rugpulled", ToolStatus.CHANGED)],
+    )
+
+
+def test_wildcard_resolves_all_active_tools_excluding_changed(tmp_path):
+    reg = _make_registry(tmp_path)
+    reg.load()
+    reg._servers["notion-mcp"] = _multi_tool_server()
+    tools = reg.resolve([ToolSubscription(qualified_name="notion-mcp/*")])
+    assert {t.name for t in tools} == {"search_pages", "create_page"}  # 'rugpulled' withheld
+
+
+def test_wildcard_on_unresolvable_server_yields_nothing(tmp_path):
+    reg = _make_registry(tmp_path)
+    reg.load()
+    server = _multi_tool_server("down-mcp")
+    server.status = MCPServerStatus.UNREACHABLE
+    reg._servers["down-mcp"] = server
+    assert reg.resolve([ToolSubscription(qualified_name="down-mcp/*")]) == []
+
+
+def test_wildcard_plus_explicit_dedups(tmp_path):
+    reg = _make_registry(tmp_path)
+    reg.load()
+    reg._servers["notion-mcp"] = _multi_tool_server()
+    subs = [
+        ToolSubscription(qualified_name="notion-mcp/*"),
+        ToolSubscription(qualified_name="notion-mcp/search_pages"),
+    ]
+    tools = reg.resolve(subs)
+    assert sorted(t.name for t in tools) == ["create_page", "search_pages"]  # search_pages once
+
+
+# ---------------------------------------------------------------------------
 # list_all_tools()
 # ---------------------------------------------------------------------------
 
@@ -212,8 +263,8 @@ def test_register_server_persists_to_disk(tmp_path):
     server = _connected_server("notion-mcp", "search_pages")
     reg.register_server(server)
 
-    assert reg.CONNECTIONS_FILE.exists()
-    data = json.loads(reg.CONNECTIONS_FILE.read_text())
+    assert reg.connections_file.exists()
+    data = json.loads(reg.connections_file.read_text())
     names = [s["name"] for s in data["servers"]]
     assert "notion-mcp" in names
 
@@ -234,7 +285,7 @@ def test_remove_server_removes_from_disk(tmp_path):
     reg.register_server(_connected_server("notion-mcp", "search_pages"))
     reg.remove_server("notion-mcp")
 
-    data = json.loads(reg.CONNECTIONS_FILE.read_text())
+    data = json.loads(reg.connections_file.read_text())
     names = [s["name"] for s in data["servers"]]
     assert "notion-mcp" not in names
 
@@ -274,7 +325,7 @@ async def test_discover_persists_tools_and_marks_connected(tmp_path, monkeypatch
     assert cfg.status is MCPServerStatus.CONNECTED
     assert cfg.tool_names == ["search"]
     # Persisted to disk so the next process sees the tools without connecting.
-    data = json.loads(reg.CONNECTIONS_FILE.read_text())
+    data = json.loads(reg.connections_file.read_text())
     persisted = next(s for s in data["servers"] if s["name"] == "notion-mcp")
     assert persisted["discovered_tools"][0]["name"] == "search"
     assert persisted["status"] == "connected"
@@ -323,7 +374,6 @@ async def test_discovered_tools_resolve_after_reload(tmp_path, monkeypatch):
 
     # A fresh registry (new process) loads the persisted cache — no connection.
     reloaded = _make_registry(tmp_path)
-    reloaded.CONNECTIONS_FILE = reg.CONNECTIONS_FILE  # type: ignore[assignment]
     reloaded.load()
 
     tools = reloaded.resolve([ToolSubscription(qualified_name="notion-mcp/search")])
