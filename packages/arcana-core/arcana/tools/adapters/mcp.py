@@ -52,7 +52,9 @@ from arcana.types.tool import (
 
 # Keyring service namespace, shared with the model connection store so a user's
 # MCP token lives beside their model credentials under one OS keychain entry set.
-_KEYRING_SERVICE = "arcana"
+# Public so the CLI that *writes* an MCP token uses the same namespace this
+# adapter *reads* from — the two must never drift.
+KEYRING_SERVICE = "arcana"
 
 
 class MCPToolSettings(BaseSettings):
@@ -343,7 +345,7 @@ class MCPToolAdapter(ToolAdapter):
         if not self._cfg.auth_key_ref:
             return None
         try:
-            token = keyring.get_password(_KEYRING_SERVICE, self._cfg.auth_key_ref)
+            token = keyring.get_password(KEYRING_SERVICE, self._cfg.auth_key_ref)
         except Exception:
             token = None
         if not token:
