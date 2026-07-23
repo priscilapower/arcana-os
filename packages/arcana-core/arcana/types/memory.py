@@ -467,6 +467,49 @@ class PruneReport(BaseModel):
     ran_at: datetime = Field(default_factory=now_utc)
 
 
+class ForgetResult(BaseModel):
+    """Outcome of forgetting a single entry by id, resolved at the federation.
+
+    ``found`` is ``False`` when no tier owned the id (nothing was deleted).
+    ``scope`` / ``pool_name`` name the tier the entry was removed from, so a
+    caller can report *where* it lived. ``hard`` records whether the row was
+    purged (``True``) or archived (``False``, recoverable).
+    """
+
+    found: bool
+    scope: MemoryScope | None = None
+    pool_name: str | None = None
+    hard: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Knowledge connectors — external read-only sources registered as memory tiers
+# ---------------------------------------------------------------------------
+
+
+class KnowledgeConnectorKind(StrEnum):
+    OBSIDIAN = "obsidian"  # an Obsidian vault (a folder of Markdown notes)
+    MARKDOWN = "markdown"  # a plain folder of Markdown notes
+
+
+class KnowledgeConnector(BaseModel):
+    """A registered external, read-only knowledge source addressed by name.
+
+    A *reference*, never contents: it stores a resolved, validated absolute
+    ``path`` to a folder of Markdown notes, not the notes themselves. Removing a
+    connector never touches the folder. A connector is deliberately **not** a
+    shared memory pool — it is an external read source addressed by its own
+    ``name`` (via ``--connector``), kept out of the ``SHARED`` pool namespace so
+    read-only reference folders never mix with writable inter-agent memory.
+    Persisted under the ``connectors`` key of
+    ``~/.arcana/connections/memory-adapters.json``.
+    """
+
+    name: str  # unique registry key + how it's addressed, e.g. "team-vault"
+    kind: KnowledgeConnectorKind
+    path: str  # resolved absolute path to the notes folder — a reference, not contents
+
+
 # ---------------------------------------------------------------------------
 # Adapter protocol
 # ---------------------------------------------------------------------------

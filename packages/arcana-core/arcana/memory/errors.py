@@ -8,6 +8,8 @@ the ``ModelAdapter._translate`` contract in ``arcana.models``.
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from uuid import UUID
+
     from arcana.observability.events import MemoryDegradeReason
     from arcana.types import MemoryScope
 
@@ -35,6 +37,18 @@ class MemoryNotConnectedError(MemoryError):
     """The adapter was used before a connection/schema was established."""
 
 
+class PathSafetyError(MemoryError):
+    """A user-supplied filesystem path failed the memory filesystem guardrails.
+
+    Raised — fail-closed, before any I/O — when a ``--vault`` / ``--path`` /
+    ``--out`` path escapes the allowed roots (``..``, an absolute jump, or a
+    symlink pointing outside), does not meet a required shape (missing, not a
+    directory), would clobber an existing file without permission, or exceeds the
+    export size cap. The message names the problem without leaking the resolved
+    absolute path into shared output.
+    """
+
+
 class MemoryRoutingError(MemoryError):
     """A write targets a tier that is missing or under-specified.
 
@@ -42,6 +56,35 @@ class MemoryRoutingError(MemoryError):
     GLOBAL write with no global backend, or a SHARED write whose ``pool_name``
     is absent or names an unknown pool.
     """
+
+
+class GlobalDeleteRefused(MemoryError):
+    """A delete resolved to a GLOBAL entry, which this path may not remove.
+
+    GLOBAL is The World's to write and prune; a per-agent delete there would let
+    one operator quietly rewrite shared truth, so the federation refuses it and
+    points the caller at The World. Carries the offending ``memory_id`` so a
+    surface (e.g. the CLI) can name it.
+    """
+
+    def __init__(self, memory_id: "UUID") -> None:
+        self.memory_id = memory_id
+        super().__init__(f"entry {memory_id} lives in the GLOBAL tier; the World owns GLOBAL deletes")
+
+
+class ReadOnlyTierDelete(MemoryError):
+    """A delete resolved to an entry owned by a read-only tier (e.g. a connector).
+
+    A knowledge connector (a Markdown vault mounted for retrieval) is a reference
+    to an external source of truth, not a writable store; its notes are removed by
+    editing the source, never through ``forget``. Carries the ``memory_id`` and the
+    owning tier's label so the caller can explain what to do instead.
+    """
+
+    def __init__(self, memory_id: "UUID", tier: str) -> None:
+        self.memory_id = memory_id
+        self.tier = tier
+        super().__init__(f"entry {memory_id} is owned by read-only tier {tier!r}; edit the source to remove it")
 
 
 class MemoryWriteError(MemoryError):

@@ -51,6 +51,10 @@ UPSERT = (
 
 SELECT_BASE = f"SELECT {_COL_LIST} FROM memory_entries"
 
+# By-id fetch, ignoring the archived/importance/scope filters a query applies —
+# used by inspect and delete to resolve an entry the search path would hide.
+SELECT_BY_ID = f"{SELECT_BASE} WHERE id = ?"
+
 # Pinned entries first, then most important, then most recently touched.
 ORDER_BY = " ORDER BY pinned DESC, importance DESC, last_accessed_at DESC"
 

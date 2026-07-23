@@ -58,3 +58,9 @@ from arcana.types import Agent, ModelConnection, Session
 ::: arcana.types.memory.PrunePolicy
 
 ::: arcana.types.memory.PruneReport
+
+::: arcana.types.memory.ForgetResult
+
+::: arcana.types.memory.KnowledgeConnector
+
+::: arcana.types.memory.KnowledgeConnectorKind

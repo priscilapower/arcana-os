@@ -196,9 +196,59 @@ excluded until you `approve` them). `unsubscribe researcher notion-mcp` removes 
 approve`). If the agent's model can't accept tool calls, the subscription still
 writes but warns that the tools won't be injected.
 
-**Scripting.** `mcp` and `tools` commands accept `--json` for machine-readable
-output and use uniform exit codes: `0` ok, `1` error, `2` not-found, `3`
-denied/unapproved. Secrets are keyring-only and never appear in any output.
+---
+
+### `arcana memory`
+
+Inspect, audit, forget, connect, and export an agent's memory. Agent memory lives
+in binary SQLite under `~/.arcana`; this group makes it visible, exportable, and
+*forgettable*. Reads are offline-first — `list`, `inspect`, `adapters`, `export`,
+and `search --mode keyword` work with no embedding provider.
+
+```bash
+arcana memory list --agent hermit                      # entries by importance (offline)
+arcana memory list --agent hermit --scope global       # a different memory tier
+arcana memory search "rate limit" --agent hermit       # semantic; falls back to keyword
+arcana memory inspect <memory-id> --agent hermit       # detail + decay factor
+arcana memory forget <memory-id> --agent hermit        # confirm, then hard-delete
+arcana memory forget <memory-id> --agent hermit --archive --yes   # soft-delete
+arcana memory connect obsidian --vault ~/notes/vault --name notes # register an external source
+arcana memory list --connector notes                   # read that connector's notes
+arcana memory adapters                                 # list connectors + health
+arcana memory export --agent hermit --out mem.md       # git-diffable Markdown export
+```
+
+| Subcommand | Description |
+|-----------|-------------|
+| `list` | List entries by decayed importance from an agent (`--agent`, `--scope`, `--pool`) **or** a connector (`--connector`); plus `--type`, `--limit`, `--min-importance` |
+| `search <query>` | Search an agent's memory or a `--connector` (`--mode semantic\|hybrid\|keyword`); degrades to keyword with no embedder |
+| `inspect <id>` | One entry in full, with decay factor and effective importance |
+| `forget <id>` | Delete one entry; confirms unless `--yes`, hard-deletes unless `--archive` |
+| `connect obsidian \| markdown` | Register a folder of notes as an external, read-only **knowledge connector** |
+| `adapters` | List registered knowledge connectors and probe each one's health |
+| `export` | Dump memory to Markdown (`--agent`, `--pool`, or `--all`; `--out <file>` or stdout) |
+
+**Connectors vs. pools.** A **knowledge connector** is an external, read-only folder
+of notes (an Obsidian vault or markdown dir), addressed by its own name via
+`--connector <name>` — it is deliberately kept out of the shared-pool namespace, so
+`--pool` always means genuine writable inter-agent memory and never a reference
+folder. A connector is never mounted as an agent memory tier; `list`/`search
+--connector` read it directly, offline and keyword-only.
+
+**Fail-closed safety.** `forget` **cannot** delete a `GLOBAL` entry from the CLI
+(The World owns `GLOBAL`) — it exits `3`. A hard delete is the default (`forget`
+means *gone*); `--archive` keeps the row recoverable. `connect --vault/--path` and
+`export --out` resolve every path (symlinks collapsed) and confine it to an allowed
+root before any I/O — a `..`/symlink/absolute escape is rejected fail-closed;
+`export --out` won't overwrite without `--yes` and writes atomically. A connector
+stores only a resolved path reference, never file contents. Guardrail roots and the
+export cap are tunable via `ARCANA_MEMORY_SCOPE_PATHS` / `ARCANA_MEMORY_MAX_FILE_MB`.
+
+**Scripting.** `mcp`, `tools`, and `memory` commands accept `--json` for
+machine-readable output and use uniform exit codes: `0` ok, `1` error, `2`
+not-found, `3` denied. A destructive op with `--json` must also pass `--yes` (it
+errors rather than hanging on a prompt it can't answer). Secrets and connector
+paths never appear in a shared log or error output.
 
 ---
 

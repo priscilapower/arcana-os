@@ -317,6 +317,51 @@ class SQLiteAdapter:
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         self._emit_read(query, len(entries), elapsed_ms)
 
+    async def get(self, memory_id: UUID) -> MemoryEntry | None:
+        """Return the entry with ``memory_id``, archived or not, or ``None``.
+
+        A by-id lookup that bypasses the query filters (no scope/importance/
+        archived gate), so an inspect or a delete can resolve an entry the normal
+        search path would hide. Does not refresh access tracking — inspecting or
+        forgetting an entry is not a "read" that should reset its decay clock.
+        """
+        conn = await self._ensure()
+        try:
+            cursor = await conn.execute(_sql.SELECT_BY_ID, (str(memory_id),))
+            row = await cursor.fetchone()
+        except aiosqlite.Error as exc:
+            raise await self._fail_translated(exc, f"lookup failed for entry {memory_id}") from exc
+        if row is None:
+            return None
+        try:
+            return _sql.row_to_entry(row)
+        except Exception as exc:
+            raise MemoryStorageError(f"failed to decode stored memory row: {exc}") from exc
+
+    async def delete(self, memory_id: UUID, *, hard: bool = True) -> bool:
+        """Delete one entry by id. Returns ``False`` if no such entry existed.
+
+        ``hard`` (the default) purges the row — the FTS5 sync trigger clears the
+        keyword index, and the vec0 index (which has no trigger) is cleared here,
+        mirroring a PURGE prune. ``hard=False`` soft-deletes by setting
+        ``archived`` instead, leaving the row recoverable. Idempotent: deleting an
+        absent (or already-hard-deleted) id is a no-op that returns ``False``.
+        """
+        conn = await self._ensure()
+        try:
+            if hard:
+                cursor = await conn.execute(_sql.delete_ids_sql(1), (str(memory_id),))
+                removed = cursor.rowcount > 0
+                if removed and await self._vec_table_exists(conn):
+                    await conn.execute(_sql.VEC_DELETE, (str(memory_id),))
+            else:
+                cursor = await conn.execute(_sql.archive_ids_sql(1), (str(memory_id),))
+                removed = cursor.rowcount > 0
+            await conn.commit()
+        except aiosqlite.Error as exc:
+            raise await self._fail_translated(exc, f"delete failed for entry {memory_id}") from exc
+        return removed
+
     # ------------------------------------------------------------------
     # Pruning
     # ------------------------------------------------------------------

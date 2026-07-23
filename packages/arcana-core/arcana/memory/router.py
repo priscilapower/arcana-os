@@ -208,6 +208,24 @@ class MemoryRouter:
         ranked = sorted(live, key=sort_key, reverse=True)
         return ranked[: query.limit]
 
+    def order_by_importance(self, entries: list[MemoryEntry], query: MemoryQuery) -> list[MemoryEntry]:
+        """Order entries by decayed effective importance for a listing/browse view.
+
+        The audit-surface counterpart to :meth:`rank`: it uses the same age-
+        discounted importance and pinned-first ordering, but is **weightless** (a
+        listing is not card-weighted retrieval) and, crucially, **keeps aged-out
+        entries** — it never applies the consolidation drop, because "show me
+        what's stored" must surface every entry, including ones that have decayed
+        below their consolidation threshold. Truncates to ``query.limit``.
+        """
+        now = self._clock()
+
+        def sort_key(entry: MemoryEntry) -> tuple[bool, float, float]:
+            profile = self._decay_profiles[entry.type]
+            return (entry.pinned, effective_importance(entry, profile, now), entry.last_accessed_at.timestamp())
+
+        return sorted(entries, key=sort_key, reverse=True)[: query.limit]
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------

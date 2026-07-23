@@ -255,6 +255,69 @@ vault = MarkdownFolderAdapter(
 results = await vault.search(MemoryQuery(text="metric units", limit=5))
 ```
 
+## Knowledge connectors
+
+A `MarkdownFolderAdapter` reads one folder; the **connector registry** persists
+*which* folders are registered so they survive across runs. A `KnowledgeConnector`
+is a reference — a `name`, a `kind` (`obsidian` / `markdown`), and a resolved
+`path` — never the notes themselves. `KnowledgeConnectorStore` reads and writes
+them under the `connectors` key of `~/.arcana/connections/memory-adapters.json`,
+**preserving** every sibling key (the [resilience config](#resilience) shares the
+file), and `connector_adapter()` turns one stored reference into a live read-only
+`MarkdownFolderAdapter` — the one place the reference-to-adapter mapping is defined,
+shared by the health probe and the direct read path.
+
+```python
+from pathlib import Path
+from uuid import uuid4
+
+from arcana.memory import KnowledgeConnectorStore, connector_adapter
+from arcana.types import KnowledgeConnector, KnowledgeConnectorKind
+
+store = KnowledgeConnectorStore(Path.home() / ".arcana" / "connections" / "memory-adapters.json")
+store.add(KnowledgeConnector(name="team-vault", kind=KnowledgeConnectorKind.OBSIDIAN, path="/abs/path/vault"))
+
+for connector in store.list():
+    adapter = connector_adapter(connector, uuid4())
+    health = await adapter.health_check()          # reachable? then scan() counts notes
+```
+
+A connector is an **external, read-only source addressed by its own name** — it is
+deliberately *not* a shared memory pool and is never registered as a federation
+tier, so a reference folder never mixes with writable inter-agent memory. The CLI
+reads it directly (`arcana memory list --connector <name>` / `search --connector`),
+distinct from `--pool` (which always means genuine shared agent memory). Removing a
+connector unregisters the reference and never touches the folder.
+
+## Markdown export
+
+`MemoryExporter` renders a list of `MemoryEntry` as a git-diffable Markdown
+document — a `# <Owner> — <Scope> Memory Export` header, then one
+`## <Type> (N entries)` section per memory type, each entry a `### <content>`
+heading with an `Importance / Confidence / Added` line. It is pure and
+deterministic (no clock, no I/O): the caller gathers entries (typically via
+`browse`) and decides where the text goes. It is read-only by design — exporting
+never mutates the store. The CLI surface is `arcana memory export`, which writes
+to stdout or, with `--out`, to a path-guarded file (see below).
+
+```python
+from arcana.memory import MemoryExporter
+from arcana.types import MemoryScope
+
+markdown = MemoryExporter().render(entries, owner="hermit", scope=MemoryScope.PRIVATE)
+```
+
+### Filesystem guardrails
+
+`arcana.memory.paths` confines user-supplied paths (`--vault` / `--path` /
+`--out`) before any I/O: `resolve_existing_dir()` and `resolve_out_path()`
+`realpath`-resolve a candidate (collapsing symlinks) and reject anything outside
+the allowed roots — a `..` escape, an absolute jump, or a symlink pointing out —
+raising `PathSafetyError` fail-closed. `atomic_write_text()` writes temp-then-
+rename, refuses to clobber without `overwrite=True`, and caps the size. Allowed
+roots default to `$HOME` and are overridable via `ARCANA_MEMORY_SCOPE_PATHS`
+(`os.pathsep`-separated); the export cap is `ARCANA_MEMORY_MAX_FILE_MB`.
+
 ## Pruning
 
 `prune()` removes low-value entries per a
@@ -352,6 +415,19 @@ dropped so the agent still sees the other tiers' results (partial memory beats
 none), while a failed *private write* raises `MemoryWriteError` — a lost write to
 the durability anchor is data loss the caller must know about. `SHARED`/`GLOBAL`
 write failures degrade instead (a degraded `GLOBAL` simply pauses promotion).
+
+Three by-id operations round out the interface. `get(id)` resolves a single entry
+across tiers (private → shared → global, most-local wins). `browse(query)` is the
+listing counterpart to `search`: a text-less query fans across the routed tiers
+and orders by decayed effective importance with **no embedder**, and — unlike
+`search` — keeps aged-out entries, since a listing must show everything stored.
+`forget(id)` deletes one entry from the tier that owns it: it hard-deletes by
+default (`hard=False` archives), and enforces the ownership invariant in one place
+— a `GLOBAL` entry raises `GlobalDeleteRefused` (The World owns `GLOBAL`), and an
+entry owned by a read-only tier (e.g. a folder registered as a read-only pool)
+raises `ReadOnlyTierDelete`.
+The delete seam underneath is `SQLiteAdapter.delete(id, hard=...)`, which clears
+the row, its FTS5 index (via trigger), and its `vec0` vector.
 
 ```python
 from arcana.memory import MemoryFederation, MemoryRouter, SQLiteAdapter
@@ -551,8 +627,12 @@ counting as one transient failure.
 
 Timeout budgets and breaker thresholds are per tier — a keyword read hits local
 SQLite, while a semantic read may call a remote embedder — and configurable via
+the `private` / `shared` / `global` keys of
 `~/.arcana/connections/memory-adapters.json` (a missing file yields safe
-defaults, so existing programmatic wiring keeps working):
+defaults, so existing programmatic wiring keeps working). This file is shared
+with the [knowledge-connector registry](#knowledge-connectors), which owns its
+`connectors` key; each component reads and rewrites only its own keys, so the two
+never clobber each other:
 
 ```json
 {
@@ -652,6 +732,20 @@ backlog's drain estimate (`depth × EWMA(service time)`) exceeds its headroom.
 
 ::: arcana.memory.jobs.MemoryJobKind
 
+## Knowledge connectors and export
+
+::: arcana.memory.connectors.KnowledgeConnectorStore
+
+::: arcana.memory.connectors.connector_adapter
+
+::: arcana.memory.exporter.MemoryExporter
+
+::: arcana.memory.paths.resolve_existing_dir
+
+::: arcana.memory.paths.resolve_out_path
+
+::: arcana.memory.paths.atomic_write_text
+
 ## Embedding gateway
 
 ::: arcana.memory.embedding_gateway.EmbeddingGateway
@@ -677,3 +771,9 @@ backlog's drain estimate (`depth × EWMA(service time)`) exceeds its headroom.
 ::: arcana.memory.errors.MemoryWriteError
 
 ::: arcana.memory.errors.TierWriteFailed
+
+::: arcana.memory.errors.GlobalDeleteRefused
+
+::: arcana.memory.errors.ReadOnlyTierDelete
+
+::: arcana.memory.errors.PathSafetyError
