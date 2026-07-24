@@ -11,6 +11,12 @@ from arcana.types.card import (
     PromptIngredients,
     TarotCard,
 )
+from arcana.types.guardrails import (
+    GuardrailRule,
+    GuardrailRuleType,
+    GuardrailSeverity,
+    GuardrailViolationError,
+)
 from arcana.types.memory import (
     DEFAULT_DECAY_PROFILES,
     WORLD_DECAY_PROFILES,
@@ -51,6 +57,8 @@ from arcana.types.session import (
     ToolCall,
 )
 from arcana.types.tool import (
+    BUILTIN_NAMESPACE,
+    BuiltinTool,
     MCPServerConfig,
     MCPServerStatus,
     MCPTransport,
@@ -62,7 +70,7 @@ from arcana.types.tool import (
     ToolType,
 )
 from arcana.types.workspace import Workspace
-from arcana.types.world import RoutingRule, Spread, SpreadLayout
+from arcana.types.world import RoutingRule, Spread, SpreadLayout, WorldConfig
 
 __all__ = [
     # JSON primitives
@@ -79,6 +87,11 @@ __all__ = [
     "MemoryWeights",
     "CardDecayConfig",
     "AgentConfig",
+    # Guardrails
+    "GuardrailRule",
+    "GuardrailRuleType",
+    "GuardrailSeverity",
+    "GuardrailViolationError",
     # Memory
     "MemoryAdapter",
     "MemoryEdge",
@@ -116,6 +129,8 @@ __all__ = [
     "SessionStatus",
     "SessionTrigger",
     # Tool
+    "BuiltinTool",
+    "BUILTIN_NAMESPACE",
     "ToolDefinition",
     "ToolResult",
     "ToolStatus",
@@ -126,6 +141,7 @@ __all__ = [
     "MCPServerStatus",
     "MCPTransport",
     # World
+    "WorldConfig",
     "RoutingRule",
     "Spread",
     "SpreadLayout",

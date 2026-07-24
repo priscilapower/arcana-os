@@ -15,6 +15,7 @@ copy:
 
 import asyncio
 from contextlib import AsyncExitStack
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -22,6 +23,8 @@ from mcp.types import CallToolResult, ContentBlock, ListToolsResult, TextContent
 
 from arcana.tools.adapters.base import ToolAdapter
 from arcana.tools.adapters.mcp import SessionFactory
+from arcana.tools.builtins.fs.config import FsToolsConfig
+from arcana.tools.builtins.fs.handlers import FsTools
 from arcana.types.tool import MCPServerConfig, ToolDefinition, ToolResult, ToolType
 
 PUBLIC_IP = "93.184.216.34"
@@ -53,6 +56,16 @@ class EchoAdapter(ToolAdapter):
 def make_mock_client(handler: Any) -> httpx.AsyncClient:
     """An AsyncClient backed by ``handler`` via MockTransport; no real network."""
     return httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=False)
+
+
+def fs_tools(root: Path, **overrides: Any) -> FsTools:
+    """The filesystem builtins jailed to ``root`` (a ``tmp_path``), never $HOME.
+
+    Defined once so every filesystem test builds the same default-closed jail;
+    pass ``overrides`` for the config knob under test (``hard_delete``,
+    ``max_write_bytes``, …).
+    """
+    return FsTools(FsToolsConfig(allowed_roots=[root], **overrides))
 
 
 # ---------------------------------------------------------------------------

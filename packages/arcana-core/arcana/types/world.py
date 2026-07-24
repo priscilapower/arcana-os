@@ -1,4 +1,4 @@
-"""World Engine types — RoutingRule, Spread, SpreadLayout."""
+"""World Engine types — WorldConfig, RoutingRule, Spread, SpreadLayout."""
 
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -6,6 +6,19 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, Field
 
 from arcana.types._utils import now_utc
+from arcana.types.guardrails import GuardrailRule
+
+
+class WorldConfig(BaseModel):
+    """The World's own configuration — the top layer of the guardrail hierarchy.
+
+    ``system_guardrails`` are the operator's hard floor: they apply to every
+    agent and no card default or per-agent rule can lift them. The gateway
+    evaluates them ahead of an agent's own rules, so the two only ever compose
+    into a narrower set.
+    """
+
+    system_guardrails: list[GuardrailRule] = []
 
 
 class RoutingRule(BaseModel):

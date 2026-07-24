@@ -18,6 +18,7 @@ from pathlib import Path
 from arcana.observability.audit import AuditLog
 from arcana.observability.events import (
     AuditEvent,
+    GuardrailViolationEvent,
     MemoryDegradedEvent,
     MemoryDegradeReason,
     MemoryOperation,
@@ -75,6 +76,22 @@ def emit_degraded(event: MemoryDegradedEvent) -> None:
         pass
 
 
+def emit_guardrail_violation(event: GuardrailViolationEvent) -> None:
+    """Record a guardrail match to the audit log (best effort).
+
+    The audit half of the guardrail seam. Enforcement has already happened by
+    the time this runs — a blocked call is blocked whether or not the log
+    accepts the event — so every failure here is swallowed, exactly as with
+    :func:`emit_degraded`.
+    """
+    try:
+        audit = get_audit_log()
+        if audit is not None:
+            audit.append(event)
+    except Exception:
+        pass
+
+
 __all__ = [
     # Configuration
     "configure_observability",
@@ -86,6 +103,7 @@ __all__ = [
     "get_metrics",
     # Emitters
     "emit_degraded",
+    "emit_guardrail_violation",
     # Classes
     "AuditLog",
     "ArcanaMetrics",
@@ -98,6 +116,7 @@ __all__ = [
     "MemoryWriteEvent",
     "MemoryPruneEvent",
     "MemoryDegradedEvent",
+    "GuardrailViolationEvent",
     "MemoryOperation",
     "MemoryDegradeReason",
     "event_to_dict",

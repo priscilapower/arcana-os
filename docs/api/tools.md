@@ -5,7 +5,7 @@ is handed a **tool gateway** and a list of **subscriptions** can call tools in a
 bounded model→tool→model loop; without them it runs exactly as before.
 
 ```python
-from arcana import Agent, Card
+from arcana import Agent, BuiltinTool, Card
 from arcana.models import ConnectionStore, ModelGateway
 from arcana.tools import default_tool_gateway
 
@@ -16,7 +16,10 @@ async with ModelGateway(ConnectionStore()) as gw:
         gateway=gw,
         model="ollama/hermes-3",
         tool_gateway=default_tool_gateway(),                 # builtin tools, ready to run
-        tool_subscriptions=["builtin/web_search", "builtin/fetch_url"],
+        tool_subscriptions=[
+            BuiltinTool.WEB_SEARCH.qualified,
+            BuiltinTool.FETCH_URL.qualified,
+        ],
     )
     answer = await agent.run("What changed in RAG this month? Search, then cite sources.")
 ```
@@ -42,7 +45,9 @@ was never offered.
 
 ## Builtin tools
 
-`default_tool_gateway()` ships two network tools:
+`default_tool_gateway()` ships two network tools and four filesystem tools.
+
+### Network tools
 
 - **`web_search(query, max_results?)`** → a normalised list of
   `{title, url, snippet}`. It runs behind a swappable provider: the default is
@@ -68,6 +73,116 @@ and again on **every redirect hop**, it enforces:
 A blocked, oversized, or timed-out fetch is a `ToolResult` error the model can
 adapt to — never an exception. An HTTP 404 is a *successful* tool result, not a
 tool error.
+
+### Filesystem tools
+
+- **`list_dir(path?)`** → `{path, entries, truncated}`, each entry
+  `{name, kind, size}` with `kind` one of `file`, `dir`, `symlink`, `other`.
+  **Not recursive** — subdirectories are named, never descended into. `path`
+  defaults to the workspace root, so an agent with no idea what it has can call
+  it with no arguments; without it an agent could only ever read paths it was
+  handed. A symlink is reported *as* a symlink and never resolved, so a listing
+  never implies the jail reaches further than it does.
+- **`read_file(path)`** → `{path, text, truncated, encoding}`. Text only: a
+  binary or non-UTF-8 file returns a typed error rather than raw bytes.
+- **`write_file(path, content, mode?)`** → `{path, bytes_written, mode}`.
+  `mode` is `create` (the default — refuses to clobber), `overwrite`, or
+  `append`. Writes are **atomic**: the bytes land in a temp file in the same
+  directory and are renamed into place, so a crash never leaves a half-written
+  file and never truncates the original.
+- **`delete_file(path)`** → `{path, outcome, trash_path?}`. Single files only —
+  directories are refused. The file is **moved into a workspace `.trash/`**
+  rather than unlinked, so an errant agent delete stays recoverable; the trash
+  is bounded and the oldest deletions are pruned. A real unlink is opt-in via
+  `hard_delete`.
+
+`read_file`, `write_file`, and `delete_file` operate on **regular files only**:
+a directory passed to any of them is refused, and so is a FIFO, socket, or device
+node. `list_dir` is the mirror image — it accepts only a directory.
+
+Directory *manipulation* is out: no `move`, `copy`, `mkdir`, or recursive delete.
+Directories are still created **implicitly** — `write_file("notes/2026/q1.md", …)`
+makes the intervening directories inside the jail — but nothing removes them, so
+directory structure an agent creates is permanent from its point of view.
+
+### The path jail
+
+These are the first tools whose model-chosen argument is a local path with
+effects on disk, so they fail **closed** behind one shared guard:
+
+- **canonicalize, then allowlist** — `realpath` collapses `..` and every symlink,
+  and only the *real* path is tested for containment. A prefix check on the raw
+  string would be defeated by either;
+- **`O_NOFOLLOW` on the leaf** — closes the window where a symlink is swapped in
+  between the check and the open (TOCTOU);
+- **regular files only** — a FIFO or device node is refused, and the probe is
+  non-blocking so a FIFO cannot wedge the call;
+- **byte caps** on both reads (truncated and flagged) and writes (refused before
+  a byte reaches the disk).
+
+Roots default to the agent's own workspace, `~/.arcana/agents/{id}/workspace/` —
+**never `~/.arcana` itself**, so secrets, connection configs, and other agents'
+memory sit outside every default root. A relative path is anchored to that
+workspace rather than to the process working directory. Pass the agent's id to
+`default_tool_gateway(agent_id)` to establish the jail; without one there are no
+roots at all and every filesystem call is refused.
+
+## Guardrails
+
+Beyond subscription membership, an agent can carry **guardrail rules** — static,
+serializable constraints the gateway evaluates *before* routing, so a blocked
+call never reaches the adapter. For a write or a delete, a late check is no
+check at all.
+
+Rules layer in one direction only — narrowing, never widening:
+
+| Layer | Set by | Effect |
+|---|---|---|
+| `WorldConfig.system_guardrails` | operator | hard floor for every agent |
+| `Agent.guardrails` | user | narrows further; seeded from the card at creation |
+| `CardArchetype.default_guardrails` | card author | the archetype's boundaries |
+
+Four rule types are enforced: `DENY_TOOL` (by qualified name), `SCOPE_PATHS`
+(intersected with the adapter's own jail — both must pass), `MAX_FILE_SIZE`
+(bounds a write), and `REQUIRE_CONFIRMATION` (asks the registered confirmer, and
+**denies when there is none**, so an autonomous run cannot self-approve). A rule
+type this seam cannot evaluate blocks rather than passing silently — an operator
+who wrote a restriction is owed enforcement or an error, never a no-op.
+
+A `block` match returns `ToolResult(success=False, error="blocked by guardrail: …")`
+carrying the rule's description, so the model can adapt instead of retrying
+blindly; `warn` and `log` matches let the call through. Either way a
+`GuardrailViolationEvent` lands in the audit log — with the target path but
+**never the file contents**.
+
+Card defaults are materialized onto the agent record at creation, so an agent's
+constraints are visible in its own `agent.json`. The Hermit ships denied
+`write_file` / `delete_file` / `run_code`; The Magician requires confirmation on
+deletes.
+
+Name the tools through `BuiltinTool` rather than as string literals. A rule that
+names a tool nobody spells correctly constrains nothing, silently — the enum is
+the one place those names are defined, and `.qualified` produces the
+`builtin/…` form a rule expects.
+
+```python
+from arcana.types import BuiltinTool, GuardrailRule, GuardrailRuleType
+
+rules = [
+    GuardrailRule(
+        type=GuardrailRuleType.DENY_TOOL,
+        value=[BuiltinTool.WRITE_FILE.qualified, BuiltinTool.DELETE_FILE.qualified],
+        description="This agent reads; it does not alter the world.",
+    )
+]
+agent = Agent(..., guardrails=rules)
+```
+
+`BuiltinTool` is a `StrEnum`, so a member *is* its wire name: it compares equal
+to the bare string, serializes to it, and can be used anywhere the plain name is
+expected — including `tool_subscriptions`.
+
+::: arcana.types.tool.BuiltinTool
 
 ## MCP servers
 
@@ -154,15 +269,47 @@ export ARCANA_TOOLS_BRAVE_SEARCH_URL="https://brave-gw.internal/search"
 export ARCANA_TOOLS_TAVILY_SEARCH_URL="https://tavily-gw.internal/search"
 ```
 
+The filesystem tools carry their own knobs under `ARCANA_TOOLS_FS_*`. The one
+value a tool argument can never influence is `allowed_roots`: it is the agent's
+workspace plus whatever the operator opened up, so a prompt-injected path cannot
+widen the jail.
+
+```toml
+[tools.fs]
+allowed_roots     = []          # extra roots beyond the agent workspace (os.pathsep-separated)
+max_read_bytes    = 5242880     # 5 MiB
+max_write_bytes   = 5242880     # 5 MiB
+max_list_entries  = 1000        # entries per list_dir before truncation
+follow_symlinks   = false       # O_NOFOLLOW on the leaf, on by default
+hard_delete       = false       # default: soft-delete into the workspace .trash/
+trash_max_entries = 100         # oldest deletions pruned past this
+```
+
+```bash
+# Open up a project directory for an agent that needs to read your repo.
+export ARCANA_TOOLS_FS_ALLOWED_ROOTS="/Users/me/projects/report"
+export ARCANA_TOOLS_FS_MAX_WRITE_BYTES=1048576
+```
+
 ::: arcana.tools.WebToolsConfig
 
 ::: arcana.tools.SearchProviderName
+
+::: arcana.tools.FsToolsConfig
+
+::: arcana.tools.PathGuard
 
 ## Gateway
 
 ::: arcana.tools.ToolGateway
 
 ::: arcana.tools.default_tool_gateway
+
+::: arcana.tools.resolve_guardrails
+
+::: arcana.tools.ActiveGuardrails
+
+::: arcana.tools.ToolConfirmer
 
 ## Adapters
 

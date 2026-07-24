@@ -4,6 +4,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel
 
+from arcana.types.guardrails import GuardrailRule
 from arcana.types.memory import MemoryType
 
 
@@ -86,6 +87,12 @@ class CardArchetype(BaseModel):
     memory_weights: MemoryWeights
     decay_config: CardDecayConfig = CardDecayConfig()
     preferred_tool_categories: list[str] = []
+
+    # The archetype's natural operating boundaries — The Hermit reads but does
+    # not alter the world. Materialized into ``Agent.guardrails`` at creation
+    # rather than consulted at call time, so an agent's constraints are fully
+    # visible in its own record.
+    default_guardrails: list[GuardrailRule] = []
 
 
 class TarotCard(BaseModel):

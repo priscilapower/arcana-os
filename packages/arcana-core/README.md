@@ -27,7 +27,7 @@ uv sync --all-packages --all-extras
 Agents run through a `ModelGateway`. The gateway owns connections, routing, retries, and cost metering; the agent just names the model it wants.
 
 ```python
-from arcana import Agent, Card
+from arcana import Agent, BuiltinTool, Card
 from arcana.models import ConnectionStore, ModelGateway
 
 async with ModelGateway(ConnectionStore()) as gw:
@@ -81,23 +81,37 @@ Each run records a `Session` (messages + token totals). Pass an `Agent` a `Memor
 Hand an agent a **tool gateway** and a list of **subscriptions** and its `run()` becomes a bounded model→tool→model loop. Without them it runs exactly as before — tools are off by default.
 
 ```python
-from arcana import Agent, Card
+from uuid import uuid4
+
+from arcana import Agent, BuiltinTool, Card
 from arcana.models import ConnectionStore, ModelGateway
 from arcana.tools import default_tool_gateway
 
+agent_id = uuid4()
+
 async with ModelGateway(ConnectionStore()) as gw:
     agent = Agent(
+        id=agent_id,
         name="researcher",
         card=Card.HERMIT,
         gateway=gw,
         model="ollama/hermes-3",
-        tool_gateway=default_tool_gateway(),
-        tool_subscriptions=["builtin/web_search", "builtin/fetch_url"],
+        # The same id jails the filesystem tools to this agent's own workspace.
+        tool_gateway=default_tool_gateway(agent_id),
+        tool_subscriptions=[
+            BuiltinTool.WEB_SEARCH.qualified,
+            BuiltinTool.FETCH_URL.qualified,
+            BuiltinTool.READ_FILE.qualified,
+        ],
     )
     answer = await agent.run("What changed in RAG this month? Search, then cite sources.")
 ```
 
-Two builtin tools ship ready to run: **`web_search`** (keyless DuckDuckGo by default; Brave / Tavily opt-in via config + an env key) returning `{title, url, snippet}` results, and **`fetch_url`** returning a page's readable text. Because `fetch_url` takes a model-chosen URL, it fails **closed** behind an egress envelope — an `http`/`https` scheme allow-list, an SSRF guard that blocks private / loopback / cloud-metadata addresses (re-checked on every redirect hop), and response byte + time caps. A blocked, oversized, or timed-out call is a `ToolResult` error the model can adapt to; the loop never raises. See the [Tools API reference](https://docs.arcanaos.cloud/api/tools/) for the full contract.
+Two builtin tools ship ready to run: **`web_search`** (keyless DuckDuckGo by default; Brave / Tavily opt-in via config + an env key) returning `{title, url, snippet}` results, and **`fetch_url`** returning a page's readable text. Because `fetch_url` takes a model-chosen URL, it fails **closed** behind an egress envelope — an `http`/`https` scheme allow-list, an SSRF guard that blocks private / loopback / cloud-metadata addresses (re-checked on every redirect hop), and response byte + time caps. A blocked, oversized, or timed-out call is a `ToolResult` error the model can adapt to; the loop never raises.
+
+Four **filesystem** tools ship alongside them: **`list_dir`** (one level, non-recursive, defaulting to the workspace root so an agent can discover what it has), **`read_file`**, **`write_file`** (atomic temp-then-rename, with `create` / `overwrite` / `append` modes), and **`delete_file`** (single files only, soft-deleted into a bounded workspace `.trash/` so an errant delete stays recoverable). They share one path jail: paths are canonicalized before they are allowlisted — so `..` and symlinks cannot escape — the leaf is opened `O_NOFOLLOW` to close the TOCTOU window, non-regular files are refused, and reads and writes are byte-capped. Roots default to `~/.arcana/agents/{id}/workspace/` and never `~/.arcana` itself, so secrets and other agents' memory are outside every default root.
+
+On top of subscriptions, an agent can carry **guardrails** — declarative rules (`DENY_TOOL`, `SCOPE_PATHS`, `MAX_FILE_SIZE`, `REQUIRE_CONFIRMATION`) resolved once per run from the World's system rules and the agent's own, then evaluated *before* routing, so a blocked write or delete never reaches the adapter. Card archetypes seed them: The Hermit is denied `write_file` / `delete_file`. See the [Tools API reference](https://docs.arcanaos.cloud/api/tools/) for the full contract.
 
 ---
 
@@ -144,7 +158,7 @@ The World (XXI) is defined but reserved — it cannot be assigned to an agent ye
 | `arcana/agents/registry.py` | `AgentRegistry` — CRUD for agent records persisted to `~/.arcana/agents/{id}/agent.json`; `build_runtime()`. |
 | `arcana/agents/session_manager.py` | `SessionManager` — session lifecycle, persisted to disk. |
 | `arcana/models/` | `ModelGateway` (routing, adapter pooling, retry/backoff, error normalization, cost metering), adapters for Ollama / Anthropic / OpenAI-compatible, `ConnectionStore` (keyring-backed secrets), pricing, and a normalized `ModelError` hierarchy. |
-| `arcana/tools/` | The tool gateway. `ToolGateway` resolves an agent's subscriptions, enforces permission + timeout, and routes each call to a `ToolAdapter`; `MCPRegistry` owns the tool definitions. `BuiltinToolAdapter` ships two network tools — **`web_search`** (keyless DuckDuckGo default; Brave / Tavily opt-in) and **`fetch_url`** — behind an SSRF-guarded egress envelope (scheme allow-list, private/metadata-IP blocking re-checked per redirect, byte + time caps). `MCPToolAdapter` connects any external **MCP server** over SSE or stdio, auto-discovers its tools on connect, and treats it as untrusted: namespaced tool names, rug-pull detection, scoped-env stdio, keyring auth. Every failure returns a `ToolResult` fed back to the model; `run()` never raises. |
+| `arcana/tools/` | The tool gateway. `ToolGateway` resolves an agent's subscriptions, enforces permission + timeout, and routes each call to a `ToolAdapter`; `MCPRegistry` owns the tool definitions. `BuiltinToolAdapter` ships two network tools — **`web_search`** (keyless DuckDuckGo default; Brave / Tavily opt-in) and **`fetch_url`** — behind an SSRF-guarded egress envelope (scheme allow-list, private/metadata-IP blocking re-checked per redirect, byte + time caps), plus four filesystem tools — **`list_dir`**, **`read_file`**, **`write_file`**, **`delete_file`** — behind a path jail (canonicalize-then-allowlist, `O_NOFOLLOW` leaf, byte caps, atomic writes, soft-delete to `.trash/`) rooted at the agent's workspace. Guardrail rules are enforced in `dispatch` before any adapter is reached. `MCPToolAdapter` connects any external **MCP server** over SSE or stdio, auto-discovers its tools on connect, and treats it as untrusted: namespaced tool names, rug-pull detection, scoped-env stdio, keyring auth. Every failure returns a `ToolResult` fed back to the model; `run()` never raises. |
 | `arcana/memory/` | The federated memory layer. `MemoryFederation` presents private / shared / global tiers as one `MemoryAdapter`: `SQLiteAdapter` (FTS5 keyword search), optional `VectorAdapter` (sqlite-vec semantic + hybrid), and read-only **connectors** — `MarkdownFolderAdapter` makes an Obsidian vault or notes folder searchable from just a path. A **knowledge-graph** layer (`memory_edges` + `EdgeStore`) links notes into typed edges, populated from `[[wikilinks]]` by `WikilinkEdgeExtractor`. Per-tier resilience (timeouts, circuit breakers) and `PRAGMA user_version` migrations round it out. |
 | `arcana/context/` | `read_soul()` — loads the optional user-owned `~/.arcana/soul.md` context injected into sessions; missing or unreadable is a silent `None`. |
 | `arcana/observability/` | Local-first telemetry: a JSONL `AuditLog` (`~/.arcana/logs/`), OpenTelemetry tracing (optional `[observability]` extra), and metrics — wired through the `Agent` and `ModelGateway`. |
@@ -186,4 +200,4 @@ uv run pytest packages/arcana-core/tests/ -v -m "not llm_eval"
 
 ## Roadmap
 
-Card-configured agents now run on the model gateway with persistent sessions, the **federated memory layer** wired into the run path (an `Agent` given a `MemoryAdapter` recalls and extracts memory across sessions — tiered backends, folder connectors, and a knowledge-graph edge layer), and a **tool gateway** with builtin `web_search` and `fetch_url` tools behind an SSRF-guarded egress envelope plus external **MCP servers** (SSE or stdio) as auto-discovered, fail-closed tool surfaces. Still ahead, as additive work rather than a rewrite: **The World** meta-agent (card XXI) that routes work across agents.
+Card-configured agents now run on the model gateway with persistent sessions, the **federated memory layer** wired into the run path (an `Agent` given a `MemoryAdapter` recalls and extracts memory across sessions — tiered backends, folder connectors, and a knowledge-graph edge layer), and a **tool gateway** with builtin `web_search` and `fetch_url` tools behind an SSRF-guarded egress envelope, filesystem tools behind a per-agent path jail with declarative guardrails enforced before dispatch, plus external **MCP servers** (SSE or stdio) as auto-discovered, fail-closed tool surfaces. Still ahead, as additive work rather than a rewrite: **The World** meta-agent (card XXI) that routes work across agents.

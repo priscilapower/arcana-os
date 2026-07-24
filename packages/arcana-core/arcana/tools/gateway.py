@@ -2,23 +2,30 @@
 
 Sits beside ``ModelGateway``. The ``MCPRegistry`` owns tool *definitions*; the
 gateway owns *execution* by mapping a tool name to the ``ToolAdapter`` that can
-run it. Permission is enforced in two places (defense-in-depth): the agent only
-ever exposes subscribed tools to the model, and ``dispatch`` re-checks
-membership before running anything.
+run it. Permission is enforced in three places (defense-in-depth): the agent only
+ever exposes subscribed tools to the model, ``dispatch`` re-checks membership
+before running anything, and — for an agent carrying guardrails — its rules are
+evaluated before an adapter is routed to, so a blocked call never reaches the
+tool at all.
 """
 
 import asyncio
 import time
+from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from pydantic import TypeAdapter, ValidationError
 
 from arcana.models.adapters.base import ToolCallResult, ToolParam
-from arcana.observability import get_tracer
+from arcana.observability import GuardrailViolationEvent, emit_guardrail_violation, get_tracer
 from arcana.tools.adapters.base import BuiltinToolAdapter, ToolAdapter
 from arcana.tools.adapters.mcp import MCPToolAdapter
+from arcana.tools.builtins.fs.config import FsToolsConfig
 from arcana.tools.config import DEFAULT_TOOL_TIMEOUT_S
+from arcana.tools.guardrails import ActiveGuardrails, enforce
 from arcana.tools.registry import MCPRegistry, get_mcp_registry
+from arcana.types.guardrails import GuardrailRule, GuardrailViolationError
 from arcana.types.tool import ToolDefinition, ToolResult, ToolSubscription
 
 # Tool-call arguments arrive as a JSON string from the model; validate them into
@@ -116,12 +123,22 @@ class ToolGateway:
         self._wire_to_qualified[wire] = qualified
         resolved[wire] = ToolParam(name=wire, description=definition.description, input_schema=definition.input_schema)
 
-    async def dispatch(self, call: ToolCallResult, *, allowed: set[str]) -> ToolResult:
+    async def dispatch(
+        self,
+        call: ToolCallResult,
+        *,
+        allowed: set[str],
+        guardrails: ActiveGuardrails | None = None,
+    ) -> ToolResult:
         """Route a tool call to its adapter and return a ``ToolResult``.
 
-        A call outside ``allowed`` is denied without executing. Unknown names,
-        bad arguments, timeouts, and adapter exceptions all come back as a
-        failed ``ToolResult`` so the model can recover — never as an exception.
+        A call outside ``allowed`` is denied without executing, and so is one a
+        ``block``-severity guardrail refuses — in both cases before an adapter is
+        reached, so a denied write or delete never touches the filesystem.
+        Unknown names, bad arguments, timeouts, and adapter exceptions all come
+        back as a failed ``ToolResult`` so the model can recover — never as an
+        exception. ``guardrails`` is the set resolved once for the run; omitted,
+        only membership applies.
         """
         wire = call["function"]["name"]
         with get_tracer().start_as_current_span("tool.dispatch") as span:
@@ -142,6 +159,11 @@ class ToolGateway:
                 args = _ARGS_ADAPTER.validate_json(call["function"]["arguments"] or "{}")
             except ValidationError as exc:
                 return ToolResult(tool_name=name, success=False, error=f"invalid arguments: {exc}")
+
+            if guardrails is not None:
+                blocked = await self._screen(guardrails, name, args, span)
+                if blocked is not None:
+                    return blocked
 
             adapter = self._route(name)
             if adapter is None:
@@ -165,12 +187,86 @@ class ToolGateway:
             span.set_attribute("arcana.tool.duration_ms", result.duration_ms)
             return result
 
+    async def _screen(
+        self,
+        guardrails: ActiveGuardrails,
+        name: str,
+        args: dict[str, Any],
+        span: Any,
+    ) -> ToolResult | None:
+        """Evaluate the guardrail set; return the denial, or None to proceed.
+
+        A ``block`` match is recorded and turned into a failed ``ToolResult``
+        carrying the rule's own description, so the model learns *which*
+        constraint it hit and can adapt rather than retry blindly. ``warn`` and
+        ``log`` matches are recorded and the call continues.
+
+        An evaluator that fails unexpectedly denies too. A guardrail that cannot
+        reach a verdict must not become an implicit pass, and it must not escape
+        as an exception either — the tool loop's contract is that every outcome
+        is a ``ToolResult``.
+        """
+        try:
+            observed = await enforce(guardrails, name, args)
+        except GuardrailViolationError as violation:
+            self._emit_violation(guardrails, name, args, violation.rule, violation.reason, blocked=True)
+            span.set_attribute("arcana.tool.denied", True)
+            span.set_attribute("arcana.tool.success", False)
+            span.set_attribute("arcana.tool.guardrail_block", violation.rule.type.value)
+            return ToolResult(
+                tool_name=name,
+                success=False,
+                error=f"blocked by guardrail: {violation.rule.description or violation.reason}",
+            )
+        except Exception as exc:
+            span.set_attribute("arcana.tool.denied", True)
+            span.set_attribute("arcana.tool.success", False)
+            span.set_attribute("arcana.tool.guardrail_block", "evaluation_error")
+            return ToolResult(
+                tool_name=name,
+                success=False,
+                error=f"blocked by guardrail: evaluation failed ({type(exc).__name__})",
+            )
+
+        for match in observed:
+            self._emit_violation(guardrails, name, args, match.rule, match.reason, blocked=False)
+        return None
+
+    @staticmethod
+    def _emit_violation(
+        guardrails: ActiveGuardrails,
+        name: str,
+        args: dict[str, Any],
+        rule: GuardrailRule,
+        reason: str,
+        *,
+        blocked: bool,
+    ) -> None:
+        """Append a ``GuardrailViolationEvent`` for the audit trail.
+
+        Only the target path is carried over from ``args`` — a ``write_file``
+        violation must not spill the file's contents into the audit log.
+        """
+        target = args.get("path")
+        emit_guardrail_violation(
+            GuardrailViolationEvent(
+                agent_id=guardrails.agent_id,
+                tool_name=name,
+                rule_type=rule.type.value,
+                severity=rule.severity,
+                reason=reason,
+                blocked=blocked,
+                target=target if isinstance(target, str) else "",
+                description=rule.description,
+            )
+        )
+
     def _route(self, name: str) -> ToolAdapter | None:
         """First registered adapter that supports ``name``, or None."""
         return next((a for a in self._adapters if a.supports(name)), None)
 
 
-def default_tool_gateway() -> ToolGateway:
+def default_tool_gateway(agent_id: UUID | None = None, *, home: Path | None = None) -> ToolGateway:
     """A ToolGateway wired to the builtin adapter plus one adapter per MCP server.
 
     Registers one :class:`MCPToolAdapter` for every configured server alongside
@@ -179,8 +275,15 @@ def default_tool_gateway() -> ToolGateway:
     call to them fails closed with a clear error. The builtin adapter is first,
     so bare/``builtin`` names always route to it and no MCP server can shadow a
     trusted builtin.
+
+    ``agent_id`` jails the filesystem builtins to that agent's workspace. Without
+    it they have no allowed root and every path is refused — a gateway built with
+    no agent context cannot reach the disk. ``home`` is the Arcana root that
+    workspace sits under; pass it whenever the caller's root is not the default
+    ``~/.arcana`` (an ``ARCANA_HOME`` override), so the jail lands beside the
+    agent's own record rather than in an unrelated tree.
     """
     registry = get_mcp_registry()
-    adapters: list[ToolAdapter] = [BuiltinToolAdapter()]
+    adapters: list[ToolAdapter] = [BuiltinToolAdapter(fs_config=FsToolsConfig.for_agent(agent_id, home=home))]
     adapters.extend(MCPToolAdapter(server) for server in registry.list_servers())
     return ToolGateway(registry, adapters)

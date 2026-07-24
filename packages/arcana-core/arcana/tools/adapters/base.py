@@ -1,17 +1,20 @@
-"""ToolAdapter ABC and the builtin adapter that hosts the network tools.
+"""ToolAdapter ABC and the builtin adapter that hosts the network and filesystem tools.
 
 A ``ToolAdapter`` is to tools what ``ModelAdapter`` is to models: it declares the
 tools it can run (``provides``) and executes a named call against its backend
 (``execute``). The ``ToolGateway`` owns routing and permission; an adapter only
 knows how to run its own tools.
 
-``BuiltinToolAdapter`` holds a small handler table — one entry per network
-builtin — plus one shared ``httpx`` client. Every handler returns a populated
-``ToolResult`` and never raises: provider, network, timeout, oversize, and SSRF
-failures all come back as ``ToolResult(success=False, error=…)`` fed to the model.
+``BuiltinToolAdapter`` holds a small handler table — one entry per builtin —
+plus one shared ``httpx`` client. The network handlers live here; the filesystem
+handlers come from :class:`~arcana.tools.builtins.fs.FsTools`, which owns the
+path jail. Every handler returns a populated ``ToolResult`` and never raises:
+provider, network, timeout, oversize, SSRF, and path-jail failures all come back
+as ``ToolResult(success=False, error=…)`` fed to the model.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -19,12 +22,14 @@ import httpx
 
 from arcana.observability import get_current_span
 from arcana.tools.builtins.definitions import BUILTIN_DEFINITIONS
+from arcana.tools.builtins.fs.config import FsToolsConfig
+from arcana.tools.builtins.fs.handlers import FsTools
 from arcana.tools.builtins.web.config import WebToolsConfig
 from arcana.tools.builtins.web.egress import EgressBlocked, guarded_get
 from arcana.tools.builtins.web.extract import extract_text
 from arcana.tools.builtins.web.search import SearchProvider, make_search_provider
 from arcana.types._utils import JsonValue
-from arcana.types.tool import ToolDefinition, ToolResult, ToolType
+from arcana.types.tool import BuiltinTool, ToolDefinition, ToolResult, ToolType
 
 
 class ToolAdapter(ABC):
@@ -51,12 +56,17 @@ class ToolAdapter(ABC):
 
 
 class BuiltinToolAdapter(ToolAdapter):
-    """Hosts the always-available builtin tools (``web_search`` + ``fetch_url``).
+    """Hosts the always-available builtin tools — the web and filesystem sets.
 
     Schemas come from :data:`BUILTIN_DEFINITIONS`, the same source the registry
     offers the model, so what an agent sees and what this runs cannot drift.
-    Config selects the search provider and the egress caps; a keyed provider
+    ``config`` selects the search provider and the egress caps; a keyed provider
     without its key fails fast here, at construction.
+
+    ``fs_config`` carries the filesystem jail. It is **default-closed**: built
+    without one, the filesystem tools have no allowed root and every path is
+    refused, so an adapter with no agent context cannot touch the disk. Use
+    :meth:`FsToolsConfig.for_agent` to jail the tools to one agent's workspace.
     """
 
     type = ToolType.BUILTIN
@@ -65,6 +75,7 @@ class BuiltinToolAdapter(ToolAdapter):
         self,
         config: WebToolsConfig | None = None,
         *,
+        fs_config: FsToolsConfig | None = None,
         http: httpx.AsyncClient | None = None,
         provider: SearchProvider | None = None,
     ) -> None:
@@ -78,9 +89,11 @@ class BuiltinToolAdapter(ToolAdapter):
             limits=httpx.Limits(max_connections=self._cfg.max_connections),
         )
         self._provider = provider or make_search_provider(self._cfg, self._http)
-        self._handlers = {
-            "web_search": self._web_search,
-            "fetch_url": self._fetch_url,
+        self._fs = FsTools(fs_config or FsToolsConfig())
+        self._handlers: dict[str, Callable[[dict[str, Any]], Awaitable[ToolResult]]] = {
+            BuiltinTool.WEB_SEARCH: self._web_search,
+            BuiltinTool.FETCH_URL: self._fetch_url,
+            **self._fs.handlers(),
         }
 
     def provides(self) -> list[ToolDefinition]:
@@ -105,9 +118,10 @@ class BuiltinToolAdapter(ToolAdapter):
     # ------------------------------------------------------------------
 
     async def _web_search(self, args: dict[str, Any]) -> ToolResult:
+        tool = BuiltinTool.WEB_SEARCH
         query = args.get("query")
         if not isinstance(query, str) or not query.strip():
-            return ToolResult(tool_name="web_search", success=False, error="missing 'query'")
+            return ToolResult(tool_name=tool, success=False, error="missing 'query'")
 
         max_results = self._clamp_max_results(args.get("max_results"))
         span = get_current_span()
@@ -118,30 +132,31 @@ class BuiltinToolAdapter(ToolAdapter):
             results = await self._provider.search(query, max_results=max_results)
         except Exception as exc:
             return ToolResult(
-                tool_name="web_search",
+                tool_name=tool,
                 success=False,
                 error=f"search provider: {type(exc).__name__}: {exc}",
             )
 
         span.set_attribute("arcana.tool.web_search.result_count", len(results))
         output: list[JsonValue] = [{"title": r["title"], "url": r["url"], "snippet": r["snippet"]} for r in results]
-        return ToolResult(tool_name="web_search", success=True, output=output)
+        return ToolResult(tool_name=tool, success=True, output=output)
 
     async def _fetch_url(self, args: dict[str, Any]) -> ToolResult:
+        tool = BuiltinTool.FETCH_URL
         url = args.get("url")
         if not isinstance(url, str) or not url.strip():
-            return ToolResult(tool_name="fetch_url", success=False, error="missing 'url'")
+            return ToolResult(tool_name=tool, success=False, error="missing 'url'")
 
         span = get_current_span()
         try:
             response = await guarded_get(self._http, url, self._cfg)
         except EgressBlocked as blocked:
             span.set_attribute("arcana.tool.fetch_url.blocked_reason", blocked.reason)
-            return ToolResult(tool_name="fetch_url", success=False, error=f"blocked: {blocked.reason}")
+            return ToolResult(tool_name=tool, success=False, error=f"blocked: {blocked.reason}")
         except httpx.TimeoutException:
-            return ToolResult(tool_name="fetch_url", success=False, error="timeout")
+            return ToolResult(tool_name=tool, success=False, error="timeout")
         except httpx.HTTPError as exc:
-            return ToolResult(tool_name="fetch_url", success=False, error=f"fetch failed: {exc}")
+            return ToolResult(tool_name=tool, success=False, error=f"fetch failed: {exc}")
 
         content_type = response.headers.get("content-type", "")
         text = extract_text(response.content, content_type, response.encoding)
@@ -152,7 +167,7 @@ class BuiltinToolAdapter(ToolAdapter):
         span.set_attribute("arcana.tool.fetch_url.truncated", response.truncated)
 
         return ToolResult(
-            tool_name="fetch_url",
+            tool_name=tool,
             success=True,
             output={
                 "final_url": response.final_url,

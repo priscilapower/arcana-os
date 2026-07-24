@@ -8,6 +8,8 @@ from arcana.types.card import (
     PromptIngredients,
     TarotCard,
 )
+from arcana.types.guardrails import GuardrailRule, GuardrailRuleType
+from arcana.types.tool import BuiltinTool
 
 MAGICIAN = TarotCard(
     id=Card.MAGICIAN,
@@ -45,6 +47,13 @@ MAGICIAN = TarotCard(
             preference_half_life_days=30.0,
         ),
         preferred_tool_categories=["code", "automation", "file", "api"],
+        default_guardrails=[
+            GuardrailRule(
+                type=GuardrailRuleType.REQUIRE_CONFIRMATION,
+                value=BuiltinTool.DELETE_FILE.qualified,
+                description="Deletions require explicit user confirmation.",
+            ),
+        ],
     ),
     reversed_meaning="Executes the wrong thing confidently",
     reversed_trigger="Output diverges significantly from user intent two sessions in a row",

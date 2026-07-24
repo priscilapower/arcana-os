@@ -20,6 +20,7 @@ from arcana.agents.registry import AgentRegistry
 from arcana.agents.session_manager import SessionManager
 from arcana.cards.registry import CardRegistry
 from arcana.types.card import Card
+from arcana.types.tool import BuiltinTool
 
-__all__ = ["Agent", "AgentRegistry", "Card", "CardRegistry", "SessionManager"]
+__all__ = ["Agent", "AgentRegistry", "BuiltinTool", "Card", "CardRegistry", "SessionManager"]
 __version__ = "0.1.0"

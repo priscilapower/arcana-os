@@ -47,18 +47,26 @@ def _connected_server(name: str = "test-mcp", tool_name: str = "do_thing") -> MC
 # ---------------------------------------------------------------------------
 
 
-def test_builtins_exactly_five_tools(tmp_path):
+def test_builtins_exactly_seven_tools(tmp_path):
     reg = _make_registry(tmp_path)
     reg.load()
     tools = [t for t in reg.list_all_tools() if t.type == ToolType.BUILTIN]
-    assert len(tools) == 5
+    assert len(tools) == 7
 
 
 def test_builtin_names_are_correct(tmp_path):
     reg = _make_registry(tmp_path)
     reg.load()
     builtin_names = {t.name for t in reg.list_all_tools() if t.type == ToolType.BUILTIN}
-    assert builtin_names == {"web_search", "fetch_url", "read_file", "write_file", "run_code"}
+    assert builtin_names == {
+        "web_search",
+        "fetch_url",
+        "list_dir",
+        "read_file",
+        "write_file",
+        "delete_file",
+        "run_code",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +230,7 @@ def test_list_all_tools_includes_builtins_only_when_no_servers(tmp_path):
     reg = _make_registry(tmp_path)
     reg.load()
     tools = reg.list_all_tools()
-    assert len(tools) == 5  # only builtins
+    assert len(tools) == 7  # only builtins
     assert all(t.type == ToolType.BUILTIN for t in tools)
 
 

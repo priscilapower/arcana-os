@@ -50,6 +50,8 @@ pip install arcana-core[observability]
 
 ::: arcana.observability.events.MemoryDegradedEvent
 
+::: arcana.observability.events.GuardrailViolationEvent
+
 ## Emitters
 
 `emit_degraded` records a memory tier degradation to both the audit log and
@@ -58,6 +60,14 @@ or drops out of an operation; the emission is best-effort and never raises, so
 observability can never break the memory path.
 
 ::: arcana.observability.emit_degraded
+
+`emit_guardrail_violation` records a guardrail match — a blocked call or a
+`warn`/`log` one that was allowed through. Enforcement has already happened by
+the time it runs, so it is best-effort in the same way. The event deliberately
+omits the call's arguments and carries only the target path: a `write_file`
+violation must not spill the file's contents into the audit log.
+
+::: arcana.observability.emit_guardrail_violation
 
 ## Metrics
 
