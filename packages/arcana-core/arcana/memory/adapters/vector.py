@@ -19,6 +19,7 @@ import logging
 import math
 import time
 from collections.abc import Callable
+from uuid import UUID
 
 import aiosqlite
 
@@ -165,6 +166,18 @@ class VectorAdapter:
         clears the vec0 index rows for the removed entries.
         """
         return await self._sqlite.prune(policy)
+
+    async def get(self, memory_id: UUID) -> MemoryEntry | None:
+        """Resolve one entry by id via the underlying store (vectors are not needed)."""
+        await self.connect()
+        return await self._sqlite.get(memory_id)
+
+    async def delete(self, memory_id: UUID, *, hard: bool = True) -> bool:
+        """Delete one entry by id. Shares the connection, so a hard delete also
+        clears the vec0 index row (the underlying store handles the vec cleanup).
+        """
+        await self.connect()
+        return await self._sqlite.delete(memory_id, hard=hard)
 
     # ------------------------------------------------------------------
     # MemoryAdapter protocol

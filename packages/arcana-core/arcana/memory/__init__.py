@@ -10,6 +10,7 @@ from arcana.memory.adapters.sqlite import SQLiteAdapter
 from arcana.memory.adapters.vector import VectorAdapter
 from arcana.memory.assembly import MemoryConfig, PoolConfig, build_federation, load_memory_config
 from arcana.memory.config import MemoryResilienceConfig, TierResilienceConfig
+from arcana.memory.connectors import KnowledgeConnectorStore, connector_adapter
 from arcana.memory.decay import (
     decay_sorted,
     effective_importance,
@@ -19,14 +20,17 @@ from arcana.memory.decay import (
 from arcana.memory.edges import EdgeStore
 from arcana.memory.embedding_gateway import EmbeddingGateway
 from arcana.memory.errors import (
+    GlobalDeleteRefused,
     MemoryCorruptError,
     MemoryError,
     MemoryNotConnectedError,
     MemoryRoutingError,
     MemoryStorageError,
     MemoryWriteError,
+    ReadOnlyTierDelete,
     TierWriteFailed,
 )
+from arcana.memory.exporter import MemoryExporter
 from arcana.memory.extraction import (
     ExtractionConfig,
     HeuristicExtractor,
@@ -47,6 +51,14 @@ from arcana.memory.extraction.signals import (
 )
 from arcana.memory.federation import MemoryFederation
 from arcana.memory.jobs import BackgroundJobQueue, MemoryJob, MemoryJobKind
+from arcana.memory.paths import (
+    EXPORT_MAX_ENTRIES,
+    MAX_EXPORT_BYTES,
+    allowed_roots,
+    atomic_write_text,
+    resolve_existing_dir,
+    resolve_out_path,
+)
 from arcana.memory.resilience import BreakerState, CircuitBreaker, ResilientTier
 from arcana.memory.router import GLOBAL_PROMOTION_THRESHOLD, MemoryRouter, TierBackend
 from arcana.memory.wikilinks import (
@@ -72,6 +84,16 @@ __all__ = [
     "MemoryRouter",
     "TierBackend",
     "GLOBAL_PROMOTION_THRESHOLD",
+    # Connectors, exporter, path safety
+    "KnowledgeConnectorStore",
+    "connector_adapter",
+    "MemoryExporter",
+    "allowed_roots",
+    "resolve_existing_dir",
+    "resolve_out_path",
+    "atomic_write_text",
+    "MAX_EXPORT_BYTES",
+    "EXPORT_MAX_ENTRIES",
     # Decay
     "effective_importance",
     "should_consolidate",
@@ -115,5 +137,7 @@ __all__ = [
     "MemoryNotConnectedError",
     "MemoryRoutingError",
     "MemoryWriteError",
+    "GlobalDeleteRefused",
+    "ReadOnlyTierDelete",
     "TierWriteFailed",
 ]

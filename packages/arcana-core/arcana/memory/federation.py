@@ -25,11 +25,20 @@ from collections.abc import AsyncIterator, Callable
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
-from arcana.memory.errors import MemoryWriteError, TierWriteFailed
+from arcana.memory.errors import GlobalDeleteRefused, MemoryWriteError, ReadOnlyTierDelete, TierWriteFailed
 from arcana.memory.resilience import ResilientTier
 from arcana.memory.router import MemoryRouter, TierBackend
 from arcana.observability import MemoryDegradedEvent, MemoryOperation, emit_degraded
-from arcana.types import AdapterHealth, MemoryAdapter, MemoryEntry, MemoryQuery, MemoryScope, PrunePolicy, PruneReport
+from arcana.types import (
+    AdapterHealth,
+    ForgetResult,
+    MemoryAdapter,
+    MemoryEntry,
+    MemoryQuery,
+    MemoryScope,
+    PrunePolicy,
+    PruneReport,
+)
 
 logger = logging.getLogger("arcana.memory.federation")
 
@@ -39,6 +48,25 @@ class SupportsPrune(Protocol):
     """A backend that can prune itself. Read-only tiers won't satisfy this."""
 
     async def prune(self, policy: PrunePolicy) -> PruneReport: ...
+
+
+@runtime_checkable
+class SupportsGet(Protocol):
+    """A backend that can resolve a single entry by id. Not every tier can."""
+
+    async def get(self, memory_id: UUID) -> MemoryEntry | None: ...
+
+
+@runtime_checkable
+class SupportsDelete(Protocol):
+    """A backend that can delete a single entry by id. Read-only tiers cannot.
+
+    Mirrors :class:`SupportsPrune`: an optional capability the federation probes
+    for before routing a destructive op, so a delete never reaches a read-only
+    tier (a mounted knowledge connector) that would not honour it.
+    """
+
+    async def delete(self, memory_id: UUID, *, hard: bool = True) -> bool: ...
 
 
 class MemoryFederation:
@@ -170,6 +198,54 @@ class MemoryFederation:
             tiers=len(prunable),
         )
 
+    async def browse(self, query: MemoryQuery) -> list[MemoryEntry]:
+        """List the routed tier(s)' entries by importance, with no embedder.
+
+        The counterpart to :meth:`search` for "show me what's in here": a
+        text-less query fans across the routed tiers, hitting each backend's
+        non-semantic scan (SQLite ``filter_search`` / a folder's keyword scan), so
+        it needs no embedding provider and works fully offline. Results are
+        deduplicated by id and ordered by decayed effective importance — but,
+        unlike ``search``, aged-out entries are **kept**: a listing must show every
+        stored entry, including ones that have decayed below their consolidation
+        threshold. Truncated to ``query.limit``.
+        """
+        merged = await self._gather_merged(query)
+        return self._router.order_by_importance(merged, query)
+
+    async def get(self, memory_id: UUID) -> MemoryEntry | None:
+        """Resolve a single entry by id across all tiers, or ``None`` if unknown.
+
+        Scans tiers in routing order (private → shared → global) and returns the
+        first match, so an id present in several tiers resolves to its most-local
+        copy. Tiers whose backend cannot resolve by id (no ``get``) are skipped.
+        Drives ``inspect`` and underpins :meth:`forget`'s tier resolution.
+        """
+        tier = await self._find_owning_tier(memory_id)
+        return None if tier is None else await _backend_get(tier.adapter, memory_id)
+
+    async def forget(self, memory_id: UUID, *, hard: bool = True) -> ForgetResult:
+        """Delete one entry by id from the tier that owns it.
+
+        Resolves the id's owning tier, then enforces the ownership invariant in
+        this one place: a GLOBAL entry is The World's to remove, so a delete there
+        is refused (:class:`GlobalDeleteRefused`); a read-only tier (a mounted
+        knowledge connector) cannot delete, so that too is refused
+        (:class:`ReadOnlyTierDelete`). A PRIVATE or SHARED entry is deleted through
+        its backend — ``hard`` purges (the default), ``hard=False`` archives.
+        Returns ``ForgetResult(found=False)`` when no tier owned the id.
+        """
+        tier = await self._find_owning_tier(memory_id)
+        if tier is None:
+            return ForgetResult(found=False)
+        if tier.scope is MemoryScope.GLOBAL:
+            raise GlobalDeleteRefused(memory_id)
+        backend = _unwrap(tier.adapter)
+        if not isinstance(backend, SupportsDelete):
+            raise ReadOnlyTierDelete(memory_id, _tier_label(tier))
+        removed = await backend.delete(memory_id, hard=hard)
+        return ForgetResult(found=removed, scope=tier.scope, pool_name=tier.pool_name, hard=hard)
+
     async def aclose(self) -> None:
         """Close every tier's backend connection. Safe to call more than once.
 
@@ -194,6 +270,16 @@ class MemoryFederation:
         Shared by :meth:`search` and :meth:`stream_search` so their merge and
         ranking behaviour cannot drift.
         """
+        merged = await self._gather_merged(query)
+        return self._router.rank(merged, query)
+
+    async def _gather_merged(self, query: MemoryQuery) -> list[MemoryEntry]:
+        """Fan a query across routed tiers, drop failures, and dedup by id.
+
+        The shared fan-out both :meth:`search` (which then card-ranks) and
+        :meth:`browse` (which then orders by importance) build on, so their tier
+        traversal and dedup behaviour cannot drift.
+        """
         tiers = self._router.route_read(query)
         if not tiers:
             return []
@@ -210,7 +296,28 @@ class MemoryFederation:
                 # so an entry present in several tiers keeps its most-local copy.
                 merged.setdefault(entry.id, entry)
 
-        return self._router.rank(list(merged.values()), query)
+        return list(merged.values())
+
+    async def _find_owning_tier(self, memory_id: UUID) -> TierBackend | None:
+        """The tier that holds ``memory_id``, scanned private → shared → global.
+
+        Uses each backend's by-id ``get`` (when it has one) so resolution never
+        guesses the wrong store; the first tier to resolve the id wins, matching
+        the most-local-copy rule reads follow. Returns ``None`` when no tier owns
+        it. Tiers are probed sequentially and short-circuit on the first hit —
+        cheap by-id lookups, and it stops at the private store for the common case.
+
+        Like :meth:`prune`, the by-id ``get`` reaches past the resilience wrapper
+        to the raw backend, so a delete/inspect is not bounded by a tier timeout —
+        a destructive op should surface a backend failure rather than degrade to a
+        silent no-op. The trade-off: resolving an id that only a slow mounted
+        connector could own waits on that folder scan; the common private/shared
+        hit short-circuits first.
+        """
+        for tier in self._router.all_tiers():
+            if await _backend_get(tier.adapter, memory_id) is not None:
+                return tier
+        return None
 
     @staticmethod
     def _payload_for(tier: TierBackend, entry: MemoryEntry) -> MemoryEntry:
@@ -222,6 +329,23 @@ class MemoryFederation:
 
 def _tier_label(tier: TierBackend) -> str:
     return f"{tier.scope.value}:{tier.pool_name}" if tier.pool_name else tier.scope.value
+
+
+def _unwrap(adapter: MemoryAdapter) -> MemoryAdapter:
+    """The real backend behind a tier, past the resilience wrapper."""
+    return adapter.inner if isinstance(adapter, ResilientTier) else adapter
+
+
+async def _backend_get(adapter: MemoryAdapter, memory_id: UUID) -> MemoryEntry | None:
+    """Resolve an id through a tier's backend when it can, else ``None``.
+
+    Unwraps the resilience layer and calls ``get`` only when the backend supports
+    it — a tier that cannot resolve by id simply never owns the lookup.
+    """
+    backend = _unwrap(adapter)
+    if isinstance(backend, SupportsGet):
+        return await backend.get(memory_id)
+    return None
 
 
 def _prunable_backend(adapter: MemoryAdapter) -> SupportsPrune | None:

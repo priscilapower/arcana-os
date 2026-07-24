@@ -58,7 +58,7 @@ def find_agent(name_or_id: str, reg: AgentRegistry) -> AgentRecord | None:
     return matches[0]
 
 
-def _resolve_embedding_gateway() -> EmbeddingGateway | None:
+def resolve_embedding_gateway() -> EmbeddingGateway | None:
     """Best-effort embedder for the GLOBAL vector tier, or None for SQLite-only.
 
     Uses in-process FastEmbed when the ``arcana-core[embed]`` extra is installed —
@@ -89,7 +89,7 @@ async def build_session_runtime(
     """
     memory_cfg = load_memory_config(ARCANA_HOME)
     memory_enabled = memory_cfg.enabled and not no_memory
-    embedding = _resolve_embedding_gateway() if memory_enabled and memory_cfg.global_ == "vector" else None
+    embedding = resolve_embedding_gateway() if memory_enabled and memory_cfg.global_ == "vector" else None
     return await reg.build_runtime_with_memory(
         record,
         gateway,

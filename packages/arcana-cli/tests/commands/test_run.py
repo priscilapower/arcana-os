@@ -230,7 +230,7 @@ def test_run_injects_memory_and_tears_it_down(agent_fixture, arcana_home, monkey
     mock_runtime.run = AsyncMock(return_value="remembered")
 
     monkeypatch.setattr(run_mod, "ModelGateway", _MockGateway)
-    monkeypatch.setattr(run_mod, "_resolve_embedding_gateway", lambda: None)  # SQLite-only, deterministic
+    monkeypatch.setattr(run_mod, "resolve_embedding_gateway", lambda: None)  # SQLite-only, deterministic
     monkeypatch.setattr(AgentRegistry, "build_runtime", lambda *a, **k: mock_runtime)
     monkeypatch.setattr(MemoryFederation, "aclose", _spy_aclose)
 

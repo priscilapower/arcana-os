@@ -37,7 +37,7 @@ def _load_registry() -> MCPRegistry:
     return reg
 
 
-def _resolve_agent(name_or_id: str) -> AgentRecord:
+def resolve_agent(name_or_id: str) -> AgentRecord:
     """Resolve a name or UUID to an agent, or exit (``2`` not found / ``1`` ambiguous)."""
     reg = AgentRegistry(AGENTS_BASE)
     try:
@@ -128,7 +128,7 @@ def list_cmd(
     inventory = _active_inventory(reg)
     subscribed: set[str] = set()
     if agent is not None:
-        subscribed = set(_resolve_agent(agent).tool_subscriptions)
+        subscribed = set(resolve_agent(agent).tool_subscriptions)
 
     if json_:
         emit_json(
@@ -178,7 +178,7 @@ def subscribe_cmd(
     A whole-server subscription is stored as ``<server>/*`` and expands to every
     active tool at session start, so tools discovered later flow in automatically.
     """
-    record = _resolve_agent(agent)
+    record = resolve_agent(agent)
     reg = _load_registry()
 
     # Shorthand: a bare, known server name means "all of this server".
@@ -256,7 +256,7 @@ def unsubscribe_cmd(
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Unsubscribe an agent from a tool (or a whole-server ``<server>``/``<server>/*``)."""
-    record = _resolve_agent(agent)
+    record = resolve_agent(agent)
     # Shorthand: a bare server name removes its whole-server subscription.
     if "/" not in qualified_name and f"{qualified_name}/*" in record.tool_subscriptions:
         qualified_name = f"{qualified_name}/*"
