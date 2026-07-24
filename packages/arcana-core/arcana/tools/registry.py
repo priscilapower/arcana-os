@@ -22,6 +22,7 @@ from pathlib import Path
 from arcana.tools.adapters.mcp import MCPToolAdapter, diff_discovered
 from arcana.tools.builtins.definitions import BUILTIN_DEFINITIONS
 from arcana.types.tool import (
+    BuiltinTool,
     MCPServerConfig,
     MCPServerStatus,
     ToolDefinition,
@@ -250,51 +251,25 @@ class MCPRegistry:
     def _register_builtins(self) -> None:
         """Register always-available built-in tools.
 
-        ``web_search`` / ``fetch_url`` come from the shared ``BUILTIN_DEFINITIONS``
-        the ``BuiltinToolAdapter`` executes, so the model-visible and executable
-        schemas cannot drift. The filesystem/exec builtins are declaration-only:
-        the model can see their schemas but no adapter executes them yet.
+        The web and filesystem builtins come from the shared
+        ``BUILTIN_DEFINITIONS`` the ``BuiltinToolAdapter`` executes, so the
+        model-visible and executable schemas cannot drift. ``run_code`` is
+        declaration-only: the model can see its schema but no adapter executes it.
         """
         for definition in BUILTIN_DEFINITIONS.values():
             self._builtins[definition.name] = definition
 
-        builtins = [
-            ToolDefinition(
-                name="read_file",
-                description="Read a file from the local filesystem",
-                input_schema={
-                    "type": "object",
-                    "properties": {"path": {"type": "string"}},
-                    "required": ["path"],
-                },
-                type=ToolType.BUILTIN,
-            ),
-            ToolDefinition(
-                name="write_file",
-                description="Write content to a file on the local filesystem",
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string"},
-                        "content": {"type": "string"},
-                    },
-                    "required": ["path", "content"],
-                },
-                type=ToolType.BUILTIN,
-            ),
-            ToolDefinition(
-                name="run_code",
-                description="Execute Python code in a sandboxed environment",
-                input_schema={
-                    "type": "object",
-                    "properties": {"code": {"type": "string"}},
-                    "required": ["code"],
-                },
-                type=ToolType.BUILTIN,
-            ),
-        ]
-        for tool in builtins:
-            self._builtins[tool.name] = tool
+        run_code = ToolDefinition(
+            name=BuiltinTool.RUN_CODE,
+            description="Execute Python code in a sandboxed environment",
+            input_schema={
+                "type": "object",
+                "properties": {"code": {"type": "string"}},
+                "required": ["code"],
+            },
+            type=ToolType.BUILTIN,
+        )
+        self._builtins[run_code.name] = run_code
 
 
 @lru_cache(maxsize=1)

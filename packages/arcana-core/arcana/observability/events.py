@@ -127,6 +127,31 @@ class MemoryDegradedEvent:
     timestamp: str = field(default_factory=_now_iso)
 
 
+@dataclass
+class GuardrailViolationEvent:
+    """Emitted when a tool call matches a guardrail rule.
+
+    The audit half of the guardrail seam: a ``block`` match is recorded here and
+    the tool never runs, while a ``warn`` / ``log`` match is recorded and the
+    call proceeds. ``blocked`` is what tells the two apart after the fact.
+
+    The call's arguments are deliberately **not** recorded. A ``write_file``
+    violation would otherwise put the file's contents in the audit log, so the
+    event carries the target path and nothing else from the payload.
+    """
+
+    agent_id: str
+    tool_name: str
+    rule_type: str
+    severity: str
+    reason: str
+    blocked: bool
+    target: str = ""
+    description: str = ""
+    type: Literal["guardrail_violation"] = field(default="guardrail_violation", init=False)
+    timestamp: str = field(default_factory=_now_iso)
+
+
 AuditEvent = (
     SessionEvent
     | ModelCallEvent
@@ -135,6 +160,7 @@ AuditEvent = (
     | MemoryWriteEvent
     | MemoryPruneEvent
     | MemoryDegradedEvent
+    | GuardrailViolationEvent
 )
 
 

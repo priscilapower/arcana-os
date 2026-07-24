@@ -23,11 +23,14 @@ from arcana.models.adapters.base import CompletionRequest, MessageParam, ToolCal
 from arcana.models.gateway import ModelGateway
 from arcana.observability import SessionEvent, get_audit_log, get_metrics, get_tracer
 from arcana.tools.config import DEFAULT_MAX_TOOL_ITERATIONS
+from arcana.tools.guardrails import ToolConfirmer, resolve_guardrails
 from arcana.types._utils import JsonValue
 from arcana.types.card import Card
+from arcana.types.guardrails import GuardrailRule
 from arcana.types.memory import MemoryAdapter, MemoryQuery
 from arcana.types.session import MessageRole, Session, SessionStatus, SessionTrigger, ToolCall
 from arcana.types.tool import ToolResult, ToolSubscription
+from arcana.types.world import WorldConfig
 
 if TYPE_CHECKING:
     from arcana.agents.session_manager import SessionManager
@@ -83,6 +86,9 @@ class Agent:
         tool_gateway: ToolGateway | None = None,
         tool_subscriptions: list[str] | None = None,
         max_tool_iterations: int = DEFAULT_MAX_TOOL_ITERATIONS,
+        guardrails: list[GuardrailRule] | None = None,
+        world: WorldConfig | None = None,
+        confirmer: ToolConfirmer | None = None,
     ) -> None:
         self.id = id or uuid4()
         self.name = name
@@ -105,6 +111,17 @@ class Agent:
         self._tool_gateway = tool_gateway
         self._tool_subscriptions = [ToolSubscription(qualified_name=s) for s in (tool_subscriptions or [])]
         self._max_tool_iterations = max(1, max_tool_iterations)
+
+        # Guardrails resolve once, here, rather than per tool call: the World's
+        # system rules form the floor and the agent's own rules narrow from
+        # there. An agent with neither carries an empty set, which every dispatch
+        # clears without touching the filesystem or the clock.
+        self._guardrails = resolve_guardrails(
+            world.system_guardrails if world else (),
+            guardrails or (),
+            agent_id=str(self.id),
+            confirmer=confirmer,
+        )
 
         # Resolve config from card(s)
         registry = get_registry()
@@ -195,7 +212,9 @@ class Agent:
                 # a gateway — narrow the Optional for the type checker.
                 tool_gateway = self._tool_gateway
                 assert tool_gateway is not None
-                results = await asyncio.gather(*(tool_gateway.dispatch(call, allowed=allowed) for call in calls))
+                results = await asyncio.gather(
+                    *(tool_gateway.dispatch(call, allowed=allowed, guardrails=self._guardrails) for call in calls)
+                )
                 for call, result in zip(calls, results, strict=True):
                     history.append(self._tool_result_message(call, result))
                     self._record_tool_call(session, call, result)

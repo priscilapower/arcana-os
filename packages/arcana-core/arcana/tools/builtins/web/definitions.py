@@ -6,10 +6,10 @@ that both the model-visible registry and the executing adapter consume, so the
 schema a model is offered can never drift from the schema the adapter honours.
 """
 
-from arcana.types.tool import ToolDefinition, ToolType
+from arcana.types.tool import BuiltinTool, ToolDefinition, ToolType
 
 WEB_SEARCH = ToolDefinition(
-    name="web_search",
+    name=BuiltinTool.WEB_SEARCH,
     type=ToolType.BUILTIN,
     description="Search the web and return ranked results (title, url, snippet).",
     input_schema={
@@ -23,7 +23,7 @@ WEB_SEARCH = ToolDefinition(
 )
 
 FETCH_URL = ToolDefinition(
-    name="fetch_url",
+    name=BuiltinTool.FETCH_URL,
     type=ToolType.BUILTIN,
     description="Fetch a URL over HTTP(S) and return its readable text content.",
     input_schema={

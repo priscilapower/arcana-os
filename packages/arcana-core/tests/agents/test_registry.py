@@ -9,7 +9,9 @@ from arcana.agents.registry import AgentRegistry
 from arcana.agents.session_manager import SessionManager
 from arcana.memory import MemoryFederation
 from arcana.types.card import Card
+from arcana.types.guardrails import GuardrailRuleType
 from arcana.types.session import MessageRole, SessionStatus
+from arcana.types.tool import BuiltinTool
 
 _TEST_MODEL = "ollama/test-model"
 
@@ -29,6 +31,45 @@ def test_create_resolves_system_prompt_from_card(tmp_registry: AgentRegistry):
 def test_create_resolves_temperature_from_card(tmp_registry: AgentRegistry):
     record = tmp_registry.create(name="researcher", card=Card.HERMIT, model=_TEST_MODEL)
     assert abs(record.temperature - 0.35) < 0.01
+
+
+def test_create_seeds_guardrails_from_the_card_archetype(tmp_registry: AgentRegistry):
+    record = tmp_registry.create(name="researcher", card=Card.HERMIT, model=_TEST_MODEL)
+
+    denied = [r for r in record.guardrails if r.type is GuardrailRuleType.DENY_TOOL]
+    assert len(denied) == 1
+    assert set(denied[0].values()) == {
+        BuiltinTool.WRITE_FILE.qualified,
+        BuiltinTool.DELETE_FILE.qualified,
+        BuiltinTool.RUN_CODE.qualified,
+    }
+
+
+def test_seeded_guardrails_survive_a_round_trip_to_disk(tmp_registry: AgentRegistry):
+    record = tmp_registry.create(name="researcher", card=Card.HERMIT, model=_TEST_MODEL)
+
+    reloaded = tmp_registry.get(record.id)
+
+    assert reloaded is not None
+    assert reloaded.guardrails == record.guardrails
+
+
+def test_create_leaves_guardrails_empty_for_a_card_with_no_defaults(tmp_registry: AgentRegistry):
+    record = tmp_registry.create(name="wanderer", card=Card.FOOL, model=_TEST_MODEL)
+    assert record.guardrails == []
+
+
+def test_modifier_cards_do_not_contribute_guardrails(tmp_registry: AgentRegistry):
+    # A card blended in at 30% shapes personality, not permissions — it must not
+    # silently revoke a capability the primary card grants.
+    record = tmp_registry.create(
+        name="blended",
+        card=Card.MAGICIAN,
+        model=_TEST_MODEL,
+        modifier_cards=[Card.HERMIT],
+    )
+
+    assert all(r.type is not GuardrailRuleType.DENY_TOOL for r in record.guardrails)
 
 
 def test_create_accepts_system_prompt_override(tmp_registry: AgentRegistry):

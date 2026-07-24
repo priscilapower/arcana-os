@@ -35,9 +35,16 @@ def _adapter(provider: _FakeProvider | None = None, **cfg: Any) -> BuiltinToolAd
 # ---------------------------------------------------------------------------
 
 
-async def test_provides_returns_the_two_network_builtins():
+async def test_provides_returns_every_hosted_builtin():
     adapter = _adapter()
-    assert [d.name for d in adapter.provides()] == ["web_search", "fetch_url"]
+    assert [d.name for d in adapter.provides()] == [
+        "web_search",
+        "fetch_url",
+        "list_dir",
+        "read_file",
+        "write_file",
+        "delete_file",
+    ]
     assert adapter.type == ToolType.BUILTIN
     await adapter.aclose()
 

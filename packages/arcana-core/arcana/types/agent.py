@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from arcana.types._utils import now_utc
 from arcana.types.card import Card
+from arcana.types.guardrails import GuardrailRule
 
 
 class AgentStatus(StrEnum):
@@ -35,6 +36,11 @@ class Agent(BaseModel):
 
     # Tool subscriptions — format: "server_name/tool_name" or "builtin/tool_name"
     tool_subscriptions: list[str] = []
+
+    # Constraints on tool use, seeded from the card's archetype at creation and
+    # narrowable per deployment. Enforced by the tool gateway before any adapter
+    # runs; an empty list means the card imposed none.
+    guardrails: list[GuardrailRule] = []
 
     skill_ids: list[str] = []
     shared_pool_names: list[str] = []

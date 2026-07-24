@@ -24,9 +24,11 @@ from arcana.memory.extraction import (
 from arcana.models.connection_store import ConnectionStore
 from arcana.models.gateway import ModelGateway
 from arcana.tools.gateway import ToolGateway, default_tool_gateway
+from arcana.tools.guardrails import ToolConfirmer
 from arcana.types.agent import Agent as AgentRecord
 from arcana.types.card import Card
 from arcana.types.memory import MemoryAdapter
+from arcana.types.world import WorldConfig
 
 if TYPE_CHECKING:
     from arcana.agents.session_manager import SessionManager
@@ -71,10 +73,19 @@ class AgentRegistry:
         system_prompt_override: str | None = None,
         tags: list[str] | None = None,
     ) -> AgentRecord:
-        """Create a new agent record, resolve card config, and persist to disk."""
+        """Create a new agent record, resolve card config, and persist to disk.
+
+        The primary card's ``default_guardrails`` are materialized onto the
+        record here rather than consulted at call time, so the agent's
+        constraints are visible in its own ``agent.json`` and can be narrowed per
+        deployment. Modifier cards contribute personality, not constraints — a
+        card blended in at 30% should not silently revoke a capability the
+        primary card grants.
+        """
         card_registry = get_registry()
         engine = CardEngine(card_registry)
         config = engine.resolve(card, modifier_cards or [])
+        default_guardrails = list(card_registry.get(card).archetype.default_guardrails)
 
         # Prompt and temperature are denormalized: computed once here and stored
         # on the record. build_runtime() feeds them back as overrides, so agents
@@ -89,6 +100,7 @@ class AgentRegistry:
             description=description,
             system_prompt=system_prompt_override or config.system_prompt,
             temperature=config.temperature,
+            guardrails=default_guardrails,
             tags=tags or [],
         )
         self.save(record)
@@ -149,12 +161,20 @@ class AgentRegistry:
         min_confidence_to_store: float = DEFAULT_MIN_CONFIDENCE_TO_STORE,
         summarise_on_close: bool = True,
         tool_gateway: ToolGateway | None = None,
+        world: WorldConfig | None = None,
+        confirmer: ToolConfirmer | None = None,
     ) -> RuntimeAgent:
         """Reconstruct a runtime Agent from a stored record and gateway.
 
-        A ``ToolGateway`` is wired by default (builtin tools only); the agent
-        exposes tools only for the record's ``tool_subscriptions``, so an agent
-        with none behaves exactly as a tool-less one.
+        A ``ToolGateway`` is wired by default (builtin tools only), jailed to
+        this agent's own workspace under *this registry's* root — so a registry
+        pointed at an ``ARCANA_HOME`` override jails the filesystem tools beside
+        the agent's own record rather than in the default ``~/.arcana`` tree. The
+        agent exposes tools only for the record's ``tool_subscriptions``, so an
+        agent with none behaves exactly as a tool-less one. The record's
+        guardrails ride along with it, layered under ``world``'s system rules.
+        ``confirmer`` supplies the interactive approver a ``REQUIRE_CONFIRMATION``
+        rule needs; without one such a rule denies.
         """
         return RuntimeAgent(
             id=record.id,
@@ -171,8 +191,11 @@ class AgentRegistry:
             extractor=extractor,
             min_confidence_to_store=min_confidence_to_store,
             summarise_on_close=summarise_on_close,
-            tool_gateway=tool_gateway or default_tool_gateway(),
+            tool_gateway=tool_gateway or default_tool_gateway(record.id, home=self._base.parent),
             tool_subscriptions=record.tool_subscriptions,
+            guardrails=record.guardrails,
+            world=world,
+            confirmer=confirmer,
         )
 
     async def build_runtime_with_memory(
@@ -190,6 +213,8 @@ class AgentRegistry:
         soul: str | None = None,
         extraction: ExtractionConfig | None = None,
         tool_gateway: ToolGateway | None = None,
+        world: WorldConfig | None = None,
+        confirmer: ToolConfirmer | None = None,
     ) -> tuple[RuntimeAgent, MemoryFederation | None]:
         """Build a runtime Agent with its memory federation assembled and injected.
 
@@ -237,6 +262,8 @@ class AgentRegistry:
             min_confidence_to_store=extraction.min_confidence_to_store,
             summarise_on_close=extraction.summarise_on_close,
             tool_gateway=tool_gateway,
+            world=world,
+            confirmer=confirmer,
         )
         return agent, federation
 

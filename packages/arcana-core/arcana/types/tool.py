@@ -13,6 +13,43 @@ class ToolType(StrEnum):
     CUSTOM = "custom"
 
 
+#: The namespace a builtin is addressed under in subscriptions and guardrail
+#: rules (``builtin/write_file``). MCP tools use their server name instead.
+BUILTIN_NAMESPACE = "builtin"
+
+
+class BuiltinTool(StrEnum):
+    """Every tool the OS ships itself — the names, in one place.
+
+    A builtin's name appears in its schema, in the adapter's handler table, in
+    every ``ToolResult`` it returns, in an agent's subscriptions, and in the
+    guardrail rules that constrain it. Spelling it as a literal in each of those
+    invites a typo that no type checker would catch — a misspelled rule silently
+    constrains nothing.
+
+    Being a ``StrEnum``, a member *is* its name: it compares and hashes equal to
+    the plain string, so it works as a handler-table key, in an f-string, and as
+    a ``str`` model field, which serializes to the bare name unchanged.
+    """
+
+    WEB_SEARCH = "web_search"
+    FETCH_URL = "fetch_url"
+    READ_FILE = "read_file"
+    LIST_DIR = "list_dir"
+    WRITE_FILE = "write_file"
+    DELETE_FILE = "delete_file"
+    RUN_CODE = "run_code"
+
+    @property
+    def qualified(self) -> str:
+        """Subscription and guardrail form — ``builtin/write_file``.
+
+        The bare member is what the adapter dispatches on; this is what a user
+        writes in ``tool_subscriptions`` or a ``DENY_TOOL`` rule.
+        """
+        return f"{BUILTIN_NAMESPACE}/{self}"
+
+
 class ToolStatus(StrEnum):
     """Approval state of a discovered tool.
 
@@ -143,7 +180,7 @@ class ToolSubscription(BaseModel):
     @property
     def server_name(self) -> str | None:
         parts = self.qualified_name.split("/", 1)
-        return parts[0] if len(parts) == 2 and parts[0] != "builtin" else None
+        return parts[0] if len(parts) == 2 and parts[0] != BUILTIN_NAMESPACE else None
 
     @property
     def tool_name(self) -> str:
@@ -152,7 +189,7 @@ class ToolSubscription(BaseModel):
 
     @property
     def is_builtin(self) -> bool:
-        return self.qualified_name.startswith("builtin/")
+        return self.qualified_name.startswith(f"{BUILTIN_NAMESPACE}/")
 
     @property
     def is_wildcard(self) -> bool:

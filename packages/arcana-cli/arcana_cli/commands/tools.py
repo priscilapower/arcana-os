@@ -16,7 +16,7 @@ from arcana.models.connection_store import ConnectionStore
 from arcana.models.gateway import ModelGateway
 from arcana.tools.registry import MCPRegistry
 from arcana.types.agent import Agent as AgentRecord
-from arcana.types.tool import ToolDefinition, ToolStatus, ToolType
+from arcana.types.tool import BUILTIN_NAMESPACE, ToolDefinition, ToolStatus, ToolType
 from arcana_cli._async import run_async
 from arcana_cli._render import EXIT_DENIED, EXIT_ERROR, EXIT_NOT_FOUND, emit_json, truncate
 from arcana_cli.constants import AGENTS_BASE, CONNECTIONS_PATH, MCPS_PATH
@@ -62,7 +62,7 @@ def resolve_agent(name_or_id: str) -> AgentRecord:
 
 def _subscription_name(tool: ToolDefinition) -> str:
     """Subscription-form name: ``builtin/<n>`` for builtins, ``server/<n>`` for MCP."""
-    return tool.qualified_name if tool.mcp_server_name else f"builtin/{tool.name}"
+    return tool.qualified_name if tool.mcp_server_name else f"{BUILTIN_NAMESPACE}/{tool.name}"
 
 
 def _is_subscribed(tool: ToolDefinition, subs: set[str]) -> bool:
@@ -79,7 +79,7 @@ def _active_inventory(reg: MCPRegistry) -> list[ToolDefinition]:
 
 def _is_changed_tool(reg: MCPRegistry, qualified_name: str) -> bool:
     """True if ``qualified_name`` names a discovered MCP tool currently withheld."""
-    if "/" not in qualified_name or qualified_name.startswith("builtin/"):
+    if "/" not in qualified_name or qualified_name.startswith(f"{BUILTIN_NAMESPACE}/"):
         return False
     server_name, local = qualified_name.split("/", 1)
     server = reg.get_server(server_name)

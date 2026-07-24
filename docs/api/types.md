@@ -64,3 +64,13 @@ from arcana.types import Agent, ModelConnection, Session
 ::: arcana.types.memory.KnowledgeConnector
 
 ::: arcana.types.memory.KnowledgeConnectorKind
+
+## Guardrails
+
+::: arcana.types.guardrails.GuardrailRule
+
+::: arcana.types.guardrails.GuardrailRuleType
+
+::: arcana.types.guardrails.GuardrailViolationError
+
+::: arcana.types.world.WorldConfig

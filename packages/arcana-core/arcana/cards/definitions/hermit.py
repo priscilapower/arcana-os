@@ -8,6 +8,8 @@ from arcana.types.card import (
     PromptIngredients,
     TarotCard,
 )
+from arcana.types.guardrails import GuardrailRule, GuardrailRuleType
+from arcana.types.tool import BuiltinTool
 
 HERMIT = TarotCard(
     id=Card.HERMIT,
@@ -52,6 +54,17 @@ HERMIT = TarotCard(
             preference_half_life_days=90.0,
         ),
         preferred_tool_categories=["search", "browser", "file"],
+        default_guardrails=[
+            GuardrailRule(
+                type=GuardrailRuleType.DENY_TOOL,
+                value=[
+                    BuiltinTool.WRITE_FILE.qualified,
+                    BuiltinTool.DELETE_FILE.qualified,
+                    BuiltinTool.RUN_CODE.qualified,
+                ],
+                description="The Hermit observes and reads; it does not alter the world.",
+            ),
+        ],
     ),
     reversed_meaning="Analysis paralysis; never concludes; withholds findings indefinitely",
     reversed_trigger="Session produces no actionable output after extended tool use",
