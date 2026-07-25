@@ -45,8 +45,9 @@ was never offered.
 
 ## Builtin tools
 
-`default_tool_gateway()` ships two network tools and eight filesystem tools —
-four acting on files, four on directories.
+`default_tool_gateway()` ships two network tools, eight filesystem tools — four
+acting on files, four on directories — and one code-execution tool that is
+**offered but disabled by default**.
 
 ### Network tools
 
@@ -175,6 +176,54 @@ workspace rather than to the process working directory. Pass the agent's id to
 `default_tool_gateway(agent_id)` to establish the jail; without one there are no
 roots at all and every filesystem call is refused.
 
+### Code execution
+
+- **`run_code(code, language?, timeout_s?)`** → `{stdout, stderr, exit_code,
+  timed_out, truncated}`. `language` defaults to `python` (`bash` is an optional
+  second runtime); `timeout_s` may ask for a *shorter* run than the configured
+  ceiling, never a longer one. A non-zero `exit_code` is a **successful** tool
+  result carrying that code — a program that errors is not a tool failure, the
+  same stance `fetch_url` takes on an HTTP 404.
+
+`run_code` is the single highest-blast-radius capability the OS ships: the
+argument *is* a program, chosen by a model or injected via an earlier tool
+result. So it is **disabled by default** — its schema is offered, but every call
+returns `run_code is disabled` and **no process is spawned** until an operator
+turns it on. Enabling it, and choosing how strongly it is isolated, is a
+deliberate act.
+
+Isolation is a **backend the operator chooses**, not a promise the tool makes:
+
+- **`subprocess`** *(default when enabled)* — the interpreter runs as an isolated
+  child (`python -I -S`) in a throwaway workspace, under `setrlimit` CPU/memory/
+  file-size/no-core ceilings, in its own session so a timeout kills the whole
+  process group, with a **scrubbed environment** built fresh (never the parent's,
+  so no secret, keyring handle, or API key is reachable, and `HOME` points at the
+  scratch workspace, not your real home). It is honestly a **soft** sandbox — it
+  bounds accidents and runaway loops, **not a determined attacker**, and does not
+  enforce network isolation.
+- **`bubblewrap`** *(recommended on Linux)* — the code runs in a fresh mount and
+  network namespace: the host root visible read-only, `$HOME`/`~/.arcana` **not
+  bound at all**, and `--unshare-net` when the network is off. Real filesystem and
+  network isolation for one external dependency (`bwrap`).
+- **`container`** — an ephemeral `--rm` container, `--read-only` with
+  `--network=none` and a memory cap, the workspace the only writable mount.
+  Strongest isolation, heaviest dependency (a daemon and image), so opt-in.
+
+A backend whose binary is missing (`bwrap`, `docker`) **degrades to "run_code
+disabled"** with a clear reason rather than crashing — the same fail-closed
+posture as every other guarded condition (disabled, an unknown language, a
+timeout, a guardrail block). The sandbox never mounts or reads `~/.arcana`, and
+spans record the backend, language, exit code, timing, and output size — **never
+the code body or any environment value**.
+
+Because the guardrail seam already gates tools by name, policy does most of the
+safety work *before* the sandbox is ever reached: read-only archetypes like The
+Hermit ship `DENY_TOOL: run_code`, executing archetypes gate it behind
+`REQUIRE_CONFIRMATION` (which denies in an autonomous run with no confirmer), and
+`WorldConfig.system_guardrails` can hard-deny it across every agent. Off by
+default, denied by most cards, and confirmation-gated for the rest.
+
 ## Guardrails
 
 Beyond subscription membership, an agent can carry **guardrail rules** — static,
@@ -215,7 +264,7 @@ Card defaults are materialized onto the agent record at creation, so an agent's
 constraints are visible in its own `agent.json`. The Hermit ships denied every
 mutating tool — `write_file`, `delete_file`, `make_dir`, `move`, `copy`,
 `delete_dir`, `run_code` — while still being free to `list_dir` and `read_file`;
-The Magician requires confirmation on both deletes.
+The Magician requires confirmation on both deletes and on `run_code`.
 
 Name the tools through `BuiltinTool` rather than as string literals. A rule that
 names a tool nobody spells correctly constrains nothing, silently — the enum is
@@ -355,11 +404,39 @@ export ARCANA_TOOLS_FS_ALLOWED_ROOTS="/Users/me/projects/report"
 export ARCANA_TOOLS_FS_MAX_WRITE_BYTES=1048576
 ```
 
+Code execution carries its own knobs under `ARCANA_TOOLS_CODE_*`, and `enabled`
+is **off by default** — the tool does nothing until an operator turns it on and
+picks a backend. `enabled` and `backend` are operator config a tool argument can
+never set, so a prompt-injected call can neither enable the sandbox nor weaken it.
+
+```toml
+[tools.run_code]
+enabled          = false        # OFF by default — nothing runs until enabled
+backend          = "subprocess" # | "bubblewrap" | "container"
+languages        = ["python"]   # (+ "bash" optional)
+timeout_s        = 10           # wall-clock ceiling; a run past it is killed + flagged
+mem_limit_mb     = 512          # address-space / memory ceiling for the child
+max_output_bytes = 65536        # per-stream cap; output past it is truncated + flagged
+network          = false        # best-effort on subprocess; enforced on bwrap/container
+container_image  = "python:3-slim"  # container backend only
+container_command = "docker"        # | "podman"
+```
+
+```bash
+# Enable code execution behind real isolation on a Linux host.
+export ARCANA_TOOLS_CODE_ENABLED=true
+export ARCANA_TOOLS_CODE_BACKEND=bubblewrap
+export ARCANA_TOOLS_CODE_LANGUAGES="python,bash"
+export ARCANA_TOOLS_CODE_TIMEOUT_S=5
+```
+
 ::: arcana.tools.WebToolsConfig
 
 ::: arcana.tools.SearchProviderName
 
 ::: arcana.tools.FsToolsConfig
+
+::: arcana.tools.CodeToolsConfig
 
 ::: arcana.tools.PathGuard
 

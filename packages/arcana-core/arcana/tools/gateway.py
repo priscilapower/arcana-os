@@ -21,6 +21,7 @@ from arcana.models.adapters.base import ToolCallResult, ToolParam
 from arcana.observability import GuardrailViolationEvent, emit_guardrail_violation, get_tracer
 from arcana.tools.adapters.base import BuiltinToolAdapter, ToolAdapter
 from arcana.tools.adapters.mcp import MCPToolAdapter
+from arcana.tools.builtins.code.config import CodeToolsConfig
 from arcana.tools.builtins.fs.config import FsToolsConfig
 from arcana.tools.config import DEFAULT_TOOL_TIMEOUT_S
 from arcana.tools.guardrails import ActiveGuardrails, enforce, path_args_for
@@ -285,8 +286,16 @@ def default_tool_gateway(agent_id: UUID | None = None, *, home: Path | None = No
     workspace sits under; pass it whenever the caller's root is not the default
     ``~/.arcana`` (an ``ARCANA_HOME`` override), so the jail lands beside the
     agent's own record rather than in an unrelated tree.
+
+    ``run_code`` follows its env-backed config (``ARCANA_TOOLS_CODE_*``), which is
+    disabled by default: the tool is offered but refuses to run until an operator
+    turns it on and chooses a sandbox backend.
     """
     registry = get_mcp_registry()
-    adapters: list[ToolAdapter] = [BuiltinToolAdapter(fs_config=FsToolsConfig.for_agent(agent_id, home=home))]
+    builtin = BuiltinToolAdapter(
+        fs_config=FsToolsConfig.for_agent(agent_id, home=home),
+        code_config=CodeToolsConfig(),
+    )
+    adapters: list[ToolAdapter] = [builtin]
     adapters.extend(MCPToolAdapter(server) for server in registry.list_servers())
     return ToolGateway(registry, adapters)

@@ -22,13 +22,11 @@ from pathlib import Path
 from arcana.tools.adapters.mcp import MCPToolAdapter, diff_discovered
 from arcana.tools.builtins.definitions import BUILTIN_DEFINITIONS
 from arcana.types.tool import (
-    BuiltinTool,
     MCPServerConfig,
     MCPServerStatus,
     ToolDefinition,
     ToolStatus,
     ToolSubscription,
-    ToolType,
 )
 
 # Server states whose tools are eligible for resolution. A CHANGED server has
@@ -251,25 +249,14 @@ class MCPRegistry:
     def _register_builtins(self) -> None:
         """Register always-available built-in tools.
 
-        The web and filesystem builtins come from the shared
-        ``BUILTIN_DEFINITIONS`` the ``BuiltinToolAdapter`` executes, so the
-        model-visible and executable schemas cannot drift. ``run_code`` is
-        declaration-only: the model can see its schema but no adapter executes it.
+        Every builtin — web, filesystem, and code execution — comes from the
+        shared ``BUILTIN_DEFINITIONS`` the ``BuiltinToolAdapter`` executes, so the
+        model-visible and executable schemas cannot drift. ``run_code``'s handler
+        is default-off (it returns "disabled" until an operator enables it), but
+        its schema is offered like any other builtin.
         """
         for definition in BUILTIN_DEFINITIONS.values():
             self._builtins[definition.name] = definition
-
-        run_code = ToolDefinition(
-            name=BuiltinTool.RUN_CODE,
-            description="Execute Python code in a sandboxed environment",
-            input_schema={
-                "type": "object",
-                "properties": {"code": {"type": "string"}},
-                "required": ["code"],
-            },
-            type=ToolType.BUILTIN,
-        )
-        self._builtins[run_code.name] = run_code
 
 
 @lru_cache(maxsize=1)

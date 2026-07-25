@@ -1,6 +1,7 @@
 """Tool gateway and OS-level MCP registry."""
 
 from arcana.tools.adapters import BuiltinToolAdapter, MCPToolAdapter, ToolAdapter
+from arcana.tools.builtins.code.config import CodeToolsConfig, SandboxBackend
 from arcana.tools.builtins.fs.config import FsToolsConfig, agent_workspace
 from arcana.tools.builtins.fs.pathguard import PathBlocked, PathGuard
 from arcana.tools.builtins.web.config import SearchProviderName, WebToolsConfig
@@ -12,11 +13,13 @@ __all__ = [
     "DEFAULT_TOOL_TIMEOUT_S",
     "ActiveGuardrails",
     "BuiltinToolAdapter",
+    "CodeToolsConfig",
     "FsToolsConfig",
     "MCPRegistry",
     "MCPToolAdapter",
     "PathBlocked",
     "PathGuard",
+    "SandboxBackend",
     "SearchProviderName",
     "ToolAdapter",
     "ToolConfirmer",

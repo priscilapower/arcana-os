@@ -19,6 +19,7 @@ def test_definitions_cover_every_executable_builtin():
         BuiltinTool.MOVE,
         BuiltinTool.COPY,
         BuiltinTool.DELETE_DIR,
+        BuiltinTool.RUN_CODE,
     }
 
 

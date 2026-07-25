@@ -8,9 +8,12 @@ knows how to run its own tools.
 ``BuiltinToolAdapter`` holds a small handler table — one entry per builtin —
 plus one shared ``httpx`` client. The network handlers live here; the filesystem
 handlers come from :class:`~arcana.tools.builtins.fs.FsTools`, which owns the
-path jail. Every handler returns a populated ``ToolResult`` and never raises:
-provider, network, timeout, oversize, SSRF, and path-jail failures all come back
-as ``ToolResult(success=False, error=…)`` fed to the model.
+path jail, and the ``run_code`` handler from
+:class:`~arcana.tools.builtins.code.CodeTools`, which owns the execution sandbox
+(disabled by default). Every handler returns a populated ``ToolResult`` and never
+raises: provider, network, timeout, oversize, SSRF, path-jail, and
+sandbox-disabled failures all come back as ``ToolResult(success=False, error=…)``
+fed to the model.
 """
 
 from abc import ABC, abstractmethod
@@ -21,6 +24,8 @@ from urllib.parse import urlsplit
 import httpx
 
 from arcana.observability import get_current_span
+from arcana.tools.builtins.code.config import CodeToolsConfig
+from arcana.tools.builtins.code.handlers import CodeTools
 from arcana.tools.builtins.definitions import BUILTIN_DEFINITIONS
 from arcana.tools.builtins.fs.config import FsToolsConfig
 from arcana.tools.builtins.fs.handlers import FsTools
@@ -67,6 +72,11 @@ class BuiltinToolAdapter(ToolAdapter):
     without one, the filesystem tools have no allowed root and every path is
     refused, so an adapter with no agent context cannot touch the disk. Use
     :meth:`FsToolsConfig.for_agent` to jail the tools to one agent's workspace.
+
+    ``code_config`` carries the code-execution sandbox. It is **default-off**:
+    built without one, ``run_code``'s schema is still offered but every call
+    returns "run_code is disabled" and no process is ever spawned. Enabling it,
+    and choosing the sandbox backend, is an explicit operator act.
     """
 
     type = ToolType.BUILTIN
@@ -76,6 +86,7 @@ class BuiltinToolAdapter(ToolAdapter):
         config: WebToolsConfig | None = None,
         *,
         fs_config: FsToolsConfig | None = None,
+        code_config: CodeToolsConfig | None = None,
         http: httpx.AsyncClient | None = None,
         provider: SearchProvider | None = None,
     ) -> None:
@@ -90,10 +101,12 @@ class BuiltinToolAdapter(ToolAdapter):
         )
         self._provider = provider or make_search_provider(self._cfg, self._http)
         self._fs = FsTools(fs_config or FsToolsConfig())
+        self._code = CodeTools(code_config or CodeToolsConfig())
         self._handlers: dict[str, Callable[[dict[str, Any]], Awaitable[ToolResult]]] = {
             BuiltinTool.WEB_SEARCH: self._web_search,
             BuiltinTool.FETCH_URL: self._fetch_url,
             **self._fs.handlers(),
+            **self._code.handlers(),
         }
 
     def provides(self) -> list[ToolDefinition]:
