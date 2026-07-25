@@ -9,8 +9,8 @@ from :class:`CodeToolsConfig`; a backend whose binary is absent raises
 "run_code disabled" result rather than a crash mid-call.
 """
 
-from arcana.tools.builtins.code.config import CodeToolsConfig, SandboxBackend
-from arcana.tools.builtins.code.sandbox.base import ExecResult, Sandbox, SandboxUnavailable
+from arcana.tools.builtins.code.config import SandboxBackend
+from arcana.tools.builtins.code.sandbox.base import ExecResult, Sandbox, SandboxConfig, SandboxUnavailable
 from arcana.tools.builtins.code.sandbox.bubblewrap import BubblewrapSandbox
 from arcana.tools.builtins.code.sandbox.container import ContainerSandbox
 from arcana.tools.builtins.code.sandbox.process import POSIX
@@ -21,13 +21,14 @@ __all__ = [
     "ContainerSandbox",
     "ExecResult",
     "Sandbox",
+    "SandboxConfig",
     "SandboxUnavailable",
     "SubprocessSandbox",
     "make_sandbox",
 ]
 
 
-def make_sandbox(config: CodeToolsConfig) -> Sandbox:
+def make_sandbox(config: SandboxConfig) -> Sandbox:
     """Build the configured backend, or raise :class:`SandboxUnavailable`.
 
     The subprocess default always builds on a POSIX host. The stronger backends

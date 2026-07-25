@@ -4,6 +4,7 @@ from arcana.tools.adapters import BuiltinToolAdapter, MCPToolAdapter, ToolAdapte
 from arcana.tools.builtins.code.config import CodeToolsConfig, SandboxBackend
 from arcana.tools.builtins.fs.config import FsToolsConfig, agent_workspace
 from arcana.tools.builtins.fs.pathguard import PathBlocked, PathGuard
+from arcana.tools.builtins.shell.config import ShellToolsConfig
 from arcana.tools.builtins.web.config import SearchProviderName, WebToolsConfig
 from arcana.tools.gateway import DEFAULT_TOOL_TIMEOUT_S, ToolGateway, default_tool_gateway
 from arcana.tools.guardrails import ActiveGuardrails, ToolConfirmer, resolve_guardrails
@@ -21,6 +22,7 @@ __all__ = [
     "PathGuard",
     "SandboxBackend",
     "SearchProviderName",
+    "ShellToolsConfig",
     "ToolAdapter",
     "ToolConfirmer",
     "ToolGateway",

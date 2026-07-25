@@ -13,11 +13,14 @@ import pytest
 
 from arcana.models.adapters.base import FunctionCall, ToolCallResult
 from arcana.observability import AuditLog
+from arcana.tools.adapters.base import BuiltinToolAdapter
+from arcana.tools.builtins.shell.config import ShellToolsConfig
+from arcana.tools.builtins.web.config import WebToolsConfig
 from arcana.tools.gateway import ToolGateway
 from arcana.tools.guardrails import ActiveGuardrails, enforce, path_args_for, resolve_guardrails
 from arcana.tools.registry import MCPRegistry
 from arcana.types.guardrails import GuardrailRule, GuardrailRuleType, GuardrailViolationError
-from arcana.types.tool import BuiltinTool
+from arcana.types.tool import BuiltinTool, ToolSubscription
 from arcana.types.world import WorldConfig
 from tests.support.tools import EchoAdapter
 
@@ -218,6 +221,55 @@ async def test_max_file_size_with_a_non_numeric_value_refuses():
 
     with pytest.raises(GuardrailViolationError, match="not a byte count"):
         await enforce(active, "write_file", {"path": "f.txt", "content": "x"})
+
+
+# ---------------------------------------------------------------------------
+# DENY_PATTERN — the shell-command tripwire
+# ---------------------------------------------------------------------------
+
+
+async def test_deny_pattern_blocks_a_matching_command():
+    active = _active(_rule(GuardrailRuleType.DENY_PATTERN, r"\bsudo\b", description="no sudo"))
+
+    with pytest.raises(GuardrailViolationError, match="denied pattern") as excinfo:
+        await enforce(active, "run_command", {"command": "sudo rm -rf /tmp/x"})
+
+    assert excinfo.value.rule.description == "no sudo"
+
+
+async def test_deny_pattern_allows_a_non_matching_command():
+    active = _active(_rule(GuardrailRuleType.DENY_PATTERN, r"\bsudo\b"))
+    assert await enforce(active, "run_command", {"command": "ls -la"}) == []
+
+
+async def test_deny_pattern_is_scoped_to_the_command_argument():
+    # A scary substring in a file's contents or a URL is not a shell command, so
+    # the shell-command tripwire has nothing to say about a write or a fetch.
+    active = _active(_rule(GuardrailRuleType.DENY_PATTERN, r"\brm -rf /"))
+    assert await enforce(active, "write_file", {"path": "notes.md", "content": "never run rm -rf /"}) == []
+    assert await enforce(active, "fetch_url", {"url": "https://example.test/rm -rf /"}) == []
+
+
+async def test_deny_pattern_says_nothing_about_a_call_without_a_command():
+    active = _active(_rule(GuardrailRuleType.DENY_PATTERN, r".*"))
+    assert await enforce(active, "web_search", {"query": "arcana"}) == []
+
+
+async def test_deny_pattern_with_an_invalid_regex_refuses_rather_than_passing():
+    # A mistyped pattern must not read as "no restriction"; the operator is owed
+    # enforcement or an error.
+    active = _active(_rule(GuardrailRuleType.DENY_PATTERN, r"([unclosed"))
+
+    with pytest.raises(GuardrailViolationError, match="not a valid regex"):
+        await enforce(active, "run_command", {"command": "echo hi"})
+
+
+async def test_deny_pattern_warn_severity_reports_without_blocking():
+    active = _active(_rule(GuardrailRuleType.DENY_PATTERN, r"\bsudo\b", severity="warn"))
+
+    observed = await enforce(active, "run_command", {"command": "sudo apt update"})
+
+    assert [m.reason for m in observed] == ["command matches a denied pattern"]
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +482,82 @@ async def test_membership_is_checked_before_guardrails():
     result = await gateway.dispatch(_call("echo"), allowed=set(), guardrails=active)
 
     assert result.error == "not permitted"
+
+
+# ---------------------------------------------------------------------------
+# run_command's shipped DENY_PATTERN baseline — enforced in the seam
+# ---------------------------------------------------------------------------
+
+
+def _shell_adapter(workspace: Path) -> BuiltinToolAdapter:
+    return BuiltinToolAdapter(WebToolsConfig(), shell_config=ShellToolsConfig(enabled=True), agent_workspace=workspace)
+
+
+def _builtin_gateway(adapter: BuiltinToolAdapter) -> ToolGateway:
+    gateway = ToolGateway(MCPRegistry(), [adapter])
+    gateway.tools_for([ToolSubscription(qualified_name="builtin/run_command")], supports_tools=True)
+    return gateway
+
+
+async def test_run_command_baseline_blocklist_blocks_before_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, audit_log: AuditLog
+):
+    # The shipped DEFAULT_DENY_PATTERNS ride along as the tool's own baseline,
+    # screened in the seam even when the agent carries no rules of its own — a
+    # sudo command is blocked pre-dispatch and no process is ever spawned.
+    async def _spy(*_args: Any, **_kwargs: Any):
+        raise AssertionError("a blocked run_command must not spawn a process")
+
+    monkeypatch.setattr("arcana.tools.builtins.code.sandbox.process.asyncio.create_subprocess_exec", _spy)
+
+    adapter = _shell_adapter(tmp_path)
+    gateway = _builtin_gateway(adapter)
+
+    result = await gateway.dispatch(
+        _call("run_command", '{"command": "sudo rm -rf /tmp/x"}'),
+        allowed={"run_command"},
+        guardrails=_active(),  # agent-1, but no guardrails of its own
+    )
+    await adapter.aclose()
+
+    assert not result.success
+    assert result.error is not None and "blocked by guardrail" in result.error
+    events = audit_log.tail(event_type="guardrail_violation")
+    assert len(events) == 1
+    assert events[0]["rule_type"] == "deny_pattern"
+    assert events[0]["blocked"] is True
+    # Attributable to the agent, so a WorldEngine can flag repeated attempts.
+    assert events[0]["agent_id"] == "agent-1"
+
+
+async def test_run_command_baseline_allows_a_benign_command(tmp_path: Path):
+    # Nothing in the baseline matches a plain echo, so it runs end-to-end.
+    adapter = _shell_adapter(tmp_path)
+    gateway = _builtin_gateway(adapter)
+
+    result = await gateway.dispatch(
+        _call("run_command", '{"command": "echo ok"}'),
+        allowed={"run_command"},
+        guardrails=_active(),
+    )
+    await adapter.aclose()
+
+    assert result.success
+    assert isinstance(result.output, dict)
+    assert result.output["stdout"].strip() == "ok"
+
+
+async def test_run_command_baseline_applies_even_with_no_agent_guardrails(tmp_path: Path):
+    # guardrails=None on dispatch still gets the tool's baseline: the shipped
+    # tripwire is not something an agent has to opt into.
+    adapter = _shell_adapter(tmp_path)
+    gateway = _builtin_gateway(adapter)
+
+    result = await gateway.dispatch(_call("run_command", '{"command": "sudo reboot"}'), allowed={"run_command"})
+    await adapter.aclose()
+
+    assert not result.success
+    assert result.error is not None and "blocked by guardrail" in result.error
 
 
 # ---------------------------------------------------------------------------

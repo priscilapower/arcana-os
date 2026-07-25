@@ -32,7 +32,9 @@ RUN_CODE = ToolDefinition(
             "code": {"type": "string", "description": "The program source to execute."},
             "language": {
                 "type": "string",
-                "enum": [lang.value for lang in CodeLanguage],
+                # run_code offers the program languages only; the shell-command
+                # path belongs to run_command, not here.
+                "enum": [CodeLanguage.PYTHON.value, CodeLanguage.BASH.value],
                 "description": "Language to run the code as. Defaults to 'python'.",
             },
             "timeout_s": {

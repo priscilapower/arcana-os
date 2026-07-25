@@ -65,6 +65,7 @@ HERMIT = TarotCard(
                     BuiltinTool.COPY.qualified,
                     BuiltinTool.DELETE_DIR.qualified,
                     BuiltinTool.RUN_CODE.qualified,
+                    BuiltinTool.RUN_COMMAND.qualified,
                 ],
                 description="The Hermit observes and reads; it does not alter the world.",
             ),

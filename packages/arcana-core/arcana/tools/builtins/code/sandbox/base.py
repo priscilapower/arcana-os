@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from arcana.tools.builtins.code.config import CodeLanguage
+from arcana.tools.builtins.code.config import CodeLanguage, SandboxBackend
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +35,20 @@ class ExecResult:
     truncated: bool
 
 
+class SandboxConfig(Protocol):
+    """The backend-selection fields :func:`make_sandbox` reads to build a sandbox.
+
+    A structural seam, not a base class: both ``CodeToolsConfig`` (``run_code``)
+    and ``ShellToolsConfig`` (``run_command``) carry these fields, so the one
+    factory builds a backend for either tool without importing either config —
+    the sandbox stays shared across both tools rather than being copied for each.
+    """
+
+    backend: SandboxBackend
+    container_command: str
+    container_image: str
+
+
 class SandboxUnavailable(Exception):
     """A selected backend cannot run here — its binary is missing, or the host
     lacks the primitives it needs.
@@ -53,7 +67,9 @@ class Sandbox(Protocol):
     contract: run ``code`` to completion or to the wall-clock bound, capturing at
     most ``max_output_bytes`` of each stream, and never let the child reach the
     parent's environment. The environment the child sees is exactly ``env``;
-    a backend never merges the parent's own environment into it.
+    a backend never merges the parent's own environment into it. ``shell`` is the
+    binary the ``SHELL`` language spawns (``run_command``'s ``bash -c`` path); it
+    is ignored for the ``PYTHON``/``BASH`` languages.
     """
 
     name: str
@@ -69,4 +85,5 @@ class Sandbox(Protocol):
         env: dict[str, str],
         max_output_bytes: int,
         network: bool = False,
+        shell: str = "bash",
     ) -> ExecResult: ...

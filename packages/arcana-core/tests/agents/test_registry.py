@@ -46,6 +46,7 @@ def test_create_seeds_guardrails_from_the_card_archetype(tmp_registry: AgentRegi
         BuiltinTool.COPY.qualified,
         BuiltinTool.DELETE_DIR.qualified,
         BuiltinTool.RUN_CODE.qualified,
+        BuiltinTool.RUN_COMMAND.qualified,
     }
 
 

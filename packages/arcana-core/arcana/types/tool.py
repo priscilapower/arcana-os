@@ -43,6 +43,7 @@ class BuiltinTool(StrEnum):
     COPY = "copy"
     DELETE_DIR = "delete_dir"
     RUN_CODE = "run_code"
+    RUN_COMMAND = "run_command"
 
     @property
     def qualified(self) -> str:

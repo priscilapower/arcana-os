@@ -224,6 +224,36 @@ Hermit ship `DENY_TOOL: run_code`, executing archetypes gate it behind
 `WorldConfig.system_guardrails` can hard-deny it across every agent. Off by
 default, denied by most cards, and confirmation-gated for the rest.
 
+### Shell commands
+
+- **`run_command(command, timeout_s?)`** → `{stdout, stderr, exit_code, timed_out,
+  truncated}`. Runs a shell command string (`git status | head`, `grep -r TODO .`,
+  `pytest -q`) as `bash --noprofile --norc -c <command>` behind the **same
+  sandbox** as `run_code` — the three backends, rlimits, scrubbed env, output
+  caps, and process-group kill are reused unchanged. `timeout_s` may ask for a
+  *shorter* run than the ceiling, never a longer one; a non-zero `exit_code` is a
+  **successful** result carrying that code, not a tool failure.
+
+`run_command` shares `run_code`'s **disabled-by-default** posture but is the more
+conservative of the two: a shell string is the most injection-shaped argument the
+OS accepts, and — unlike `python -I -S` — the shell has **no language-level
+isolation lever**, so the sandbox backend does *all* the confinement. The soft
+`subprocess` backend is honestly unsuitable for untrusted shell; `bubblewrap` /
+`container` is the real boundary. It runs with the agent's **jailed filesystem
+workspace** as its working directory (the same one the filesystem tools use), so a
+command's file effects land in one auditable place — a convenience on the soft
+backend, an actual confinement under `bubblewrap` / `container`. Without an agent
+workspace the tool stays disabled.
+
+A coarse, deliberately-**incomplete** `DENY_PATTERN` blocklist screens the command
+before dispatch — `rm -rf /`, `curl … | sh`, a fork bomb, `dd of=/dev/…`, `sudo` —
+blocking a match with a `GuardrailViolationEvent` and **no process spawned**. It is
+a tripwire and audit signal for the obvious footguns, never the safety boundary:
+encoding, `$IFS`, aliases, and `eval` defeat any command-string blocklist. The
+sandbox is the boundary. Read-only archetypes ship `DENY_TOOL: run_command`,
+executing ones gate it behind `REQUIRE_CONFIRMATION`, and `system_guardrails` can
+add hard `DENY_PATTERN` rules across every agent.
+
 ## Guardrails
 
 Beyond subscription membership, an agent can carry **guardrail rules** — static,
@@ -239,12 +269,15 @@ Rules layer in one direction only — narrowing, never widening:
 | `Agent.guardrails` | user | narrows further; seeded from the card at creation |
 | `CardArchetype.default_guardrails` | card author | the archetype's boundaries |
 
-Four rule types are enforced: `DENY_TOOL` (by qualified name), `SCOPE_PATHS`
-(intersected with the adapter's own jail — both must pass), `MAX_FILE_SIZE`
-(bounds a write), and `REQUIRE_CONFIRMATION` (asks the registered confirmer, and
-**denies when there is none**, so an autonomous run cannot self-approve). A rule
-type this seam cannot evaluate blocks rather than passing silently — an operator
-who wrote a restriction is owed enforcement or an error, never a no-op.
+Five rule types are enforced: `DENY_TOOL` (by qualified name), `DENY_PATTERN` (a
+regex over the `command` a `run_command` call carries — a coarse shell-command
+tripwire, scoped to that argument so a scary substring in a file's contents is not
+swept up), `SCOPE_PATHS` (intersected with the adapter's own jail — both must
+pass), `MAX_FILE_SIZE` (bounds a write), and `REQUIRE_CONFIRMATION` (asks the
+registered confirmer, and **denies when there is none**, so an autonomous run
+cannot self-approve). A rule type this seam cannot evaluate blocks rather than
+passing silently — an operator who wrote a restriction is owed enforcement or an
+error, never a no-op.
 
 `SCOPE_PATHS` applies to **every** path argument of a call, not just the first.
 Which arguments those are comes from the tool's own definition (`path_args`), so
@@ -263,8 +296,9 @@ blindly; `warn` and `log` matches let the call through. Either way a
 Card defaults are materialized onto the agent record at creation, so an agent's
 constraints are visible in its own `agent.json`. The Hermit ships denied every
 mutating tool — `write_file`, `delete_file`, `make_dir`, `move`, `copy`,
-`delete_dir`, `run_code` — while still being free to `list_dir` and `read_file`;
-The Magician requires confirmation on both deletes and on `run_code`.
+`delete_dir`, `run_code`, `run_command` — while still being free to `list_dir` and
+`read_file`; The Magician requires confirmation on deletes, `run_code`, and
+`run_command`.
 
 Name the tools through `BuiltinTool` rather than as string literals. A rule that
 names a tool nobody spells correctly constrains nothing, silently — the enum is
@@ -430,6 +464,32 @@ export ARCANA_TOOLS_CODE_LANGUAGES="python,bash"
 export ARCANA_TOOLS_CODE_TIMEOUT_S=5
 ```
 
+Shell commands carry their own knobs under `ARCANA_TOOLS_SHELL_*`, with the same
+**off-by-default** posture. `enabled`, `backend`, and `shell` are operator config
+a tool argument can never set. For untrusted shell, pick `bubblewrap` or
+`container` — the `subprocess` default is a soft sandbox.
+
+```toml
+[tools.run_command]
+enabled          = false        # OFF by default — nothing runs until enabled
+backend          = "subprocess" # | "bubblewrap" | "container" (strong backend for untrusted shell)
+shell            = "bash"       # <shell> --noprofile --norc -c <command>
+timeout_s        = 10           # wall-clock ceiling; a command past it is killed + flagged
+mem_limit_mb     = 512          # address-space / memory ceiling for the child
+max_output_bytes = 65536        # per-stream cap; output past it is truncated + flagged
+network          = false        # best-effort on subprocess; enforced on bwrap/container
+path             = "/usr/bin:/bin"  # controlled minimal PATH in the scrubbed env
+container_image  = "bash:5"         # container backend only
+container_command = "docker"        # | "podman"
+```
+
+```bash
+# Enable shell commands behind real isolation on a Linux host.
+export ARCANA_TOOLS_SHELL_ENABLED=true
+export ARCANA_TOOLS_SHELL_BACKEND=bubblewrap
+export ARCANA_TOOLS_SHELL_TIMEOUT_S=5
+```
+
 ::: arcana.tools.WebToolsConfig
 
 ::: arcana.tools.SearchProviderName
@@ -437,6 +497,8 @@ export ARCANA_TOOLS_CODE_TIMEOUT_S=5
 ::: arcana.tools.FsToolsConfig
 
 ::: arcana.tools.CodeToolsConfig
+
+::: arcana.tools.ShellToolsConfig
 
 ::: arcana.tools.PathGuard
 
