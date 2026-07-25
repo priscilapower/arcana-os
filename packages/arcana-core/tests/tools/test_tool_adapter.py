@@ -44,6 +44,10 @@ async def test_provides_returns_every_hosted_builtin():
         "read_file",
         "write_file",
         "delete_file",
+        "make_dir",
+        "move",
+        "copy",
+        "delete_dir",
     ]
     assert adapter.type == ToolType.BUILTIN
     await adapter.aclose()

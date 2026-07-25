@@ -12,8 +12,11 @@ resolved set is built once per run, not once per call.
 Enforced here:
 
 * ``DENY_TOOL`` — refuse a call by qualified tool name;
-* ``SCOPE_PATHS`` — the call's ``path`` must sit inside the rule's roots, which
-  intersects with (never replaces) the adapter's own jail;
+* ``SCOPE_PATHS`` — *every* path argument of the call must sit inside the rule's
+  roots, which intersects with (never replaces) the adapter's own jail. Which
+  arguments those are comes from the tool's own definition, so a two-path tool
+  like ``move`` is checked on its destination as well as its source — a scope
+  satisfied by ``src`` alone would let a copy carry data straight out of it;
 * ``MAX_FILE_SIZE`` — bound the bytes a write may carry;
 * ``REQUIRE_CONFIRMATION`` — ask the registered confirmer, and refuse when there
   is none: an autonomous run must not silently self-approve.
@@ -28,6 +31,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from arcana.tools.builtins.definitions import BUILTIN_DEFINITIONS
 from arcana.tools.builtins.fs.pathguard import PathBlocked, canonical_path, is_within
 from arcana.types.guardrails import GuardrailRule, GuardrailRuleType, GuardrailViolationError
 from arcana.types.tool import BUILTIN_NAMESPACE
@@ -46,8 +50,11 @@ ENFORCED_RULE_TYPES = frozenset(
 #: Tools whose byte-carrying argument ``MAX_FILE_SIZE`` bounds.
 _SIZED_ARG = "content"
 
-#: The argument every filesystem tool names its target with.
-_PATH_ARG = "path"
+#: Path arguments assumed for a tool that declares none — an MCP tool, whose
+#: argument names we do not own. Scoping such a call on the conventional ``path``
+#: is a guess, but the alternative is to stop scoping it at all, and a guardrail
+#: must not quietly narrow its own reach.
+_DEFAULT_PATH_ARGS = ("path",)
 
 
 @runtime_checkable
@@ -140,7 +147,7 @@ async def _violation_reason(
         return "tool is denied" if _names_tool(rule, tool_name) else None
 
     if rule.type is GuardrailRuleType.SCOPE_PATHS:
-        return _scope_violation(rule, args)
+        return _scope_violation(rule, tool_name, args)
 
     if rule.type is GuardrailRuleType.MAX_FILE_SIZE:
         return _size_violation(rule, args)
@@ -174,32 +181,53 @@ def _bare(name: str) -> str:
     return name[len(prefix) :] if name.startswith(prefix) else name
 
 
-def _scope_violation(rule: GuardrailRule, args: dict[str, Any]) -> str | None:
-    """Refuse a path argument that falls outside the rule's roots.
+def path_args_for(tool_name: str) -> tuple[str, ...]:
+    """The arguments of ``tool_name`` that carry a filesystem path.
 
-    Silent on a call with no ``path`` — a path scope has nothing to say about a
-    web search. An unusable root list refuses instead of passing, so a
-    mistyped scope cannot read as "no restriction".
+    Read from the tool's own definition, which is the single place those names
+    are declared — the alternative, a lookup table beside the evaluator, would be
+    one more copy to fall out of step with the schema the model is actually
+    offered.
     """
-    raw = args.get(_PATH_ARG)
-    if raw is None:
+    definition = BUILTIN_DEFINITIONS.get(_bare(tool_name))
+    if definition is None or not definition.path_args:
+        return _DEFAULT_PATH_ARGS
+    return tuple(definition.path_args)
+
+
+def _scope_violation(rule: GuardrailRule, tool_name: str, args: dict[str, Any]) -> str | None:
+    """Refuse a call any of whose path arguments falls outside the rule's roots.
+
+    Every path argument has to clear the scope, not just the first one present: a
+    ``copy`` whose source is in scope and whose destination is not would
+    otherwise walk data straight out of the scope it was given. Silent on a call
+    with no path arguments at all — a path scope has nothing to say about a web
+    search. An unusable root list refuses instead of passing, so a mistyped scope
+    cannot read as "no restriction".
+    """
+    supplied = [(name, args[name]) for name in path_args_for(tool_name) if args.get(name) is not None]
+    if not supplied:
         return None
-    if not isinstance(raw, str):
-        return "path is not a string"
 
     roots = [value for value in rule.values() if value.strip()]
     if not roots:
         return "path scope names no roots"
 
     try:
-        target = canonical_path(raw)
         allowed = [canonical_path(root) for root in roots]
     except PathBlocked:
-        return "path is not resolvable"
+        return "path scope is not resolvable"
 
-    if any(is_within(target, root) for root in allowed):
-        return None
-    return "path is outside the permitted scope"
+    for name, raw in supplied:
+        if not isinstance(raw, str):
+            return f"'{name}' is not a string"
+        try:
+            target = canonical_path(raw)
+        except PathBlocked:
+            return f"'{name}' is not resolvable"
+        if not any(is_within(target, root) for root in allowed):
+            return f"'{name}' is outside the permitted scope"
+    return None
 
 
 def _size_violation(rule: GuardrailRule, args: dict[str, Any]) -> str | None:
@@ -228,5 +256,6 @@ __all__ = [
     "GuardrailViolationError",
     "ToolConfirmer",
     "enforce",
+    "path_args_for",
     "resolve_guardrails",
 ]

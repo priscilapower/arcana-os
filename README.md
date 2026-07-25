@@ -51,7 +51,7 @@ async with ModelGateway(ConnectionStore()) as gw:
     result = await agent.run("summarize recent advances in RAG")
 ```
 
-It includes the card engine and all 22 Major Arcana, the model gateway with adapters for Ollama, Anthropic, and OpenAI-compatible providers, agent + session persistence, a federated memory layer (tiered SQLite / vector stores, an Obsidian-vault folder connector, and a wikilink knowledge graph), and a tool gateway giving agents builtin `web_search` / `fetch_url` tools behind an SSRF-guarded egress envelope and `list_dir` / `read_file` / `write_file` / `delete_file` behind a workspace path jail, with declarative guardrails enforced before any tool runs. See the [`arcana-core` README](packages/arcana-core/README.md) for the full module map.
+It includes the card engine and all 22 Major Arcana, the model gateway with adapters for Ollama, Anthropic, and OpenAI-compatible providers, agent + session persistence, a federated memory layer (tiered SQLite / vector stores, an Obsidian-vault folder connector, and a wikilink knowledge graph), and a tool gateway giving agents builtin `web_search` / `fetch_url` tools behind an SSRF-guarded egress envelope and `list_dir` / `read_file` / `write_file` / `delete_file` / `make_dir` / `move` / `copy` / `delete_dir` behind a workspace path jail with symlink-safe, capped recursion, with declarative guardrails enforced before any tool runs. See the [`arcana-core` README](packages/arcana-core/README.md) for the full module map.
 
 ### [`arcana-cli`](packages/arcana-cli/README.md) — the command line
 

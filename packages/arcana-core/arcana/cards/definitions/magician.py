@@ -50,7 +50,7 @@ MAGICIAN = TarotCard(
         default_guardrails=[
             GuardrailRule(
                 type=GuardrailRuleType.REQUIRE_CONFIRMATION,
-                value=BuiltinTool.DELETE_FILE.qualified,
+                value=[BuiltinTool.DELETE_FILE.qualified, BuiltinTool.DELETE_DIR.qualified],
                 description="Deletions require explicit user confirmation.",
             ),
         ],

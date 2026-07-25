@@ -59,6 +59,8 @@ from arcana.types.session import (
 from arcana.types.tool import (
     BUILTIN_NAMESPACE,
     BuiltinTool,
+    DeleteOutcome,
+    FsEntryKind,
     MCPServerConfig,
     MCPServerStatus,
     MCPTransport,
@@ -131,6 +133,8 @@ __all__ = [
     # Tool
     "BuiltinTool",
     "BUILTIN_NAMESPACE",
+    "DeleteOutcome",
+    "FsEntryKind",
     "ToolDefinition",
     "ToolResult",
     "ToolStatus",

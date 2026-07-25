@@ -10,19 +10,10 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-import pytest
-
 from arcana.tools.builtins.fs.config import TRASH_DIR_NAME, FsToolsConfig, agent_workspace
 from arcana.tools.builtins.fs.handlers import FsTools
 from arcana.types.tool import ToolResult
 from tests.support.tools import fs_tools
-
-
-@pytest.fixture
-def workspace(tmp_path: Path) -> Path:
-    root = tmp_path / "workspace"
-    root.mkdir()
-    return root
 
 
 def _output(result: ToolResult) -> dict[str, Any]:

@@ -14,9 +14,10 @@ import pytest
 from arcana.models.adapters.base import FunctionCall, ToolCallResult
 from arcana.observability import AuditLog
 from arcana.tools.gateway import ToolGateway
-from arcana.tools.guardrails import ActiveGuardrails, enforce, resolve_guardrails
+from arcana.tools.guardrails import ActiveGuardrails, enforce, path_args_for, resolve_guardrails
 from arcana.tools.registry import MCPRegistry
 from arcana.types.guardrails import GuardrailRule, GuardrailRuleType, GuardrailViolationError
+from arcana.types.tool import BuiltinTool
 from arcana.types.world import WorldConfig
 from tests.support.tools import EchoAdapter
 
@@ -132,6 +133,59 @@ async def test_scope_paths_with_no_roots_refuses_rather_than_passing():
 
     with pytest.raises(GuardrailViolationError, match="names no roots"):
         await enforce(active, "read_file", {"path": "/tmp/f.txt"})
+
+
+# ---------------------------------------------------------------------------
+# SCOPE_PATHS across every path argument
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("tool", ["move", "copy"])
+async def test_scope_paths_allows_a_two_path_call_wholly_inside_the_scope(tmp_path: Path, tool: str):
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    active = _active(_rule(GuardrailRuleType.SCOPE_PATHS, [str(allowed)]))
+
+    args = {"src": str(allowed / "a.txt"), "dst": str(allowed / "b.txt")}
+    assert await enforce(active, tool, args) == []
+
+
+@pytest.mark.parametrize("tool", ["move", "copy"])
+@pytest.mark.parametrize("offending", ["src", "dst"])
+async def test_scope_paths_blocks_a_two_path_call_on_either_argument(tmp_path: Path, tool: str, offending: str):
+    """A scope satisfied by one argument is not a scope.
+
+    The dangerous half is ``dst``: a ``copy`` whose source is inside the scope
+    and whose destination is outside it walks the scoped data straight out, and
+    a check that only ever read ``path`` would have nothing to say about it.
+    """
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    active = _active(_rule(GuardrailRuleType.SCOPE_PATHS, [str(allowed)]))
+
+    args = {"src": str(allowed / "a.txt"), "dst": str(allowed / "b.txt")}
+    args[offending] = str(tmp_path / "elsewhere" / "f.txt")
+
+    with pytest.raises(GuardrailViolationError, match=f"'{offending}' is outside the permitted scope"):
+        await enforce(active, tool, args)
+
+
+async def test_scope_paths_still_reads_path_for_a_tool_it_does_not_know(tmp_path: Path):
+    # An MCP tool declares no path args because we do not own its argument
+    # names. Falling back to the conventional 'path' keeps the rule enforced
+    # rather than quietly narrowing its reach to builtins only.
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    active = _active(_rule(GuardrailRuleType.SCOPE_PATHS, [str(allowed)]))
+
+    with pytest.raises(GuardrailViolationError, match="outside the permitted scope"):
+        await enforce(active, "notion-mcp/export", {"path": str(tmp_path / "elsewhere")})
+
+
+async def test_path_args_come_from_the_tool_definition():
+    assert path_args_for("copy") == ("src", "dst")
+    assert path_args_for(BuiltinTool.DELETE_DIR.qualified) == ("path",)
+    assert path_args_for("some-server/some_tool") == ("path",)
 
 
 # ---------------------------------------------------------------------------

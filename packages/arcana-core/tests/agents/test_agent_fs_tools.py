@@ -10,10 +10,9 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from arcana.agents.agent import Agent
 from arcana.agents.registry import AgentRegistry
+from arcana.cards.registry import CardRegistry
 from arcana.models.adapters.base import CompletionResponse, FunctionCall, ToolCallResult
 from arcana.models.gateway import ModelGateway
 from arcana.tools.adapters.base import BuiltinToolAdapter
@@ -30,14 +29,11 @@ _FS_SUBSCRIPTIONS = [
     BuiltinTool.READ_FILE.qualified,
     BuiltinTool.WRITE_FILE.qualified,
     BuiltinTool.DELETE_FILE.qualified,
+    BuiltinTool.MAKE_DIR.qualified,
+    BuiltinTool.MOVE.qualified,
+    BuiltinTool.COPY.qualified,
+    BuiltinTool.DELETE_DIR.qualified,
 ]
-
-
-@pytest.fixture
-def workspace(tmp_path: Path) -> Path:
-    root = tmp_path / "workspace"
-    root.mkdir()
-    return root
 
 
 def _tool_call(name: str, arguments: str) -> ToolCallResult:
@@ -276,6 +272,83 @@ async def test_require_confirmation_allows_the_delete_with_a_confirmer(workspace
     await agent.run("delete it")
 
     assert not (workspace / "doomed.txt").exists()
+    await adapter.aclose()
+
+
+async def test_an_agent_organises_a_workspace_end_to_end(workspace: Path):
+    # The whole directory story in one run: make a folder, put a file in it
+    # (Slice 5's write), duplicate the folder, then recursively remove the copy.
+    model = _model(
+        [
+            _tool_response("make_dir", '{"path": "project"}'),
+            _tool_response("write_file", '{"path": "project/notes.md", "content": "findings"}'),
+            _tool_response("copy", '{"src": "project", "dst": "project-backup"}'),
+            _tool_response("delete_dir", '{"path": "project-backup"}'),
+            _text_response("organised"),
+        ]
+    )
+    gateway, adapter = _fs_gateway(workspace)
+    agent = _agent(model, gateway)
+
+    assert await agent.run("set up a project folder, back it up, then drop the backup") == "organised"
+
+    calls = agent._sessions[0].tool_calls  # pyright: ignore[reportPrivateUsage]
+    assert [c.tool_name for c in calls] == ["make_dir", "write_file", "copy", "delete_dir"]
+    assert all(c.error is None for c in calls)
+
+    assert (workspace / "project" / "notes.md").read_text() == "findings"
+    assert not (workspace / "project-backup").exists()
+    # The backup is recoverable, not gone: the whole tree is one trash entry.
+    trashed = list((workspace / TRASH_DIR_NAME).iterdir())
+    assert len(trashed) == 1
+    assert (trashed[0] / "notes.md").read_text() == "findings"
+    await adapter.aclose()
+
+
+async def test_an_agent_cannot_copy_data_out_of_its_scope(workspace: Path, tmp_path: Path):
+    # The two-path failure a single-path check would miss: the source is inside
+    # the scope and the destination is not, so the call has to be refused on dst.
+    inner = workspace / "inner"
+    inner.mkdir()
+    (inner / "secret.md").write_text("scoped data")
+    rules = [GuardrailRule(type=GuardrailRuleType.SCOPE_PATHS, value=[str(inner)])]
+    model = _model(
+        [
+            _tool_response("copy", f'{{"src": "inner/secret.md", "dst": "{workspace}/leaked.md"}}'),
+            _text_response("could not copy it"),
+        ]
+    )
+    gateway, adapter = _fs_gateway(workspace)
+    agent = _agent(model, gateway, guardrails=rules)
+
+    await agent.run("copy the secret out")
+
+    call = agent._sessions[0].tool_calls[0]  # pyright: ignore[reportPrivateUsage]
+    assert call.error is not None
+    assert "blocked by guardrail" in call.error
+    assert not (workspace / "leaked.md").exists()
+    await adapter.aclose()
+
+
+async def test_a_hermit_is_denied_every_mutating_directory_tool(workspace: Path):
+    _tree = workspace / "tree"
+    _tree.mkdir()
+    hermit = CardRegistry().get(Card.HERMIT)
+    model = _model(
+        [
+            _tool_response("delete_dir", '{"path": "tree"}'),
+            _text_response("I cannot remove it"),
+        ]
+    )
+    gateway, adapter = _fs_gateway(workspace)
+    agent = _agent(model, gateway, card=Card.HERMIT, guardrails=list(hermit.archetype.default_guardrails))
+
+    await agent.run("delete the tree")
+
+    call = agent._sessions[0].tool_calls[0]  # pyright: ignore[reportPrivateUsage]
+    assert call.error is not None
+    assert "blocked by guardrail" in call.error
+    assert _tree.is_dir()
     await adapter.aclose()
 
 
