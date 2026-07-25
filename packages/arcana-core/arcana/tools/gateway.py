@@ -22,7 +22,8 @@ from arcana.observability import GuardrailViolationEvent, emit_guardrail_violati
 from arcana.tools.adapters.base import BuiltinToolAdapter, ToolAdapter
 from arcana.tools.adapters.mcp import MCPToolAdapter
 from arcana.tools.builtins.code.config import CodeToolsConfig
-from arcana.tools.builtins.fs.config import FsToolsConfig
+from arcana.tools.builtins.fs.config import FsToolsConfig, agent_workspace
+from arcana.tools.builtins.shell.config import ShellToolsConfig
 from arcana.tools.config import DEFAULT_TOOL_TIMEOUT_S
 from arcana.tools.guardrails import ActiveGuardrails, enforce, path_args_for
 from arcana.tools.registry import MCPRegistry, get_mcp_registry
@@ -161,12 +162,13 @@ class ToolGateway:
             except ValidationError as exc:
                 return ToolResult(tool_name=name, success=False, error=f"invalid arguments: {exc}")
 
-            if guardrails is not None:
-                blocked = await self._screen(guardrails, name, args, span)
+            adapter = self._route(name)
+            effective = self._with_tool_baseline(adapter, name, guardrails)
+            if effective is not None:
+                blocked = await self._screen(effective, name, args, span)
                 if blocked is not None:
                     return blocked
 
-            adapter = self._route(name)
             if adapter is None:
                 return ToolResult(tool_name=name, success=False, error="no adapter")
 
@@ -187,6 +189,30 @@ class ToolGateway:
             span.set_attribute("arcana.tool.success", result.success)
             span.set_attribute("arcana.tool.duration_ms", result.duration_ms)
             return result
+
+    @staticmethod
+    def _with_tool_baseline(
+        adapter: ToolAdapter | None,
+        name: str,
+        guardrails: ActiveGuardrails | None,
+    ) -> ActiveGuardrails | None:
+        """Prepend the routed adapter's baseline rules to the agent's guardrails.
+
+        A tool that ships always-on rules — ``run_command``'s ``DENY_PATTERN``
+        blocklist — has them screened in the seam alongside the agent's own, so the
+        shipped tripwire fires even for an agent that carries no guardrails of its
+        own, and its blocks land in the audit log with the agent's id. Returns
+        ``None`` only when neither source has a rule, so a call with nothing to
+        screen skips the seam exactly as before.
+        """
+        baseline = adapter.tool_guardrails(name) if adapter is not None else ()
+        if not baseline:
+            return guardrails
+        # `is not None`, not `or`: an ActiveGuardrails with no rules is falsy, and
+        # `guardrails or ...` would drop it — losing the agent id its audit events
+        # need — for exactly the agent-with-no-rules case the baseline exists for.
+        base = guardrails if guardrails is not None else ActiveGuardrails()
+        return ActiveGuardrails(rules=(*baseline, *base.rules), agent_id=base.agent_id, confirmer=base.confirmer)
 
     async def _screen(
         self,
@@ -287,14 +313,18 @@ def default_tool_gateway(agent_id: UUID | None = None, *, home: Path | None = No
     ``~/.arcana`` (an ``ARCANA_HOME`` override), so the jail lands beside the
     agent's own record rather than in an unrelated tree.
 
-    ``run_code`` follows its env-backed config (``ARCANA_TOOLS_CODE_*``), which is
-    disabled by default: the tool is offered but refuses to run until an operator
-    turns it on and chooses a sandbox backend.
+    ``run_code`` and ``run_command`` follow their env-backed configs
+    (``ARCANA_TOOLS_CODE_*`` / ``ARCANA_TOOLS_SHELL_*``), both disabled by default:
+    the tools are offered but refuse to run until an operator turns them on and
+    chooses a sandbox backend. ``run_command`` additionally runs in the agent's
+    jailed workspace, so it is available only when an ``agent_id`` gives it one.
     """
     registry = get_mcp_registry()
     builtin = BuiltinToolAdapter(
         fs_config=FsToolsConfig.for_agent(agent_id, home=home),
         code_config=CodeToolsConfig(),
+        shell_config=ShellToolsConfig(),
+        agent_workspace=agent_workspace(agent_id, home=home) if agent_id is not None else None,
     )
     adapters: list[ToolAdapter] = [builtin]
     adapters.extend(MCPToolAdapter(server) for server in registry.list_servers())

@@ -9,8 +9,11 @@ build; the mechanics of running it safely are identical and live here once:
 * stdout and stderr are drained **concurrently** into fixed-size buffers, so a
   program that outpaces the reader cannot deadlock on a full pipe and cannot
   grow the parent's memory past the cap;
-* the program source is fed on **stdin** and the pipe closed, so nothing the
-  model wrote ever lands in the process table (an ``argv`` the way ``-c`` would);
+* a program source (``run_code``'s Python/Bash) is fed on **stdin** and the pipe
+  closed, so nothing the model wrote ever lands in the process table (an ``argv``
+  the way ``-c`` would); the one exception is the shell-command path
+  (``run_command``), whose argument *is* a command line and rides in argv via
+  ``-c`` — normal for a shell tool, and confined by the sandbox, not by argv;
 * a wall-clock timeout cancels the readers, kills the group, and still returns
   whatever was captured before the kill — a partial, honestly-flagged result
   rather than an exception.
@@ -27,9 +30,10 @@ import signal
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from pathlib import Path
+from typing import assert_never
 
 from arcana.tools.builtins.code.config import CodeLanguage
-from arcana.tools.builtins.code.sandbox.base import ExecResult, SandboxUnavailable
+from arcana.tools.builtins.code.sandbox.base import ExecResult
 
 # The local-process backends need POSIX ``setrlimit`` and process groups. Guarding
 # the import (rather than a bare ``import resource``) keeps the whole tools package
@@ -99,21 +103,48 @@ def resource_limits(timeout_s: float, mem_limit_mb: int) -> Callable[[], None]:
     return _apply
 
 
-def interpreter_argv(language: CodeLanguage, *, python: str = "python") -> list[str]:
-    """The isolated-interpreter argv that reads its program from stdin.
+def program_invocation(
+    language: CodeLanguage,
+    program: str,
+    *,
+    python: str = "python",
+    shell: str = "bash",
+) -> tuple[list[str], bytes]:
+    """The interpreter argv and the stdin bytes for running ``program``.
 
     ``python -I`` is isolated mode (ignores ``PYTHON*`` env vars and the user
     site dir); ``-S`` skips ``site``; ``-`` reads the script from stdin.
     ``bash --noprofile --norc -s`` starts with no startup files and reads from
-    stdin. Feeding stdin (never ``-c``) keeps the model's code out of argv and
-    the host process table. ``python`` is the interpreter to invoke — an absolute
-    host path for the local backends, the bare name for the in-image one.
+    stdin. For those two, feeding the program on **stdin** (never ``-c``) keeps
+    the model's code out of argv and the host process table, so the returned
+    stdin bytes carry it and the argv does not.
+
+    ``SHELL`` is the exception, and deliberately so: a ``run_command`` argument is
+    a single shell *command*, and the canonical, least-surprising way to run one
+    is ``<shell> -c <command>`` — which puts the command in argv. A one-line
+    command in the process table is normal for a shell tool (unlike a whole
+    program), and run_command is off by default and confined by the sandbox
+    backend, which is the real boundary here. Its stdin is empty.
+
+    ``--noprofile --norc`` (bash's no-startup-file hardening, its analog of
+    ``python -I -S``) is **bash-specific** — other shells reject those flags — so
+    it is applied only when the configured ``shell`` is bash. A non-bash shell gets
+    a plain ``-c``, which is already non-interactive and so reads no startup files
+    to begin with.
+
+    ``python``/``shell`` are the binaries to invoke — an absolute host path or a
+    bare name resolved from the (parent) ``PATH`` for the local backends, the bare
+    name for the in-image one.
     """
     if language is CodeLanguage.PYTHON:
-        return [python, "-I", "-S", "-"]
+        return [python, "-I", "-S", "-"], program.encode("utf-8")
     if language is CodeLanguage.BASH:
-        return ["bash", "--noprofile", "--norc", "-s"]
-    raise SandboxUnavailable(f"unsupported language: {language}")
+        return ["bash", "--noprofile", "--norc", "-s"], program.encode("utf-8")
+    if language is CodeLanguage.SHELL:
+        if Path(shell).name == "bash":
+            return [shell, "--noprofile", "--norc", "-c", program], b""
+        return [shell, "-c", program], b""
+    assert_never(language)
 
 
 class _CappedBuffer:

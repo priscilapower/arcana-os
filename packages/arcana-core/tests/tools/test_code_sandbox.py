@@ -19,6 +19,7 @@ from arcana.tools.builtins.code.sandbox import (
     container,
     make_sandbox,
 )
+from arcana.tools.builtins.code.sandbox.process import program_invocation
 
 
 async def _run(
@@ -132,6 +133,44 @@ def test_container_without_the_runtime_degrades(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr("arcana.tools.builtins.code.sandbox.container.shutil.which", lambda _: None)
     with pytest.raises(SandboxUnavailable, match="podman"):
         make_sandbox(CodeToolsConfig(enabled=True, backend=SandboxBackend.CONTAINER, container_command="podman"))
+
+
+# ---------------------------------------------------------------------------
+# program_invocation — argv + stdin per language
+# ---------------------------------------------------------------------------
+
+
+def test_program_invocation_feeds_python_and_bash_on_stdin():
+    # A program source rides on stdin (kept out of the process table), so the argv
+    # is code-independent and the stdin bytes carry it.
+    py_argv, py_stdin = program_invocation(CodeLanguage.PYTHON, "print(1)", python="/usr/bin/python3")
+    assert py_argv == ["/usr/bin/python3", "-I", "-S", "-"]
+    assert py_stdin == b"print(1)"
+
+    bash_argv, bash_stdin = program_invocation(CodeLanguage.BASH, "echo hi")
+    assert bash_argv == ["bash", "--noprofile", "--norc", "-s"]
+    assert bash_stdin == b"echo hi"
+
+
+def test_program_invocation_runs_a_shell_command_via_dash_c():
+    # The shell exception: a command string rides in argv via -c (empty stdin).
+    # Bash gets its --noprofile --norc no-startup-file hardening.
+    argv, stdin = program_invocation(CodeLanguage.SHELL, "git status | head", shell="bash")
+    assert argv == ["bash", "--noprofile", "--norc", "-c", "git status | head"]
+    assert stdin == b""
+    # An absolute bash path is still recognised as bash.
+    abs_argv, _ = program_invocation(CodeLanguage.SHELL, "ls", shell="/usr/bin/bash")
+    assert abs_argv == ["/usr/bin/bash", "--noprofile", "--norc", "-c", "ls"]
+
+
+def test_program_invocation_omits_bash_only_flags_for_a_non_bash_shell():
+    # --noprofile/--norc are bash-specific; another shell would reject them, so it
+    # runs with a plain -c (already non-interactive, so it reads no rc files).
+    for shell in ("zsh", "sh", "dash"):
+        argv, stdin = program_invocation(CodeLanguage.SHELL, "ls", shell=shell)
+        assert argv == [shell, "-c", "ls"]
+        assert "--noprofile" not in argv and "--norc" not in argv
+        assert stdin == b""
 
 
 # ---------------------------------------------------------------------------

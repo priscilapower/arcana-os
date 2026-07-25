@@ -18,6 +18,7 @@ fed to the model.
 
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -29,11 +30,14 @@ from arcana.tools.builtins.code.handlers import CodeTools
 from arcana.tools.builtins.definitions import BUILTIN_DEFINITIONS
 from arcana.tools.builtins.fs.config import FsToolsConfig
 from arcana.tools.builtins.fs.handlers import FsTools
+from arcana.tools.builtins.shell.config import ShellToolsConfig
+from arcana.tools.builtins.shell.handlers import ShellTools
 from arcana.tools.builtins.web.config import WebToolsConfig
 from arcana.tools.builtins.web.egress import EgressBlocked, guarded_get
 from arcana.tools.builtins.web.extract import extract_text
 from arcana.tools.builtins.web.search import SearchProvider, make_search_provider
 from arcana.types._utils import JsonValue
+from arcana.types.guardrails import GuardrailRule
 from arcana.types.tool import BuiltinTool, ToolDefinition, ToolResult, ToolType
 
 
@@ -54,6 +58,16 @@ class ToolAdapter(ABC):
     def supports(self, name: str) -> bool:
         """True if ``name`` is one of this adapter's tools."""
         return any(d.name == name for d in self.provides())
+
+    def tool_guardrails(self, name: str) -> tuple[GuardrailRule, ...]:
+        """Baseline guardrail rules this adapter always applies to tool ``name``.
+
+        The seam through which a tool ships its own always-on rules — e.g.
+        ``run_command``'s ``DENY_PATTERN`` blocklist — so they are enforced in the
+        gateway with the agent's own rules rather than re-checked inside the
+        handler. Empty for tools with no such baseline, which is most of them.
+        """
+        return ()
 
     @abstractmethod
     async def execute(self, name: str, args: dict[str, Any]) -> ToolResult:
@@ -77,6 +91,12 @@ class BuiltinToolAdapter(ToolAdapter):
     built without one, ``run_code``'s schema is still offered but every call
     returns "run_code is disabled" and no process is ever spawned. Enabling it,
     and choosing the sandbox backend, is an explicit operator act.
+
+    ``shell_config`` carries the shell-command sandbox, with the same **default-off**
+    posture as ``run_code``. ``agent_workspace`` is the jailed working directory
+    ``run_command`` runs in — the same workspace the filesystem tools use; without
+    it the shell tool stays disabled, so an adapter with no agent context cannot
+    run a command anywhere.
     """
 
     type = ToolType.BUILTIN
@@ -87,6 +107,8 @@ class BuiltinToolAdapter(ToolAdapter):
         *,
         fs_config: FsToolsConfig | None = None,
         code_config: CodeToolsConfig | None = None,
+        shell_config: ShellToolsConfig | None = None,
+        agent_workspace: Path | None = None,
         http: httpx.AsyncClient | None = None,
         provider: SearchProvider | None = None,
     ) -> None:
@@ -102,15 +124,23 @@ class BuiltinToolAdapter(ToolAdapter):
         self._provider = provider or make_search_provider(self._cfg, self._http)
         self._fs = FsTools(fs_config or FsToolsConfig())
         self._code = CodeTools(code_config or CodeToolsConfig())
+        self._shell = ShellTools(shell_config or ShellToolsConfig(), workspace=agent_workspace)
         self._handlers: dict[str, Callable[[dict[str, Any]], Awaitable[ToolResult]]] = {
             BuiltinTool.WEB_SEARCH: self._web_search,
             BuiltinTool.FETCH_URL: self._fetch_url,
             **self._fs.handlers(),
             **self._code.handlers(),
+            **self._shell.handlers(),
         }
 
     def provides(self) -> list[ToolDefinition]:
         return [BUILTIN_DEFINITIONS[name] for name in self._handlers]
+
+    def tool_guardrails(self, name: str) -> tuple[GuardrailRule, ...]:
+        """``run_command`` carries its shipped ``DENY_PATTERN`` blocklist; nothing else does."""
+        if name == BuiltinTool.RUN_COMMAND:
+            return self._shell.default_guardrails()
+        return ()
 
     async def execute(self, name: str, args: dict[str, Any]) -> ToolResult:
         handler = self._handlers.get(name)

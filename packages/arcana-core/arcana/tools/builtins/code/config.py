@@ -26,17 +26,20 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class CodeLanguage(StrEnum):
-    """A language ``run_code`` can execute. Python is the always-available default;
-    Bash is an optional second runtime an operator can allow.
+    """A language the sandbox can spawn. Python is the always-available default and
+    Bash an optional second runtime for ``run_code``; ``SHELL`` is the shell-command
+    path the ``run_command`` tool drives (``bash --noprofile --norc -c <command>``).
 
     A closed vocabulary the OS owns, so it is an enum rather than a bare string:
     it appears in the tool schema, in the per-call validation, and in the argv a
     backend builds, and a typo in any one of those must be a resolvable name, not
-    a silent mismatch.
+    a silent mismatch. ``SHELL`` is not a ``run_code`` language — that tool offers
+    only ``PYTHON``/``BASH`` — but the sandbox is shared, so all three live here.
     """
 
     PYTHON = "python"
     BASH = "bash"
+    SHELL = "shell"
 
 
 class SandboxBackend(StrEnum):

@@ -71,6 +71,7 @@ def test_builtin_names_are_correct(tmp_path):
         "copy",
         "delete_dir",
         "run_code",
+        "run_command",
     }
 
 

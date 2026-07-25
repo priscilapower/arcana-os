@@ -12,6 +12,10 @@ resolved set is built once per run, not once per call.
 Enforced here:
 
 * ``DENY_TOOL`` — refuse a call by qualified tool name;
+* ``DENY_PATTERN`` — refuse a shell command whose text matches a regex. A coarse,
+  deliberately-incomplete tripwire over the ``run_command`` sandbox, scoped to the
+  ``command`` argument so a scary substring in a file's contents is not swept up —
+  never the safety boundary, which is the sandbox;
 * ``SCOPE_PATHS`` — *every* path argument of the call must sit inside the rule's
   roots, which intersects with (never replaces) the adapter's own jail. Which
   arguments those are comes from the tool's own definition, so a two-path tool
@@ -27,6 +31,7 @@ so the fail-closed direction holds for the rule set itself, not just for the
 calls it screens.
 """
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
@@ -41,6 +46,7 @@ from arcana.types.tool import BUILTIN_NAMESPACE
 ENFORCED_RULE_TYPES = frozenset(
     {
         GuardrailRuleType.DENY_TOOL,
+        GuardrailRuleType.DENY_PATTERN,
         GuardrailRuleType.SCOPE_PATHS,
         GuardrailRuleType.MAX_FILE_SIZE,
         GuardrailRuleType.REQUIRE_CONFIRMATION,
@@ -49,6 +55,12 @@ ENFORCED_RULE_TYPES = frozenset(
 
 #: Tools whose byte-carrying argument ``MAX_FILE_SIZE`` bounds.
 _SIZED_ARG = "content"
+
+#: The argument ``DENY_PATTERN`` matches against — the one param that carries
+#: executable command text (``run_command``). Scoping to it, rather than every
+#: string argument, keeps a scary substring in a file's contents or a URL from
+#: tripping a shell-command tripwire.
+_COMMAND_ARG = "command"
 
 #: Path arguments assumed for a tool that declares none — an MCP tool, whose
 #: argument names we do not own. Scoping such a call on the conventional ``path``
@@ -146,6 +158,9 @@ async def _violation_reason(
     if rule.type is GuardrailRuleType.DENY_TOOL:
         return "tool is denied" if _names_tool(rule, tool_name) else None
 
+    if rule.type is GuardrailRuleType.DENY_PATTERN:
+        return _pattern_violation(rule, args)
+
     if rule.type is GuardrailRuleType.SCOPE_PATHS:
         return _scope_violation(rule, tool_name, args)
 
@@ -227,6 +242,30 @@ def _scope_violation(rule: GuardrailRule, tool_name: str, args: dict[str, Any]) 
             return f"'{name}' is not resolvable"
         if not any(is_within(target, root) for root in allowed):
             return f"'{name}' is outside the permitted scope"
+    return None
+
+
+def _pattern_violation(rule: GuardrailRule, args: dict[str, Any]) -> str | None:
+    """Refuse a command whose text matches the rule's regex.
+
+    Scoped to the ``command`` argument — the one param that carries executable
+    text — so ``DENY_PATTERN`` is the shell-command tripwire it is meant to be and
+    not a blanket substring filter over every string a tool receives. Silent on a
+    call with no such argument (a web search has no command to match). A rule
+    whose value is not a usable regex refuses rather than passing: an operator who
+    wrote a pattern is owed enforcement or an error, never a silent no-op — the
+    same fail-closed direction the rest of this seam holds.
+    """
+    command = args.get(_COMMAND_ARG)
+    if not isinstance(command, str):
+        return None
+    for pattern in rule.values():
+        try:
+            matched = re.search(pattern, command) is not None
+        except re.error:
+            return "deny pattern is not a valid regex"
+        if matched:
+            return "command matches a denied pattern"
     return None
 
 

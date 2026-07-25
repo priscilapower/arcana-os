@@ -23,7 +23,7 @@ from pathlib import Path
 
 from arcana.tools.builtins.code.config import CodeLanguage
 from arcana.tools.builtins.code.sandbox.base import ExecResult, SandboxUnavailable
-from arcana.tools.builtins.code.sandbox.process import interpreter_argv, resource_limits, run_process
+from arcana.tools.builtins.code.sandbox.process import program_invocation, resource_limits, run_process
 
 #: Host directories bound read-only so the interpreter and shared libraries
 #: resolve. Bound with ``--ro-bind-try`` so one absent on a given distro (``/lib64``
@@ -83,12 +83,13 @@ class BubblewrapSandbox:
         env: dict[str, str],
         max_output_bytes: int,
         network: bool = False,
+        shell: str = "bash",
     ) -> ExecResult:
-        inner = interpreter_argv(language, python=sys.executable)
+        inner, stdin_data = program_invocation(language, code, python=sys.executable, shell=shell)
         argv = build_argv(self._bwrap, inner, workspace=workspace, network=network)
         return await run_process(
             argv,
-            stdin_data=code.encode("utf-8"),
+            stdin_data=stdin_data,
             timeout_s=timeout_s,
             workspace=workspace,
             env=env,

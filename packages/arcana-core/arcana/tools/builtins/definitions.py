@@ -1,7 +1,7 @@
 """Aggregated builtin tool schemas — the single source of truth across domains.
 
 ``BUILTIN_DEFINITIONS`` collects every builtin's ``ToolDefinition`` across the
-domains that have one (web, filesystem, and code execution). Both the
+domains that have one (web, filesystem, code execution, and shell). Both the
 model-visible registry (``MCPRegistry._register_builtins``) and the executor
 (``BuiltinToolAdapter``) consume this dict, so the schema a model is offered can
 never drift from the schema the adapter honours.
@@ -18,6 +18,7 @@ from arcana.tools.builtins.fs.definitions import (
     READ_FILE,
     WRITE_FILE,
 )
+from arcana.tools.builtins.shell.definitions import RUN_COMMAND
 from arcana.tools.builtins.web.definitions import FETCH_URL, WEB_SEARCH
 from arcana.types.tool import ToolDefinition
 
@@ -36,5 +37,6 @@ BUILTIN_DEFINITIONS: dict[str, ToolDefinition] = {
         COPY,
         DELETE_DIR,
         RUN_CODE,
+        RUN_COMMAND,
     )
 }

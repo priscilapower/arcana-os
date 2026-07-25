@@ -29,7 +29,7 @@ from pathlib import Path
 
 from arcana.tools.builtins.code.config import CodeLanguage
 from arcana.tools.builtins.code.sandbox.base import ExecResult, SandboxUnavailable
-from arcana.tools.builtins.code.sandbox.process import interpreter_argv, run_process
+from arcana.tools.builtins.code.sandbox.process import program_invocation, run_process
 
 #: Where the writable scratch workspace is mounted inside the container. Fixed and
 #: distinct from any host path, so the code's cwd cannot imply a host location.
@@ -118,12 +118,13 @@ class ContainerSandbox:
         env: dict[str, str],
         max_output_bytes: int,
         network: bool = False,
+        shell: str = "bash",
     ) -> ExecResult:
         # env is not forwarded into the container: the image's own environment is
         # the child's, and the daemon isolates it from the host either way. The
         # runtime client itself runs with the scrubbed env passed to run_process.
         name = f"{_NAME_PREFIX}{uuid.uuid4().hex}"
-        inner = interpreter_argv(language, python="python")
+        inner, stdin_data = program_invocation(language, code, python="python", shell=shell)
         argv = build_argv(
             self._runtime,
             self._image,
@@ -135,7 +136,7 @@ class ContainerSandbox:
         )
         return await run_process(
             argv,
-            stdin_data=code.encode("utf-8"),
+            stdin_data=stdin_data,
             timeout_s=timeout_s,
             workspace=workspace,
             env=env,

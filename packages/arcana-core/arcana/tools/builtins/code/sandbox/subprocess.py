@@ -24,7 +24,7 @@ from pathlib import Path
 
 from arcana.tools.builtins.code.config import CodeLanguage
 from arcana.tools.builtins.code.sandbox.base import ExecResult
-from arcana.tools.builtins.code.sandbox.process import interpreter_argv, resource_limits, run_process
+from arcana.tools.builtins.code.sandbox.process import program_invocation, resource_limits, run_process
 
 
 class SubprocessSandbox:
@@ -43,13 +43,15 @@ class SubprocessSandbox:
         env: dict[str, str],
         max_output_bytes: int,
         network: bool = False,
+        shell: str = "bash",
     ) -> ExecResult:
         # network is accepted for protocol conformance; this backend cannot
         # enforce isolation, so it is deliberately not acted on here (documented
         # as best-effort, and the tool description says the default is soft).
+        argv, stdin_data = program_invocation(language, code, python=sys.executable, shell=shell)
         return await run_process(
-            interpreter_argv(language, python=sys.executable),
-            stdin_data=code.encode("utf-8"),
+            argv,
+            stdin_data=stdin_data,
             timeout_s=timeout_s,
             workspace=workspace,
             env=env,
