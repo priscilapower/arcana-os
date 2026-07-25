@@ -45,7 +45,8 @@ was never offered.
 
 ## Builtin tools
 
-`default_tool_gateway()` ships two network tools and four filesystem tools.
+`default_tool_gateway()` ships two network tools and eight filesystem tools —
+four acting on files, four on directories.
 
 ### Network tools
 
@@ -74,7 +75,7 @@ A blocked, oversized, or timed-out fetch is a `ToolResult` error the model can
 adapt to — never an exception. An HTTP 404 is a *successful* tool result, not a
 tool error.
 
-### Filesystem tools
+### File tools
 
 - **`list_dir(path?)`** → `{path, entries, truncated}`, each entry
   `{name, kind, size}` with `kind` one of `file`, `dir`, `symlink`, `other`.
@@ -91,19 +92,66 @@ tool error.
   directory and are renamed into place, so a crash never leaves a half-written
   file and never truncates the original.
 - **`delete_file(path)`** → `{path, outcome, trash_path?}`. Single files only —
-  directories are refused. The file is **moved into a workspace `.trash/`**
-  rather than unlinked, so an errant agent delete stays recoverable; the trash
-  is bounded and the oldest deletions are pruned. A real unlink is opt-in via
-  `hard_delete`.
+  directories are refused (that is `delete_dir`). The file is **moved into a
+  workspace `.trash/`** rather than unlinked, so an errant agent delete stays
+  recoverable; the trash is bounded and the oldest deletions are pruned. A real
+  unlink is opt-in via `hard_delete`.
 
 `read_file`, `write_file`, and `delete_file` operate on **regular files only**:
 a directory passed to any of them is refused, and so is a FIFO, socket, or device
 node. `list_dir` is the mirror image — it accepts only a directory.
 
-Directory *manipulation* is out: no `move`, `copy`, `mkdir`, or recursive delete.
-Directories are still created **implicitly** — `write_file("notes/2026/q1.md", …)`
-makes the intervening directories inside the jail — but nothing removes them, so
-directory structure an agent creates is permanent from its point of view.
+### Directory tools
+
+- **`make_dir(path, parents?, exist_ok?)`** → `{path, created}`. `parents`
+  creates missing intermediates, **bounded by `max_depth`** so a pathological
+  `a/a/a/…` cannot mint thousands of directories in one call; `exist_ok` turns an
+  existing *directory* into a quiet success (an existing file is still refused).
+- **`move(src, dst, overwrite?)`** → `{src, dst, moved, atomic}`. Files and trees
+  alike. A single `os.rename` when both paths share a filesystem — the normal
+  case inside one workspace, and atomic. Across filesystems there is no atomic
+  rename to be had, so it degrades to a guarded copy plus a verified delete of
+  the source and reports `atomic: false` rather than implying an atomicity it did
+  not deliver.
+- **`copy(src, dst, overwrite?)`** → `{src, dst, files_copied, dirs_copied, bytes_copied, skipped}`.
+  Recursive, and never via `shutil.copytree` (see below).
+- **`delete_dir(path)`** → `{path, outcome, entry_count, trash_path?}`. The whole
+  subtree is moved into `.trash/` as **one** entry, so a recursive delete stays as
+  recoverable as a single-file one. It refuses a **jail or allowlisted root** — a
+  workspace's contents can be emptied, the workspace itself cannot be removed out
+  from under the jail — and refuses anything that is not a directory.
+
+Directories are still created **implicitly** too: `write_file("notes/2026/q1.md", …)`
+makes the intervening directories inside the jail.
+
+### Two paths, and recursion
+
+The directory tools introduce three problems a one-path, one-file tool never had,
+and each is a place where the call fails **before** touching the disk:
+
+- **two model-chosen paths.** `move` and `copy` resolve and jail **both** `src`
+  and `dst` up front — a two-path operation is only as confined as its weaker
+  argument — and refuse a destination **inside** its own source, which would
+  otherwise let a copy recurse into its own growing output.
+- **recursion crosses the symlink boundary repeatedly.** `copy` and `delete_dir`
+  walk their subtree through a guard that **never follows a link**: a symlinked
+  directory is copied as a link or unlinked in place, never entered, and every
+  other node is re-checked for containment as it is reached. This is what closes
+  the `shutil.copytree` / `shutil.rmtree` symlink-follow footgun — those follow
+  links by default and re-check nothing per node, which would make `copy` an
+  exfiltration primitive and `delete_dir` a delete-anything one. A symlink whose
+  target leaves the jail is **skipped** by a copy rather than recreated, and
+  reported in `skipped`.
+- **amplification.** One call can touch unbounded bytes, files, and depth, none
+  of which a per-file byte cap bounds, so tree operations carry **aggregate**
+  caps (`max_tree_bytes`, `max_file_count`, `max_depth`) checked *as the walk
+  proceeds*.
+
+A tree copy is assembled in a dot-prefixed staging sibling and renamed into place
+only once complete, and an existing destination is renamed aside rather than
+deleted until the replacement is committed. So a copy that trips a cap, meets an
+escaping symlink, or fails part-way leaves **no half-built destination** and does
+not take the previous contents down with it.
 
 ### The path jail
 
@@ -149,6 +197,14 @@ Four rule types are enforced: `DENY_TOOL` (by qualified name), `SCOPE_PATHS`
 type this seam cannot evaluate blocks rather than passing silently — an operator
 who wrote a restriction is owed enforcement or an error, never a no-op.
 
+`SCOPE_PATHS` applies to **every** path argument of a call, not just the first.
+Which arguments those are comes from the tool's own definition (`path_args`), so
+`move` and `copy` are checked on `dst` as well as `src` — a scope satisfied by
+the source alone would let a copy walk the scoped data straight out of it. A tool
+that declares no path arguments, including any MCP tool, falls back to the
+conventional `path`, so the rule keeps its reach rather than quietly narrowing to
+builtins.
+
 A `block` match returns `ToolResult(success=False, error="blocked by guardrail: …")`
 carrying the rule's description, so the model can adapt instead of retrying
 blindly; `warn` and `log` matches let the call through. Either way a
@@ -156,9 +212,10 @@ blindly; `warn` and `log` matches let the call through. Either way a
 **never the file contents**.
 
 Card defaults are materialized onto the agent record at creation, so an agent's
-constraints are visible in its own `agent.json`. The Hermit ships denied
-`write_file` / `delete_file` / `run_code`; The Magician requires confirmation on
-deletes.
+constraints are visible in its own `agent.json`. The Hermit ships denied every
+mutating tool — `write_file`, `delete_file`, `make_dir`, `move`, `copy`,
+`delete_dir`, `run_code` — while still being free to `list_dir` and `read_file`;
+The Magician requires confirmation on both deletes.
 
 Name the tools through `BuiltinTool` rather than as string literals. A rule that
 names a tool nobody spells correctly constrains nothing, silently — the enum is
@@ -283,6 +340,13 @@ max_list_entries  = 1000        # entries per list_dir before truncation
 follow_symlinks   = false       # O_NOFOLLOW on the leaf, on by default
 hard_delete       = false       # default: soft-delete into the workspace .trash/
 trash_max_entries = 100         # oldest deletions pruned past this
+
+# Aggregate bounds on one tree operation (copy, recursive delete, cross-fs move).
+# The per-file caps above bound one write; these bound the amplification recursion
+# adds on top.
+max_tree_bytes    = 268435456   # 256 MiB
+max_file_count    = 10000       # entries touched by one tree op
+max_depth         = 32          # recursion depth, and make_dir(parents=true) levels
 ```
 
 ```bash

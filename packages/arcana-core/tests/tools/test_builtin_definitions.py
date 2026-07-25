@@ -4,7 +4,7 @@ from arcana.tools.adapters.base import BuiltinToolAdapter
 from arcana.tools.builtins.definitions import BUILTIN_DEFINITIONS
 from arcana.tools.builtins.web.config import WebToolsConfig
 from arcana.tools.registry import MCPRegistry
-from arcana.types.tool import BuiltinTool, ToolSubscription, ToolType
+from arcana.types.tool import BuiltinTool, DeleteOutcome, FsEntryKind, ToolResult, ToolSubscription, ToolType
 
 
 def test_definitions_cover_every_executable_builtin():
@@ -15,7 +15,39 @@ def test_definitions_cover_every_executable_builtin():
         BuiltinTool.READ_FILE,
         BuiltinTool.WRITE_FILE,
         BuiltinTool.DELETE_FILE,
+        BuiltinTool.MAKE_DIR,
+        BuiltinTool.MOVE,
+        BuiltinTool.COPY,
+        BuiltinTool.DELETE_DIR,
     }
+
+
+def test_every_path_taking_builtin_declares_its_path_args():
+    """A path arg a definition does not declare is a path a scope never checks.
+
+    The failure is silent — the call runs, the guardrail simply had nothing to
+    say about the argument — so the roster is asserted rather than trusted.
+    """
+    assert {name: tuple(d.path_args) for name, d in BUILTIN_DEFINITIONS.items() if d.path_args} == {
+        BuiltinTool.LIST_DIR: ("path",),
+        BuiltinTool.READ_FILE: ("path",),
+        BuiltinTool.WRITE_FILE: ("path",),
+        BuiltinTool.DELETE_FILE: ("path",),
+        BuiltinTool.MAKE_DIR: ("path",),
+        BuiltinTool.MOVE: ("src", "dst"),
+        BuiltinTool.COPY: ("src", "dst"),
+        BuiltinTool.DELETE_DIR: ("path",),
+    }
+
+
+def test_every_declared_path_arg_exists_in_the_schema():
+    # A declared arg the schema does not offer would scope an argument the model
+    # can never send — a rule that reads as enforcement and is not.
+    for definition in BUILTIN_DEFINITIONS.values():
+        properties = definition.input_schema.get("properties")
+        assert isinstance(properties, dict)
+        for arg in definition.path_args:
+            assert arg in properties, f"{definition.name} declares '{arg}' but its schema has no such property"
 
 
 def test_every_registered_builtin_is_named_by_the_enum():
@@ -34,6 +66,19 @@ def test_every_registered_builtin_is_named_by_the_enum():
 def test_qualified_is_the_subscription_form():
     assert BuiltinTool.DELETE_FILE.qualified == "builtin/delete_file"
     assert ToolSubscription(qualified_name=BuiltinTool.DELETE_FILE.qualified).is_builtin
+
+
+def test_result_enums_serialize_as_their_bare_wire_values():
+    # These land in a persisted ToolResult and are read back by name, so adopting
+    # an enum for them must not have changed a single byte of that JSON.
+    result = ToolResult(
+        tool_name=BuiltinTool.DELETE_DIR,
+        success=True,
+        output={"outcome": DeleteOutcome.TRASHED, "kind": FsEntryKind.DIR},
+    )
+
+    assert '"outcome":"trashed"' in result.model_dump_json()
+    assert '"kind":"dir"' in result.model_dump_json()
 
 
 def test_members_are_their_wire_names():

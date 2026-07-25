@@ -6,6 +6,7 @@ from pathlib import Path
 from arcana.tools.adapters.mcp import MCPToolAdapter
 from arcana.tools.registry import MCPRegistry
 from arcana.types.tool import (
+    BuiltinTool,
     MCPServerConfig,
     MCPServerStatus,
     ToolDefinition,
@@ -47,11 +48,11 @@ def _connected_server(name: str = "test-mcp", tool_name: str = "do_thing") -> MC
 # ---------------------------------------------------------------------------
 
 
-def test_builtins_exactly_seven_tools(tmp_path):
+def test_builtins_are_the_whole_enum(tmp_path):
     reg = _make_registry(tmp_path)
     reg.load()
     tools = [t for t in reg.list_all_tools() if t.type == ToolType.BUILTIN]
-    assert len(tools) == 7
+    assert len(tools) == len(BuiltinTool)
 
 
 def test_builtin_names_are_correct(tmp_path):
@@ -65,6 +66,10 @@ def test_builtin_names_are_correct(tmp_path):
         "read_file",
         "write_file",
         "delete_file",
+        "make_dir",
+        "move",
+        "copy",
+        "delete_dir",
         "run_code",
     }
 
@@ -230,7 +235,7 @@ def test_list_all_tools_includes_builtins_only_when_no_servers(tmp_path):
     reg = _make_registry(tmp_path)
     reg.load()
     tools = reg.list_all_tools()
-    assert len(tools) == 7  # only builtins
+    assert len(tools) == len(BuiltinTool)  # only builtins
     assert all(t.type == ToolType.BUILTIN for t in tools)
 
 

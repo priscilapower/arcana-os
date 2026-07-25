@@ -26,7 +26,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 #: Per-agent directory the filesystem tools are jailed to, under the agent's home.
 WORKSPACE_DIR_NAME = "workspace"
 
-#: Where ``delete_file`` moves a file instead of unlinking it, inside the workspace.
+#: Where the delete tools move what they remove instead of unlinking it, inside
+#: the workspace. ``delete_file`` lands one file here; ``delete_dir`` lands a
+#: whole subtree as a single entry.
 TRASH_DIR_NAME = ".trash"
 
 
@@ -54,8 +56,9 @@ class FsToolsTunables(BaseSettings):
     # symlink swapped in after the path was canonicalized cannot redirect the I/O.
     follow_symlinks: bool = False
 
-    # Off by default: delete_file moves the file into the workspace trash instead
-    # of unlinking it, so an errant agent delete stays recoverable.
+    # Off by default: the delete tools move their target into the workspace trash
+    # instead of unlinking it, so an errant agent delete stays recoverable. This
+    # matters most for delete_dir, which removes a whole subtree at once.
     hard_delete: bool = False
 
     # Entries returned by one list_dir. A listing past this is truncated and
@@ -65,6 +68,17 @@ class FsToolsTunables(BaseSettings):
     # Bound on the trash directory. The oldest entries are pruned once a delete
     # pushes the count past this, so soft-deletes cannot grow without limit.
     trash_max_entries: int = Field(default=100, gt=0)
+
+    # Aggregate bounds on a single tree operation (copy, recursive delete, the
+    # cross-filesystem move fallback). The per-file caps above bound one write;
+    # these bound the amplification a recursive op adds on top — a `cp -r` of a
+    # million-file tree exhausting disk or inodes.
+    max_tree_bytes: int = Field(default=256 * 1024 * 1024, gt=0)  # 256 MiB
+    max_file_count: int = Field(default=10_000, gt=0)
+
+    # Directory recursion depth, and the intermediates one make_dir(parents=True)
+    # may create — so a pathological ``a/a/a/…`` cannot mint thousands of dirs.
+    max_depth: int = Field(default=32, gt=0)
 
 
 FS_TOOLS_TUNABLES = FsToolsTunables()
@@ -76,6 +90,9 @@ DEFAULT_FOLLOW_SYMLINKS = FS_TOOLS_TUNABLES.follow_symlinks
 DEFAULT_HARD_DELETE = FS_TOOLS_TUNABLES.hard_delete
 DEFAULT_MAX_LIST_ENTRIES = FS_TOOLS_TUNABLES.max_list_entries
 DEFAULT_TRASH_MAX_ENTRIES = FS_TOOLS_TUNABLES.trash_max_entries
+DEFAULT_MAX_TREE_BYTES = FS_TOOLS_TUNABLES.max_tree_bytes
+DEFAULT_MAX_FILE_COUNT = FS_TOOLS_TUNABLES.max_file_count
+DEFAULT_MAX_DEPTH = FS_TOOLS_TUNABLES.max_depth
 
 
 def _split_roots(raw: str) -> list[Path]:
@@ -110,6 +127,9 @@ class FsToolsConfig(BaseModel):
     hard_delete: bool = DEFAULT_HARD_DELETE
     max_list_entries: int = Field(default=DEFAULT_MAX_LIST_ENTRIES, gt=0)
     trash_max_entries: int = Field(default=DEFAULT_TRASH_MAX_ENTRIES, gt=0)
+    max_tree_bytes: int = Field(default=DEFAULT_MAX_TREE_BYTES, gt=0)
+    max_file_count: int = Field(default=DEFAULT_MAX_FILE_COUNT, gt=0)
+    max_depth: int = Field(default=DEFAULT_MAX_DEPTH, gt=0)
 
     @classmethod
     def for_agent(cls, agent_id: UUID | None, *, home: Path | None = None) -> "FsToolsConfig":

@@ -23,7 +23,7 @@ from arcana.tools.adapters.base import BuiltinToolAdapter, ToolAdapter
 from arcana.tools.adapters.mcp import MCPToolAdapter
 from arcana.tools.builtins.fs.config import FsToolsConfig
 from arcana.tools.config import DEFAULT_TOOL_TIMEOUT_S
-from arcana.tools.guardrails import ActiveGuardrails, enforce
+from arcana.tools.guardrails import ActiveGuardrails, enforce, path_args_for
 from arcana.tools.registry import MCPRegistry, get_mcp_registry
 from arcana.types.guardrails import GuardrailRule, GuardrailViolationError
 from arcana.types.tool import ToolDefinition, ToolResult, ToolSubscription
@@ -244,10 +244,13 @@ class ToolGateway:
     ) -> None:
         """Append a ``GuardrailViolationEvent`` for the audit trail.
 
-        Only the target path is carried over from ``args`` — a ``write_file``
-        violation must not spill the file's contents into the audit log.
+        Only the tool's path arguments are carried over from ``args`` — a
+        ``write_file`` violation must not spill the file's contents into the
+        audit log. A two-path tool records both, since which of them tripped the
+        rule is exactly what makes the entry worth reading.
         """
-        target = args.get("path")
+        supplied = [args.get(arg) for arg in path_args_for(name)]
+        target = " → ".join(value for value in supplied if isinstance(value, str))
         emit_guardrail_violation(
             GuardrailViolationEvent(
                 agent_id=guardrails.agent_id,
@@ -256,7 +259,7 @@ class ToolGateway:
                 severity=rule.severity,
                 reason=reason,
                 blocked=blocked,
-                target=target if isinstance(target, str) else "",
+                target=target,
                 description=rule.description,
             )
         )

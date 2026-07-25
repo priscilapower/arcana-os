@@ -38,6 +38,10 @@ class BuiltinTool(StrEnum):
     LIST_DIR = "list_dir"
     WRITE_FILE = "write_file"
     DELETE_FILE = "delete_file"
+    MAKE_DIR = "make_dir"
+    MOVE = "move"
+    COPY = "copy"
+    DELETE_DIR = "delete_dir"
     RUN_CODE = "run_code"
 
     @property
@@ -48,6 +52,37 @@ class BuiltinTool(StrEnum):
         writes in ``tool_subscriptions`` or a ``DENY_TOOL`` rule.
         """
         return f"{BUILTIN_NAMESPACE}/{self}"
+
+
+class FsEntryKind(StrEnum):
+    """What a filesystem entry is, classified without following symlinks.
+
+    The filesystem builtins branch on this in three places — the listing that
+    describes an entry, the guarded walk that decides whether to descend it, and
+    the handlers that decide whether to copy or skip it — and it is written into
+    ``list_dir``'s output. A symlink keeps its own identity here rather than
+    reporting its target's, so nothing ever implies the jail reaches further
+    than it does; ``OTHER`` covers a FIFO, socket, or device node.
+    """
+
+    FILE = "file"
+    DIR = "dir"
+    SYMLINK = "symlink"
+    OTHER = "other"
+
+
+class DeleteOutcome(StrEnum):
+    """What a delete actually did to its target.
+
+    ``TRASHED`` is recoverable — the target was moved into the workspace trash
+    and can be retrieved — while ``DELETED`` is not. That distinction is the
+    whole point of the soft-delete default, and it is what a caller reads to
+    decide whether to offer an undo, so it travels as a named value rather than
+    as a string spelled once per delete tool.
+    """
+
+    TRASHED = "trashed"
+    DELETED = "deleted"
 
 
 class ToolStatus(StrEnum):
@@ -73,6 +108,14 @@ class ToolDefinition(BaseModel):
     type: ToolType = ToolType.BUILTIN
     mcp_server_name: str | None = None  # e.g. "notion-mcp"
     status: ToolStatus = ToolStatus.ACTIVE
+
+    # Which arguments of this tool carry a filesystem path. A path-scoping
+    # guardrail has to check every one of them: a two-path tool is only as
+    # confined as its weaker argument, so ``move`` declaring ``("src", "dst")``
+    # is what stops a scope from being satisfied by ``src`` alone. Empty for a
+    # tool whose arguments are not paths, and for MCP tools, whose argument
+    # names we do not own.
+    path_args: list[str] = []
 
     @property
     def qualified_name(self) -> str:

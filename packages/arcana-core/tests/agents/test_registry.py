@@ -41,6 +41,10 @@ def test_create_seeds_guardrails_from_the_card_archetype(tmp_registry: AgentRegi
     assert set(denied[0].values()) == {
         BuiltinTool.WRITE_FILE.qualified,
         BuiltinTool.DELETE_FILE.qualified,
+        BuiltinTool.MAKE_DIR.qualified,
+        BuiltinTool.MOVE.qualified,
+        BuiltinTool.COPY.qualified,
+        BuiltinTool.DELETE_DIR.qualified,
         BuiltinTool.RUN_CODE.qualified,
     }
 

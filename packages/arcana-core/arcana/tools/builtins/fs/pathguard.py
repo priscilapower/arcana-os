@@ -1,7 +1,7 @@
 """The path-jail shared by the filesystem builtins — the FS analog of the egress guard.
 
-``read_file`` / ``write_file`` / ``delete_file`` all take a path chosen by the
-model, so a hallucinated or injected argument can point at ``../../../etc/passwd``,
+Every filesystem builtin takes a path chosen by the model — two of them take
+*two* — so a hallucinated or injected argument can point at ``../../../etc/passwd``,
 ``~/.ssh/id_rsa``, ``~/.arcana/secrets/…``, or a symlink aimed out of the intended
 directory. This module is the always-on floor that makes those calls safe to *run*:
 
@@ -32,6 +32,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from arcana.types.tool import FsEntryKind
+
 
 class PathBlocked(Exception):
     """A path was refused before any filesystem access. ``reason`` is model-safe."""
@@ -43,36 +45,37 @@ class PathBlocked(Exception):
 
 @dataclass(frozen=True, slots=True)
 class ListedEntry:
-    """One entry in a directory listing, classified without following symlinks.
-
-    ``kind`` is ``file``, ``dir``, ``symlink``, or ``other`` (a FIFO, socket, or
-    device node). A symlink keeps its own identity rather than reporting its
-    target's, so a listing never implies the jail reaches further than it does.
-    """
+    """One entry in a directory listing, classified without following symlinks."""
 
     name: str
-    kind: str
+    kind: FsEntryKind
     size: int
+
+
+def _classify(mode: int) -> FsEntryKind:
+    """The kind an ``lstat`` mode names — a symlink stays a symlink.
+
+    Order matters: the symlink test comes first, because a link to a directory
+    reports both ``S_ISLNK`` and (via a following ``stat``) ``S_ISDIR``, and a
+    walk that read it as a directory would descend it.
+    """
+    if stat.S_ISLNK(mode):
+        return FsEntryKind.SYMLINK
+    if stat.S_ISDIR(mode):
+        return FsEntryKind.DIR
+    if stat.S_ISREG(mode):
+        return FsEntryKind.FILE
+    return FsEntryKind.OTHER
 
 
 def _describe(entry: os.DirEntry[str]) -> ListedEntry:
     """Classify a scanned entry by its own ``lstat``, never its target's."""
     try:
-        mode = entry.stat(follow_symlinks=False).st_mode
-        size = entry.stat(follow_symlinks=False).st_size
+        info = entry.stat(follow_symlinks=False)
     except OSError:
         # Vanished mid-scan, or unreadable — name it and move on.
-        return ListedEntry(name=entry.name, kind="other", size=0)
-
-    if stat.S_ISLNK(mode):
-        kind = "symlink"
-    elif stat.S_ISDIR(mode):
-        kind = "dir"
-    elif stat.S_ISREG(mode):
-        kind = "file"
-    else:
-        kind = "other"
-    return ListedEntry(name=entry.name, kind=kind, size=size)
+        return ListedEntry(name=entry.name, kind=FsEntryKind.OTHER, size=0)
+    return ListedEntry(name=entry.name, kind=_classify(info.st_mode), size=info.st_size)
 
 
 def canonical_path(raw: str | Path) -> Path:
@@ -120,7 +123,7 @@ class PathGuard:
         """The canonical roots this guard confines access to."""
         return list(self._roots)
 
-    def resolve(self, raw: object, *, for_write: bool = False) -> Path:
+    def resolve(self, raw: object, *, for_write: bool = False, allow_dir: bool = False) -> Path:
         """Canonicalize ``raw`` and confine it to an allowed root.
 
         A relative path is anchored to the **primary root** — the agent's own
@@ -136,6 +139,11 @@ class PathGuard:
         argument is not a usable path, when no root is configured at all, when
         the canonical path escapes every root, or — for a write — when it names
         an existing directory.
+
+        ``allow_dir`` lifts only that last check, for the operations whose
+        target legitimately *is* a directory. Containment is unaffected: the
+        directory operations are confined on exactly the same terms as the file
+        ones, and a caller that forgets the flag fails closed rather than open.
         """
         if not isinstance(raw, str) or not raw.strip():
             raise PathBlocked("missing 'path'")
@@ -148,9 +156,18 @@ class PathGuard:
         resolved = canonical_path(candidate)
         if not any(is_within(resolved, root) for root in self._roots):
             raise PathBlocked("path outside allowed roots")
-        if for_write and resolved.is_dir():
+        if for_write and not allow_dir and resolved.is_dir():
             raise PathBlocked("path is a directory")
         return resolved
+
+    def is_root(self, path: Path) -> bool:
+        """True if ``path`` *is* one of the allowed roots rather than inside one.
+
+        The jail roots are the floor a recursive delete must not remove: an agent
+        may empty its workspace's contents, but deleting the workspace itself
+        would take the jail — and the trash inside it — with it.
+        """
+        return any(path == root for root in self._roots)
 
     def root_for(self, path: Path) -> Path:
         """The allowed root containing ``path`` — the first one that matches.
@@ -202,23 +219,35 @@ class PathGuard:
             tmp.unlink(missing_ok=True)
             raise
 
-    def list_entries(self, path: Path, max_entries: int) -> tuple[list[ListedEntry], bool]:
-        """List one directory level; the second value flags truncation.
+    def scan(self, path: Path) -> list[ListedEntry]:
+        """Enumerate and classify one directory level, sorted by name.
 
-        Enumerates through an ``O_NOFOLLOW`` **directory** descriptor, so the
-        same swapped-symlink race :meth:`read_bytes` closes is closed here too,
-        and each entry is classified with ``lstat`` — a symlink is reported *as*
-        a symlink rather than followed, so a link out of the jail is described
-        but never traversed. Names are sorted for a stable, diffable listing.
-        Non-recursive: subdirectories are named, never descended into.
+        Scanning the *descriptor* rather than the path is what makes a recursive
+        walk safe: the directory being read is the one the type check passed, so
+        a symlink swapped in for it between the check and the read cannot
+        redirect the enumeration into another tree.
+
+        Each entry is classified before the descriptor closes. ``os.DirEntry``
+        stats lazily and *relative to the descriptor it came from*, so an entry
+        handed back unresolved would answer every question with an error once
+        the descriptor is gone — silently, as "some other kind of file".
         """
         fd = self._open_checked(path, os.O_RDONLY, directory=True)
         try:
-            entries = sorted(os.scandir(fd), key=lambda entry: entry.name)
-            listed = [_describe(entry) for entry in entries[:max_entries]]
+            return sorted((_describe(entry) for entry in os.scandir(fd)), key=lambda entry: entry.name)
         finally:
             os.close(fd)
-        return listed, len(entries) > max_entries
+
+    def list_entries(self, path: Path, max_entries: int) -> tuple[list[ListedEntry], bool]:
+        """List one directory level; the second value flags truncation.
+
+        Each entry is classified with ``lstat`` — a symlink is reported *as* a
+        symlink rather than followed, so a link out of the jail is described but
+        never traversed. Non-recursive: subdirectories are named, never
+        descended into.
+        """
+        entries = self.scan(path)
+        return entries[:max_entries], len(entries) > max_entries
 
     def _open_checked(self, path: Path, flags: int, *, directory: bool = False) -> int:
         """Open ``path`` with the symlink and file-type checks applied.
