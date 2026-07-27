@@ -25,9 +25,25 @@ from arcana.tools.adapters.base import ToolAdapter
 from arcana.tools.adapters.mcp import SessionFactory
 from arcana.tools.builtins.fs.config import FsToolsConfig
 from arcana.tools.builtins.fs.handlers import FsTools
+from arcana.tools.registry import MCPRegistry
 from arcana.types.tool import MCPServerConfig, ToolDefinition, ToolResult, ToolType
 
 PUBLIC_IP = "93.184.216.34"
+
+
+def seed_mcp_registry(*servers: MCPServerConfig) -> MCPRegistry:
+    """An in-memory registry: builtins plus the given servers, no disk, no connect.
+
+    The one place the registry's private slots are seeded for a test, so the many
+    modules that need "builtins + one fake server, resolvable" stop each poking
+    ``_register_builtins`` / ``_servers`` / ``_loaded`` by hand.
+    """
+    registry = MCPRegistry()
+    registry._register_builtins()
+    for server in servers:
+        registry._servers[server.name] = server
+    registry._loaded = True
+    return registry
 
 
 class EchoAdapter(ToolAdapter):
@@ -51,6 +67,38 @@ class EchoAdapter(ToolAdapter):
 
     async def execute(self, name: str, args: dict[str, Any]) -> ToolResult:
         return ToolResult(tool_name=name, success=True, output=args.get("message", ""))
+
+
+class RecordingAdapter(ToolAdapter):
+    """A builtin adapter that records every ``execute`` — to prove a *denied* call
+    never runs.
+
+    ``executed`` is the ordered list of tool names the gateway actually routed
+    here; a permission or guardrail test asserts it stays empty when a call is
+    refused, which is the "adapter never performs the action" half of a block.
+    Provides a single tool, ``probe`` by default, so the offered/dispatched name
+    is under the test's control.
+    """
+
+    type = ToolType.BUILTIN
+
+    def __init__(self, tool_name: str = "probe") -> None:
+        self.tool_name = tool_name
+        self.executed: list[str] = []
+
+    def provides(self) -> list[ToolDefinition]:
+        return [
+            ToolDefinition(
+                name=self.tool_name,
+                description="records that it ran",
+                input_schema={"type": "object", "properties": {}},
+                type=ToolType.BUILTIN,
+            )
+        ]
+
+    async def execute(self, name: str, args: dict[str, Any]) -> ToolResult:
+        self.executed.append(name)
+        return ToolResult(tool_name=name, success=True, output="ran")
 
 
 def make_mock_client(handler: Any) -> httpx.AsyncClient:

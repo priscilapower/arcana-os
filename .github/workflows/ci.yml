@@ -36,11 +36,47 @@ jobs:
       - name: Type check - arcana-cli
         run: uv run pyright packages/arcana-cli/arcana_cli
 
-      - name: Unit tests — arcana-core
-        run: uv run pytest packages/arcana-core/tests/ -v -m "not llm_eval"
+      # Fast default tier: fully mocked and deterministic — no real process,
+      # network, or MCP server. The `slow` sandbox tests run in their own job.
+      - name: Unit tests — arcana-core (fast tier)
+        run: uv run pytest packages/arcana-core/tests/ -v -m "not llm_eval and not slow"
 
-      - name: Unit tests — arcana-cli
-        run: uv run pytest packages/arcana-cli/tests/ -v -m "not llm_eval"
+      - name: Unit tests — arcana-cli (fast tier)
+        run: uv run pytest packages/arcana-cli/tests/ -v -m "not llm_eval and not slow"
+
+      # The security catalog + guard-has-test presence check as its own gate, so
+      # a new tool that ships without an adversarial test can't merge.
+      - name: Security regression gate
+        run: uv run pytest packages/arcana-core/tests/tools/security/ -v -m security
+
+      # Line floor on the tool surface (tools/** + guardrails.py), measured over
+      # the whole tool suite including the slow sandbox tier.
+      - name: Tool coverage floor
+        run: >-
+          uv run pytest packages/arcana-core/tests/tools/ packages/arcana-core/tests/agents/
+          -m "not llm_eval" -o addopts=""
+          --cov=arcana.tools --cov-report=term-missing --cov-fail-under=90
+
+  sandbox:
+    name: Slow tier — real sandbox
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --all-packages --all-extras
+
+      # The one tier that spawns real subprocess sandboxes. Backend-specific tests
+      # (bwrap/container) self-skip with a loud reason when the binary is absent.
+      - name: Slow sandbox tests
+        run: uv run pytest packages/arcana-core/tests/ -v -m "slow"
 
   docs:
     name: Docs build

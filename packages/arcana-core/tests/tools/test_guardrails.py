@@ -530,6 +530,7 @@ async def test_run_command_baseline_blocklist_blocks_before_dispatch(
     assert events[0]["agent_id"] == "agent-1"
 
 
+@pytest.mark.slow
 async def test_run_command_baseline_allows_a_benign_command(tmp_path: Path):
     # Nothing in the baseline matches a plain echo, so it runs end-to-end.
     adapter = _shell_adapter(tmp_path)

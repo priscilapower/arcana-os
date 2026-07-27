@@ -79,6 +79,7 @@ async def test_a_blank_command_is_refused(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 async def test_enabled_run_returns_the_structured_result(tmp_path: Path):
     result = await _enabled(tmp_path).run_command({"command": "echo hello"})
     assert result.success is True
@@ -89,6 +90,7 @@ async def test_enabled_run_returns_the_structured_result(tmp_path: Path):
     assert result.output["truncated"] is False
 
 
+@pytest.mark.slow
 async def test_a_non_bash_shell_runs_with_a_plain_dash_c(tmp_path: Path):
     # The bash-only --noprofile/--norc flags are dropped for another shell, so a
     # POSIX sh runs the command via a plain -c instead of erroring on the flags.
@@ -98,6 +100,7 @@ async def test_a_non_bash_shell_runs_with_a_plain_dash_c(tmp_path: Path):
     assert result.output["exit_code"] == 0
 
 
+@pytest.mark.slow
 async def test_a_pipeline_of_commands_runs(tmp_path: Path):
     # The whole reason for a shell tool: pipes and multiple programs in one string.
     result = await _enabled(tmp_path).run_command({"command": "printf 'a\\nb\\nc\\n' | grep b"})
@@ -105,6 +108,7 @@ async def test_a_pipeline_of_commands_runs(tmp_path: Path):
     assert result.output["stdout"].strip() == "b"
 
 
+@pytest.mark.slow
 async def test_a_nonzero_exit_is_a_success_carrying_the_code(tmp_path: Path):
     # A failing command is data the model reads, not a tool failure.
     result = await _enabled(tmp_path).run_command({"command": "exit 3"})
@@ -112,6 +116,7 @@ async def test_a_nonzero_exit_is_a_success_carrying_the_code(tmp_path: Path):
     assert result.output["exit_code"] == 3
 
 
+@pytest.mark.slow
 async def test_stderr_is_captured_separately(tmp_path: Path):
     result = await _enabled(tmp_path).run_command({"command": "echo oops 1>&2"})
     assert result.success is True
@@ -119,6 +124,7 @@ async def test_stderr_is_captured_separately(tmp_path: Path):
     assert result.output["stdout"].strip() == ""
 
 
+@pytest.mark.slow
 async def test_the_command_runs_in_the_agent_workspace(tmp_path: Path):
     workspace = tmp_path / "ws"
     result = await _enabled(workspace).run_command({"command": "pwd"})
@@ -128,6 +134,7 @@ async def test_the_command_runs_in_the_agent_workspace(tmp_path: Path):
     assert workspace.is_dir()
 
 
+@pytest.mark.slow
 async def test_file_effects_land_in_the_workspace(tmp_path: Path):
     # run_command shares the filesystem builtins' workspace, so what it writes is
     # there afterwards (no throwaway scratch, unlike run_code).
@@ -136,6 +143,7 @@ async def test_file_effects_land_in_the_workspace(tmp_path: Path):
     assert (tmp_path / "artifact.txt").read_text().strip() == "data"
 
 
+@pytest.mark.slow
 async def test_the_child_environment_holds_no_host_secret(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # NFR2: the command gets exactly the scrubbed env, never the parent's — a
     # secret in Arcana's own environment must be unreachable, and PATH is the
@@ -148,12 +156,14 @@ async def test_the_child_environment_holds_no_host_secret(tmp_path: Path, monkey
     assert lines[1] == "path=/usr/bin:/bin"  # only the controlled PATH
 
 
+@pytest.mark.slow
 async def test_a_timeout_kills_the_command_and_flags_it(tmp_path: Path):
     result = await _enabled(tmp_path, timeout_s=0.5).run_command({"command": "sleep 30"})
     assert result.success is True
     assert result.output["timed_out"] is True
 
 
+@pytest.mark.slow
 async def test_a_backgrounded_child_is_killed_with_the_group(tmp_path: Path):
     # A command that backgrounds a long sleep is taken down with the whole process
     # group on timeout, not left leaking.
@@ -165,6 +175,7 @@ async def test_a_backgrounded_child_is_killed_with_the_group(tmp_path: Path):
     assert _time.monotonic() - started < 10
 
 
+@pytest.mark.slow
 async def test_output_over_the_cap_is_truncated(tmp_path: Path):
     result = await _enabled(tmp_path, max_output_bytes=1000).run_command({"command": "yes x | head -n 100000"})
     assert result.success is True
@@ -172,6 +183,7 @@ async def test_output_over_the_cap_is_truncated(tmp_path: Path):
     assert len(result.output["stdout"].encode()) <= 1000
 
 
+@pytest.mark.slow
 async def test_a_model_requested_timeout_cannot_exceed_the_ceiling(tmp_path: Path):
     # The model may ask for a shorter run, never a longer one.
     result = await _enabled(tmp_path, timeout_s=0.5).run_command({"command": "sleep 30", "timeout_s": 30})

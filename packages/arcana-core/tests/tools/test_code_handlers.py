@@ -89,6 +89,7 @@ async def test_a_language_outside_the_allowed_set_is_refused():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 async def test_enabled_run_returns_the_structured_result():
     result = await _enabled().run_code({"code": "print('hi')"})
     assert result.success is True
@@ -99,6 +100,7 @@ async def test_enabled_run_returns_the_structured_result():
     assert result.output["truncated"] is False
 
 
+@pytest.mark.slow
 async def test_a_model_requested_timeout_cannot_exceed_the_ceiling():
     # The model may ask for a shorter run, never a longer one: a request above the
     # operator ceiling is clamped, so a 30s request against a 0.5s cap still times
@@ -109,6 +111,7 @@ async def test_a_model_requested_timeout_cannot_exceed_the_ceiling():
     assert result.output["timed_out"] is True
 
 
+@pytest.mark.slow
 async def test_the_scratch_workspace_is_cleaned_up(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("arcana.tools.builtins.code.handlers.tempfile.mkdtemp", lambda **_: str(tmp_path / "scratch"))
     (tmp_path).mkdir(exist_ok=True)
