@@ -63,6 +63,7 @@ lane and gate the rest:
 | _(none)_ | fast, fully-mocked unit + integration tests | `make test-fast` |
 | `integration` | cross-slice `Agent.run` over the tool gateway (still mocked) | `pytest -m integration` |
 | `security` | the security-regression catalog + guard-has-test presence check | `make test-security` |
+| `contract` | pins a stable shape (no-subscription run, `ToolResult`, single-source schema) | `pytest -m contract` |
 | `slow` | spawns a real subprocess/sandbox — gated out of the default lane | `make test-slow` |
 | `llm_eval` | needs a live LLM/embedding backend | `pytest -m llm_eval` |
 
