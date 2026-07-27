@@ -270,15 +270,15 @@ def test_stdio_requires_command():
 def test_sse_requires_https_for_remote():
     adapter = MCPToolAdapter(MCPServerConfig(name="remote", server_url="http://mcp.example.com/sse"))
     with pytest.raises(ValueError, match="https"):
-        adapter._sse_url()  # pyright: ignore[reportPrivateUsage]
+        adapter._remote_url()  # pyright: ignore[reportPrivateUsage]
 
 
 def test_sse_allows_http_for_loopback():
     adapter = MCPToolAdapter(MCPServerConfig(name="local", server_url="http://127.0.0.1:9000/sse"))
-    assert adapter._sse_url() == "http://127.0.0.1:9000/sse"  # pyright: ignore[reportPrivateUsage]
+    assert adapter._remote_url() == "http://127.0.0.1:9000/sse"  # pyright: ignore[reportPrivateUsage]
 
 
-def test_sse_auth_header_from_keyring(monkeypatch: pytest.MonkeyPatch):
+async def test_sse_auth_header_from_keyring(monkeypatch: pytest.MonkeyPatch):
     seen: dict[str, str] = {}
 
     def fake_get_password(service: str, ref: str) -> str:
@@ -290,7 +290,7 @@ def test_sse_auth_header_from_keyring(monkeypatch: pytest.MonkeyPatch):
     cfg = _cfg(auth_key_ref="notion_mcp_token")
     adapter = MCPToolAdapter(cfg)
 
-    headers = adapter._auth_headers()  # pyright: ignore[reportPrivateUsage]
+    headers = await adapter._auth_headers()  # pyright: ignore[reportPrivateUsage]
 
     assert headers == {"Authorization": "Bearer secret-token"}
     assert seen == {"service": "arcana", "ref": "notion_mcp_token"}
@@ -298,9 +298,9 @@ def test_sse_auth_header_from_keyring(monkeypatch: pytest.MonkeyPatch):
     assert "secret-token" not in cfg.model_dump_json()
 
 
-def test_sse_no_auth_header_without_ref():
+async def test_sse_no_auth_header_without_ref():
     adapter = MCPToolAdapter(_cfg())
-    assert adapter._auth_headers() is None  # pyright: ignore[reportPrivateUsage]
+    assert await adapter._auth_headers() is None  # pyright: ignore[reportPrivateUsage]
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ from arcana.types.card import Card
 from arcana.types.tool import (
     MCPServerConfig,
     MCPServerStatus,
+    MCPTransport,
     ToolDefinition,
     ToolStatus,
     ToolType,
@@ -60,6 +61,18 @@ def _tool(name: str, *, server: str = "notion-mcp", desc: str = "Search pages") 
     )
 
 
+@pytest.fixture(autouse=True)
+def no_oauth_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default: a URL server advertises no OAuth, so ``add`` stays on the static
+    path — keeping these tests hermetic (no network probe). OAuth-specific tests
+    override this stub explicitly."""
+
+    async def _no_probe(_url: str) -> None:
+        return None
+
+    monkeypatch.setattr(mcp_mod, "probe_oauth", _no_probe)
+
+
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point the CLI at a temp ARCANA_HOME and stub out keyring writes."""
@@ -92,6 +105,49 @@ def test_mcp_add_sse_discovers_and_persists(home, monkeypatch):
     assert server["transport"] == "sse"
     assert server["status"] == "connected"
     assert [t["name"] for t in server["discovered_tools"]] == ["search_pages"]
+
+
+def test_mcp_login_refreshes_token_for_existing_oauth_server(home, monkeypatch):
+    from datetime import UTC, datetime
+
+    from arcana.types.auth import AuthType, OAuthConfig, OAuthToken
+
+    cfg = OAuthConfig(issuer="https://auth.example.com", client_id="c1")
+    _seed_server(
+        home,
+        MCPServerConfig(
+            name="notion-mcp",
+            server_url="https://mcp.notion.com/mcp",
+            transport=MCPTransport.HTTP,
+            auth_type=AuthType.OAUTH,
+            oauth_config=cfg,
+            auth_key_ref="mcp_notion-mcp_auth",
+            status=MCPServerStatus.CONNECTED,
+        ),
+    )
+    monkeypatch.setattr("arcana.tools.registry.MCPToolAdapter", _fake_adapter([_tool("search_pages")]))
+
+    saved: dict[str, str] = {}
+    monkeypatch.setattr("keyring.set_password", lambda s, r, v: saved.__setitem__(r, v))
+
+    async def _fake_sign_in(config, *, device, console, client_factory=None):
+        return OAuthToken(
+            access_token="fresh", refresh_token="r2", expires_at=datetime(2999, 1, 1, tzinfo=UTC)
+        ), config
+
+    monkeypatch.setattr(mcp_mod, "sign_in", _fake_sign_in)
+
+    result = runner.invoke(app, ["mcp", "login", "notion-mcp"])
+    assert result.exit_code == 0, result.output
+    assert "Signed in" in result.output
+    assert "fresh" in saved["mcp_notion-mcp_auth"]  # token refreshed in keyring
+
+
+def test_mcp_login_rejects_non_oauth_server(home):
+    _seed_server(home, MCPServerConfig(name="local", command="my-server"))
+    result = runner.invoke(app, ["mcp", "login", "local"])
+    assert result.exit_code == 1
+    assert "does not use OAuth" in result.output
 
 
 def test_mcp_add_stdio_inferred_from_command(home, monkeypatch):

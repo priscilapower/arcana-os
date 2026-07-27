@@ -6,7 +6,11 @@ import tempfile
 from pathlib import Path
 from uuid import UUID
 
+from arcana.auth import delete_token as _delete_token
+from arcana.auth import load_token as _load_token
+from arcana.auth import save_token as _save_token
 from arcana.types._utils import now_utc
+from arcana.types.auth import OAuthToken
 from arcana.types.model import ModelConnection, ModelProvider
 
 
@@ -143,6 +147,24 @@ class ConnectionStore:
             keyring.delete_password("arcana", ref)
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # OAuth token helpers — the config on disk references the token by ``ref``;
+    # the bundle itself lives only in the keyring. ``resolve_api_key`` (the
+    # static-secret path) is deliberately untouched.
+    # ------------------------------------------------------------------
+
+    def store_token(self, ref: str, token: OAuthToken) -> None:
+        """Serialize an OAuthToken to the keyring under ``ref`` (never to JSON)."""
+        _save_token(ref, token)
+
+    def get_token(self, ref: str) -> OAuthToken | None:
+        """Load the OAuthToken stored under ``ref``, or ``None`` if absent/corrupt."""
+        return _load_token(ref)
+
+    def delete_token(self, ref: str) -> None:
+        """Remove the OAuthToken under ``ref``. No-op if absent."""
+        _delete_token(ref)
 
     def reload(self) -> None:
         self._connections = None

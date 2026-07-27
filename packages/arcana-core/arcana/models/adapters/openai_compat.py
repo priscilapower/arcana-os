@@ -35,6 +35,7 @@ try:
 except ImportError as e:
     raise ImportError("Install arcana-core[openai] to use OpenAICompatAdapter") from e
 
+from arcana.auth import CredentialProvider
 from arcana.models.adapters.base import (
     CompletionRequest,
     CompletionResponse,
@@ -135,11 +136,14 @@ class OpenAICompatAdapter(ModelAdapter):
         base_url: str = "http://localhost:1234/v1",
         api_key: str | None = None,
         timeout: float = 120.0,
+        *,
+        credentials: CredentialProvider | None = None,
     ) -> None:
         self.model = model
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._timeout = timeout
+        self._credentials = credentials
         self._client: AsyncOpenAI | None = None
 
     def _translate(self, exc: Exception, model_id: str) -> Exception:
@@ -171,13 +175,26 @@ class OpenAICompatAdapter(ModelAdapter):
 
     def _get_client(self) -> AsyncOpenAI:
         if self._client is None:
-            key = self._api_key or os.getenv("OPENAI_API_KEY") or "not-needed"
+            # Placeholder when a provider drives per-request auth; otherwise the
+            # frozen key (or "not-needed" for keyless local endpoints).
+            key = (
+                "arcana-per-request-auth"
+                if self._credentials is not None
+                else (self._api_key or os.getenv("OPENAI_API_KEY") or "not-needed")
+            )
             self._client = AsyncOpenAI(
                 api_key=key,
                 base_url=self._base_url,
                 timeout=self._timeout,
             )
         return self._client
+
+    async def _auth_headers(self) -> dict[str, str] | None:
+        """Per-request ``Authorization: Bearer`` header, or ``None`` in legacy mode."""
+        if self._credentials is None:
+            return None
+        token = await self._credentials.get_token()
+        return {"Authorization": f"Bearer {token}"}
 
     def _build_messages(self, request: CompletionRequest) -> list[ChatCompletionMessageParam]:
         messages: list[ChatCompletionMessageParam] = []
@@ -199,10 +216,17 @@ class OpenAICompatAdapter(ModelAdapter):
             kwargs["tools"] = _to_openai_tools(request.tools)
             kwargs["tool_choice"] = "auto"
 
-        try:
-            response = await client.chat.completions.create(**kwargs)
-        except Exception as exc:
-            raise self._translate(exc, model) from exc
+        response = None
+        for attempt in (0, 1):
+            headers = await self._auth_headers()
+            try:
+                response = await client.chat.completions.create(**kwargs, extra_headers=headers)
+                break
+            except Exception as exc:
+                if await self._reauth(exc, model, attempt):
+                    continue
+                raise self._translate(exc, model) from exc
+        assert response is not None  # the loop either assigns or raises
 
         choice = response.choices[0]
         message = choice.message
@@ -239,25 +263,34 @@ class OpenAICompatAdapter(ModelAdapter):
             "stream_options": {"include_usage": True},
         }
 
-        response: AsyncStream[ChatCompletionChunk] | None = None
-        try:
-            response = await client.chat.completions.create(**kwargs)
-            async for chunk in response:
-                if chunk.choices:
-                    delta = chunk.choices[0].delta
-                    if delta and delta.content:
-                        yield ModelChunk(text=delta.content)
-                if chunk.usage:
-                    yield ModelChunk(
-                        text="",
-                        input_tokens=chunk.usage.prompt_tokens,
-                        output_tokens=chunk.usage.completion_tokens,
-                    )
-        except Exception as exc:
-            raise self._translate(exc, model) from exc
-        finally:
-            if response is not None:
-                await response.close()
+        # Reactive refresh only before the first token; the open is where an auth
+        # error surfaces, so once tokens flow the error is raised as-is.
+        for attempt in (0, 1):
+            headers = await self._auth_headers()
+            response: AsyncStream[ChatCompletionChunk] | None = None
+            started = False
+            try:
+                response = await client.chat.completions.create(**kwargs, extra_headers=headers)
+                async for chunk in response:
+                    if chunk.choices:
+                        delta = chunk.choices[0].delta
+                        if delta and delta.content:
+                            started = True
+                            yield ModelChunk(text=delta.content)
+                    if chunk.usage:
+                        yield ModelChunk(
+                            text="",
+                            input_tokens=chunk.usage.prompt_tokens,
+                            output_tokens=chunk.usage.completion_tokens,
+                        )
+                return
+            except Exception as exc:
+                if not started and await self._reauth(exc, model, attempt):
+                    continue
+                raise self._translate(exc, model) from exc
+            finally:
+                if response is not None:
+                    await response.close()
 
     async def health_check(self) -> ModelHealth:
         model = self.model

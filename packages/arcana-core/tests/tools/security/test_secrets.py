@@ -46,10 +46,10 @@ def _server() -> MCPServerConfig:
     )
 
 
-def test_the_token_resolves_into_a_header_but_the_config_dump_holds_only_the_ref(fake_keyring: None):
+async def test_the_token_resolves_into_a_header_but_the_config_dump_holds_only_the_ref(fake_keyring: None):
     adapter = MCPToolAdapter(_server())
 
-    headers = adapter._auth_headers()
+    headers = await adapter._auth_headers()
     assert headers is not None
     # The secret is used — it reaches the request as a bearer token.
     assert SECRET_TOKEN in json.dumps(dict(headers))

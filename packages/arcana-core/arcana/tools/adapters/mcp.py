@@ -1,9 +1,10 @@
 """MCPToolAdapter — a live tool surface over an external MCP server.
 
 Where ``BuiltinToolAdapter`` runs tools Arcana ships, this adapter runs tools a
-*third party* ships: it opens a session to one MCP server — over **SSE** or
-**stdio**, selected by :class:`MCPServerConfig.transport` — discovers that
-server's tools, and executes subscribed calls against a live session.
+*third party* ships: it opens a session to one MCP server — over **streamable
+HTTP**, **SSE**, or **stdio**, selected by :class:`MCPServerConfig.transport` —
+discovers that server's tools, and executes subscribed calls against a live
+session.
 
 An MCP server is third-party code and third-party context, so the safety
 envelope is part of the contract, not an afterthought:
@@ -14,9 +15,11 @@ envelope is part of the contract, not an afterthought:
 * **stdio hygiene** — the child is exec'd by argv (never a shell) with a scoped
   environment (a safe base + an explicit allowlist), never the parent's full
   env, so a subprocess is not handed every secret in the process.
-* **SSE auth from keyring** — bearer tokens are resolved from the OS keyring at
-  connect and injected as headers; they are never persisted, logged, or placed
-  on a span. Remote SSE requires ``https``.
+* **HTTP/SSE auth via one credential seam** — a bearer is resolved through a
+  shared :class:`CredentialProvider` at connect and injected as a header:
+  a static keyring token for ``api_key``, or an OAuth access token (proactively
+  refreshed, with a 401→refresh→retry) for ``oauth``. It is never persisted,
+  logged, or placed on a span, and a remote endpoint requires ``https``.
 * **Untrusted results** — tool output is size-capped and returned as data,
   never interpreted by Arcana itself.
 * **Fail closed** — a server that is down, crashes, times out, or returns
@@ -31,16 +34,26 @@ from contextlib import AsyncExitStack
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
+import httpx
 import keyring
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import get_default_environment, stdio_client
+from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult, ContentBlock, EmbeddedResource, ImageContent, ListToolsResult, TextContent
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from arcana.auth import (
+    KEYRING_SERVICE,
+    ApiKeyCredentialProvider,
+    AuthError,
+    CredentialProvider,
+    OAuthCredentialProvider,
+)
 from arcana.observability import get_current_span
 from arcana.tools.adapters.base import ToolAdapter
+from arcana.types.auth import AuthType
 from arcana.types.tool import (
     MCPServerConfig,
     MCPTransport,
@@ -50,11 +63,41 @@ from arcana.types.tool import (
     ToolType,
 )
 
-# Keyring service namespace, shared with the model connection store so a user's
-# MCP token lives beside their model credentials under one OS keychain entry set.
-# Public so the CLI that *writes* an MCP token uses the same namespace this
+# ``KEYRING_SERVICE`` ("arcana") is re-exported from :mod:`arcana.auth` so a
+# user's MCP token lives beside their model credentials under one OS keychain
+# namespace, and the CLI that *writes* a token uses the same namespace this
 # adapter *reads* from — the two must never drift.
-KEYRING_SERVICE = "arcana"
+__all__ = ["KEYRING_SERVICE", "MCPToolAdapter", "diff_discovered"]
+
+
+def build_mcp_credentials(cfg: MCPServerConfig) -> CredentialProvider | None:
+    """Build the credential provider for an MCP server from its ``auth_type``.
+
+    ``oauth`` → an :class:`OAuthCredentialProvider` over the keyring token bundle;
+    ``api_key`` with an ``auth_key_ref`` → an :class:`ApiKeyCredentialProvider`
+    reading the static bearer from the keyring (the preserved SSE path); no
+    reference (or a keyless local target) → ``None``, an unauthenticated transport.
+    """
+    if cfg.auth_type is AuthType.OAUTH:
+        if cfg.oauth_config is None or not cfg.auth_key_ref:
+            return None
+        return OAuthCredentialProvider(
+            cfg.oauth_config,
+            cfg.auth_key_ref,
+            service=KEYRING_SERVICE,
+            reauth_hint=f"arcana mcp login {cfg.name}",
+        )
+    if not cfg.auth_key_ref:
+        return None
+    ref = cfg.auth_key_ref
+
+    def _resolve() -> str | None:
+        try:
+            return keyring.get_password(KEYRING_SERVICE, ref)
+        except Exception:
+            return None
+
+    return ApiKeyCredentialProvider(_resolve)
 
 
 class MCPToolSettings(BaseSettings):
@@ -121,8 +164,10 @@ class MCPToolAdapter(ToolAdapter):
         cfg: MCPServerConfig,
         *,
         session_factory: SessionFactory | None = None,
+        credentials: CredentialProvider | None = None,
     ) -> None:
         self._cfg = cfg
+        self._credentials = credentials if credentials is not None else build_mcp_credentials(cfg)
         self._session_factory = session_factory or self._open
         self._session: MCPSession | None = None
         self._stack: AsyncExitStack | None = None
@@ -238,7 +283,7 @@ class MCPToolAdapter(ToolAdapter):
         anyio task-scope constraints entirely.
         """
         try:
-            session, stack = await asyncio.wait_for(self._session_factory(), timeout=MCP_CONNECT_TIMEOUT_S)
+            session, stack = await self._connect()
         except Exception as exc:
             self._healthy = False
             span.set_attribute("arcana.mcp.is_error", True)
@@ -267,6 +312,24 @@ class MCPToolAdapter(ToolAdapter):
     # Session lifecycle
     # ------------------------------------------------------------------
 
+    async def _connect(self) -> tuple[MCPSession, AsyncExitStack]:
+        """Open a session, refreshing the credential once on an auth failure.
+
+        The reactive half of the token lifecycle: a connect that fails while a
+        credential provider is present triggers a single refresh-and-retry (an
+        OAuth 401→refresh→retry). The static-key path never retries — its
+        ``on_unauthorized`` is a no-op — so its behaviour is unchanged. Bounded to
+        one extra attempt; a still-failing connect raises fail-closed.
+        """
+        for attempt in (0, 1):
+            try:
+                return await asyncio.wait_for(self._session_factory(), timeout=MCP_CONNECT_TIMEOUT_S)
+            except Exception:
+                if attempt == 0 and self._credentials is not None and await self._credentials.on_unauthorized():
+                    continue
+                raise
+        raise AuthError("unreachable")  # the loop returns or raises
+
     async def _ensure_session(self) -> MCPSession:
         """Return the live session, connecting once under a lock if needed."""
         if self._session is not None:
@@ -274,7 +337,7 @@ class MCPToolAdapter(ToolAdapter):
         async with self._connect_lock:
             if self._session is not None:
                 return self._session
-            session, stack = await asyncio.wait_for(self._session_factory(), timeout=MCP_CONNECT_TIMEOUT_S)
+            session, stack = await self._connect()
             self._session = session
             self._stack = stack
             self._healthy = True
@@ -294,8 +357,13 @@ class MCPToolAdapter(ToolAdapter):
             if self._cfg.transport is MCPTransport.STDIO:
                 read, write = await stack.enter_async_context(stdio_client(self._stdio_params()))
             elif self._cfg.transport is MCPTransport.SSE:
-                client = sse_client(self._sse_url(), headers=self._auth_headers())
+                client = sse_client(self._remote_url(), headers=await self._auth_headers())
                 read, write = await stack.enter_async_context(client)
+            elif self._cfg.transport is MCPTransport.HTTP:
+                headers = await self._auth_headers()
+                http_client = await stack.enter_async_context(httpx.AsyncClient(headers=headers or {}))
+                http = streamable_http_client(self._remote_url(), http_client=http_client)
+                read, write, _ = await stack.enter_async_context(http)
             else:
                 raise ValueError(f"unsupported MCP transport: {self._cfg.transport}")
             session = await stack.enter_async_context(ClientSession(read, write))
@@ -330,26 +398,36 @@ class MCPToolAdapter(ToolAdapter):
         env.update(self._cfg.env)
         return env
 
-    def _sse_url(self) -> str:
+    def _remote_url(self) -> str:
+        """The validated SSE/HTTP endpoint — remote must be https, loopback may be http."""
         url = self._cfg.server_url
         if not url:
-            raise ValueError("SSE transport requires 'server_url'")
+            raise ValueError(f"{self._cfg.transport.value} transport requires 'server_url'")
         host = (urlsplit(url).hostname or "").lower()
         # Remote endpoints must be https; loopback may be plain http for local dev.
         if urlsplit(url).scheme != "https" and host not in _LOOPBACK_HOSTS:
-            raise ValueError("remote SSE transport requires https")
+            raise ValueError(f"remote {self._cfg.transport.value} transport requires https")
         return url
 
-    def _auth_headers(self) -> dict[str, Any] | None:
-        """Resolve the bearer token from keyring; never persisted or logged."""
-        if not self._cfg.auth_key_ref:
+    async def _auth_headers(self) -> dict[str, str] | None:
+        """Resolve the bearer via the credential provider; never persisted or logged.
+
+        For OAuth this proactively refreshes an expiring token; for the static
+        path it reads the keyring bearer. A missing/unrefreshable credential
+        raises :class:`AuthError`, which the connect path turns into a fail-closed
+        ``ToolResult`` — never a fall-through to an unauthenticated request.
+        """
+        if self._credentials is None:
+            # A server marked ``oauth`` with no usable credential (a corrupt or
+            # partially-migrated record) must fail closed — never send an
+            # unauthenticated request in its place.
+            if self._cfg.auth_type is AuthType.OAUTH:
+                raise AuthError(
+                    f"MCP server {self._cfg.name!r} is auth_type=oauth but has no usable OAuth "
+                    f"credential — run `arcana mcp login {self._cfg.name}` to sign in."
+                )
             return None
-        try:
-            token = keyring.get_password(KEYRING_SERVICE, self._cfg.auth_key_ref)
-        except Exception:
-            token = None
-        if not token:
-            return None
+        token = await self._credentials.get_token()
         return {"Authorization": f"Bearer {token}"}
 
 

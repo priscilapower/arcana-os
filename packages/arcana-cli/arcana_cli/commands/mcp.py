@@ -6,6 +6,7 @@ keeps a reference, never a token, and no command echoes one.
 """
 
 import re
+from dataclasses import dataclass
 from typing import Any
 
 import keyring
@@ -14,8 +15,10 @@ from rich.console import Console
 from rich.table import Table
 
 from arcana.agents.registry import AgentRegistry
+from arcana.auth import load_token, save_token
 from arcana.tools.adapters.mcp import KEYRING_SERVICE
 from arcana.tools.registry import MCPRegistry
+from arcana.types.auth import AuthType, OAuthConfig
 from arcana.types.tool import (
     MCPServerConfig,
     MCPServerStatus,
@@ -23,6 +26,7 @@ from arcana.types.tool import (
     ToolStatus,
 )
 from arcana_cli._async import run_async
+from arcana_cli._oauth import probe_oauth, sign_in
 from arcana_cli._render import EXIT_ERROR, EXIT_NOT_FOUND, emit_json, truncate
 from arcana_cli.constants import AGENTS_BASE, MCPS_PATH
 from arcana_cli.ui.theme import GREEN, ORANGE, RED, TXT3, dim, err, hl, make_table, ok, warn
@@ -95,16 +99,29 @@ def _tools_table(server: MCPServerConfig) -> Table:
     return table
 
 
+def _auth_display(server: MCPServerConfig) -> str:
+    """A redacted one-line auth summary — kind + expiry, never the token itself."""
+    if server.auth_type is AuthType.OAUTH:
+        token = load_token(server.auth_key_ref) if server.auth_key_ref else None
+        if token is None:
+            return "OAuth (not signed in)"
+        if token.expires_at is None:
+            return "OAuth (token in keyring, no expiry)"
+        return f"OAuth (token in keyring, expires {token.expires_at.isoformat()})"
+    if server.auth_key_ref:
+        return f"api_key (keyring ref '{server.auth_key_ref}')"
+    return "(none)"
+
+
 def _print_server(server: MCPServerConfig) -> None:
     """Human detail for one server. Only the keyring reference is shown — the
     token itself never leaves the keychain."""
-    endpoint = server.server_url if server.transport is MCPTransport.SSE else _stdio_repr(server)
-    auth = f"keyring ref '{server.auth_key_ref}'" if server.auth_key_ref else "(none)"
+    endpoint = server.server_url if server.transport in _URL_TRANSPORTS else _stdio_repr(server)
     console.print(f"\n  {hl('Name:')}      {server.name}")
     console.print(f"  {hl('Transport:')} {server.transport.value}")
     console.print(f"  {hl('Endpoint:')}  {endpoint}")
     console.print(f"  {hl('Status:')}    {_status_markup(server.status)}")
-    console.print(f"  {hl('Auth:')}      {auth}")
+    console.print(f"  {hl('Auth:')}      {_auth_display(server)}")
     if server.description:
         console.print(f"  {hl('About:')}     {server.description}")
     console.print()
@@ -118,6 +135,7 @@ def _server_summary(server: MCPServerConfig) -> dict[str, Any]:
     return {
         "name": server.name,
         "transport": server.transport.value,
+        "auth_type": server.auth_type.value,
         "status": server.status.value,
         "tools": len(server.discovered_tools),
         "changed_tools": sum(1 for t in server.discovered_tools if t.status is ToolStatus.CHANGED),
@@ -125,6 +143,7 @@ def _server_summary(server: MCPServerConfig) -> dict[str, Any]:
 
 
 def _server_detail(server: MCPServerConfig) -> dict[str, Any]:
+    token = load_token(server.auth_key_ref) if (server.auth_type is AuthType.OAUTH and server.auth_key_ref) else None
     return {
         "name": server.name,
         "transport": server.transport.value,
@@ -133,7 +152,9 @@ def _server_detail(server: MCPServerConfig) -> dict[str, Any]:
         "args": list(server.args),
         "status": server.status.value,
         "description": server.description,
+        "auth_type": server.auth_type.value,
         "auth_key_ref": server.auth_key_ref,  # a reference, never the token
+        "token_expires_at": token.expires_at.isoformat() if token and token.expires_at else None,
         "tools": [
             {
                 "name": t.name,
@@ -191,25 +212,32 @@ def _validate_server_name(name: str) -> None:
         raise typer.Exit(EXIT_ERROR)
 
 
+# The transports a URL server may use (stdio is command-driven, never a URL).
+_URL_TRANSPORTS = frozenset({MCPTransport.SSE, MCPTransport.HTTP})
+
+
 def _infer_transport(url: str | None, command: str | None, transport: str | None) -> MCPTransport:
     if url and command:
-        console.print(err("Pass either --url (SSE) or --command (stdio), not both."))
+        console.print(err("Pass either --url (HTTP/SSE) or --command (stdio), not both."))
         raise typer.Exit(EXIT_ERROR)
     if not url and not command:
-        console.print(err("Provide --url for an SSE server or --command for a stdio server."))
+        console.print(err("Provide --url for an HTTP/SSE server or --command for a stdio server."))
         raise typer.Exit(EXIT_ERROR)
     inferred = MCPTransport.SSE if url else MCPTransport.STDIO
-    if transport is not None:
-        try:
-            requested = MCPTransport(transport.lower())
-        except ValueError as exc:
-            console.print(err(f"Unknown transport {transport!r}. Use 'sse' or 'stdio'."))
-            raise typer.Exit(EXIT_ERROR) from exc
-        if requested is not inferred:
-            flag = "--url" if url else "--command"
-            console.print(err(f"--transport {requested.value} conflicts with {flag} ({inferred.value})."))
-            raise typer.Exit(EXIT_ERROR)
-    return inferred
+    if transport is None:
+        return inferred
+    try:
+        requested = MCPTransport(transport.lower())
+    except ValueError as exc:
+        console.print(err(f"Unknown transport {transport!r}. Use 'http', 'sse', or 'stdio'."))
+        raise typer.Exit(EXIT_ERROR) from exc
+    if url and requested not in _URL_TRANSPORTS:
+        console.print(err(f"--transport {requested.value} conflicts with --url (use 'http' or 'sse')."))
+        raise typer.Exit(EXIT_ERROR)
+    if command and requested is not MCPTransport.STDIO:
+        console.print(err(f"--transport {requested.value} conflicts with --command (stdio)."))
+        raise typer.Exit(EXIT_ERROR)
+    return requested
 
 
 def _bearer_from_header(headers: list[str]) -> str:
@@ -240,6 +268,85 @@ def _bearer_from_header(headers: list[str]) -> str:
     return token
 
 
+@dataclass
+class _AddAuth:
+    """The auth decision for ``mcp add``: transport + how the server authenticates."""
+
+    transport: MCPTransport
+    auth_type: AuthType
+    oauth_config: OAuthConfig | None
+    auth_key_ref: str | None
+
+
+def _resolve_add_auth(
+    *,
+    name: str,
+    url: str | None,
+    transport: MCPTransport,
+    explicit_transport: bool,
+    header: list[str],
+    auth_key: str | None,
+    oauth: bool,
+    issuer: str | None,
+    scope: list[str],
+    device: bool,
+) -> _AddAuth:
+    """Decide the auth path for ``mcp add`` and run the OAuth sign-in if chosen.
+
+    Order of precedence: stdio → scoped env only; an explicit static bearer
+    (--header/--auth-key) → api_key; explicit OAuth (--oauth/--issuer) or a
+    server that advertises OAuth (probed PRM) → the OAuth flow; otherwise the
+    server is added unauthenticated. OAuth persists its token to the keyring and
+    defaults the transport to streamable-HTTP unless the user pinned one.
+    """
+    static_requested = bool(header) or auth_key is not None
+    oauth_requested = oauth or issuer is not None
+
+    if transport is MCPTransport.STDIO:
+        if static_requested or oauth_requested:
+            console.print(err("stdio servers authenticate via scoped env vars, not --header/--auth-key/--oauth."))
+            raise typer.Exit(EXIT_ERROR)
+        return _AddAuth(MCPTransport.STDIO, AuthType.API_KEY, None, None)
+
+    if static_requested and oauth_requested:
+        console.print(err("Pass either a static bearer (--header/--auth-key) or OAuth (--oauth/--issuer), not both."))
+        raise typer.Exit(EXIT_ERROR)
+
+    if static_requested:
+        return _AddAuth(transport, AuthType.API_KEY, None, _store_auth(name, header, auth_key))
+
+    # OAuth — explicit issuer, or auto-detected from the server's Protected
+    # Resource Metadata. The bare default falls back to keyless when nothing is
+    # advertised; --oauth makes advertisement mandatory.
+    config: OAuthConfig | None = None
+    if issuer:
+        config = OAuthConfig(issuer=issuer, scopes=scope)
+    else:
+        probed = run_async(probe_oauth(url)) if url else None
+        if probed is None:
+            if oauth:
+                console.print(err("--oauth was requested but the server does not advertise OAuth. Pass --issuer."))
+                raise typer.Exit(EXIT_ERROR)
+            return _AddAuth(transport, AuthType.API_KEY, None, None)  # keyless
+        config = probed.model_copy(update={"scopes": scope}) if scope else probed
+
+    ref = _auth_ref(name)
+    try:
+        token, resolved = run_async(sign_in(config, device=device, console=console))
+    except Exception as exc:
+        console.print(err(f"OAuth sign-in failed: {exc}"))
+        raise typer.Exit(EXIT_ERROR) from exc
+    try:
+        save_token(ref, token)
+    except Exception as exc:
+        console.print(err(f"Could not write the OAuth token to the OS keyring: {exc}"))
+        raise typer.Exit(EXIT_ERROR) from exc
+    # OAuth-authenticated MCP servers ride streamable-HTTP; default to it unless
+    # the user explicitly pinned a transport.
+    oauth_transport = transport if explicit_transport else MCPTransport.HTTP
+    return _AddAuth(oauth_transport, AuthType.OAUTH, resolved, ref)
+
+
 def _store_auth(name: str, headers: list[str], auth_key: str | None) -> str | None:
     """Resolve the server's ``auth_key_ref``, writing any inline token to keyring."""
     if auth_key and headers:
@@ -264,26 +371,36 @@ def _store_auth(name: str, headers: list[str], auth_key: str | None) -> str | No
 @app.command("add")
 def add_cmd(
     name: str = typer.Option(..., "--name", "-n", help="Server name, e.g. 'notion-mcp'"),
-    url: str | None = typer.Option(None, "--url", help="SSE endpoint URL (implies --transport sse)"),
+    url: str | None = typer.Option(None, "--url", help="HTTP/SSE endpoint URL"),
     command: str | None = typer.Option(None, "--command", help="stdio server command (implies --transport stdio)"),
     arg: list[str] | None = typer.Option(  # noqa: B008
         None, "--arg", help="stdio command argument (repeatable)"
     ),
-    transport: str | None = typer.Option(None, "--transport", help="sse | stdio (inferred from --url / --command)"),
+    transport: str | None = typer.Option(
+        None, "--transport", help="http | sse | stdio (inferred from --url / --command)"
+    ),
     header: list[str] | None = typer.Option(  # noqa: B008
-        None, "--header", help="SSE auth 'Authorization=Bearer <token>' — stored in the keyring, never echoed"
+        None, "--header", help="Static auth 'Authorization=Bearer <token>' — stored in the keyring, never echoed"
     ),
     auth_key: str | None = typer.Option(
         None, "--auth-key", help="Existing keyring reference holding the bearer token (instead of --header)"
     ),
+    oauth: bool = typer.Option(False, "--oauth", help="Sign in with OAuth (default when the server advertises it)"),
+    issuer: str | None = typer.Option(None, "--issuer", help="OAuth issuer / metadata base (skips 401 auto-detect)"),
+    scope: list[str] | None = typer.Option(  # noqa: B008
+        None, "--scope", help="OAuth scope to request (repeatable)"
+    ),
+    device: bool = typer.Option(False, "--device", help="Use the device-code grant (headless / no browser)"),
     description: str = typer.Option("", "--description", "-d", help="Human description"),
     json_: bool = typer.Option(False, "--json", help="Emit the result as JSON"),
 ) -> None:
     """Register an MCP server, discover its tools, and persist them.
 
-    Transport is inferred: --url → SSE, --command → stdio. Auth material goes to
-    the OS keyring; mcps.json stores only a reference. Discovery needs the server
-    reachable; the discovered tools are printed on success.
+    Transport is inferred: --url → HTTP/SSE, --command → stdio. An HTTP/SSE
+    server defaults to **OAuth sign-in** when it advertises OAuth (or with
+    --oauth/--issuer); --header/--auth-key opt into a static bearer, and a server
+    that advertises neither is added unauthenticated. Auth material goes to the
+    OS keyring; mcps.json stores only a reference.
     """
     _validate_server_name(name)
     resolved_transport = _infer_transport(url, command, transport)
@@ -294,15 +411,28 @@ def add_cmd(
         console.print(dim(f"  Or replace it:    arcana mcp remove {name}"))
         raise typer.Exit(EXIT_ERROR)
 
-    auth_ref = _store_auth(name, header or [], auth_key)
+    auth = _resolve_add_auth(
+        name=name,
+        url=url,
+        transport=resolved_transport,
+        explicit_transport=transport is not None,
+        header=header or [],
+        auth_key=auth_key,
+        oauth=oauth,
+        issuer=issuer,
+        scope=list(scope or []),
+        device=device,
+    )
     cfg = MCPServerConfig(
         name=name,
-        transport=resolved_transport,
+        transport=auth.transport,
         server_url=url or "",
         command=command,
         args=list(arg or []),
         description=description,
-        auth_key_ref=auth_ref,
+        auth_type=auth.auth_type,
+        oauth_config=auth.oauth_config,
+        auth_key_ref=auth.auth_key_ref,
     )
     server = run_async(reg.discover(cfg))
 
@@ -385,6 +515,57 @@ def refresh_cmd(
 
     if refreshed.status is MCPServerStatus.UNREACHABLE:
         console.print(warn(f"Server '{name}' is unreachable — showing last-known tools."))
+        raise typer.Exit(EXIT_ERROR)
+
+
+@app.command("login")
+def login_cmd(
+    name: str = typer.Argument(..., help="Server name (see: arcana mcp list)"),
+    device: bool = typer.Option(False, "--device", help="Use the device-code grant (headless / no browser)"),
+    json_: bool = typer.Option(False, "--json", help="Emit JSON"),
+) -> None:
+    """Re-run OAuth sign-in for an existing MCP server.
+
+    Use this when an OAuth server's token has expired and can no longer be
+    refreshed — it reuses the server's stored issuer/client, refreshes the keyring
+    token, and re-discovers tools. No need to re-`add` the server.
+    """
+    reg = _load_registry()
+    server = _resolve_server(reg, name)
+    if server.auth_type is not AuthType.OAUTH:
+        console.print(err(f"Server '{name}' does not use OAuth — nothing to sign in to."))
+        raise typer.Exit(EXIT_ERROR)
+    if server.oauth_config is None:
+        console.print(err(f"Server '{name}' has no OAuth config to sign in with."))
+        console.print(dim(f"  Recreate it with: arcana mcp add --name {name} --url <url> --oauth --issuer <url>"))
+        raise typer.Exit(EXIT_ERROR)
+
+    ref = server.auth_key_ref or _auth_ref(name)
+    try:
+        token, resolved = run_async(sign_in(server.oauth_config, device=device, console=console))
+    except Exception as exc:
+        console.print(err(f"OAuth sign-in failed: {exc}"))
+        raise typer.Exit(EXIT_ERROR) from exc
+    try:
+        save_token(ref, token)
+    except Exception as exc:
+        console.print(err(f"Could not write the OAuth token to the OS keyring: {exc}"))
+        raise typer.Exit(EXIT_ERROR) from exc
+
+    # Persist the (possibly newly-registered) client + ref, then re-discover now
+    # that a live token is held.
+    server.oauth_config = resolved
+    server.auth_key_ref = ref
+    refreshed = run_async(reg.discover(server))
+
+    if json_:
+        emit_json(_server_detail(refreshed))
+    else:
+        console.print(ok(f"Signed in to '{name}' — {len(refreshed.discovered_tools)} tool(s) discovered."))
+        _print_server(refreshed)
+
+    if refreshed.status is MCPServerStatus.UNREACHABLE:
+        console.print(warn(f"Server '{name}' was authenticated but could not be reached."))
         raise typer.Exit(EXIT_ERROR)
 
 

@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, Field
 
 from arcana.types._utils import now_utc
+from arcana.types.auth import AuthType, OAuthConfig
 
 
 class ModelProvider(StrEnum):
@@ -40,6 +41,9 @@ class ModelConnection(BaseModel):
     default_model: str | None = None  # per-connection fallback when reference omits model_id
     endpoint: str = ""  # base URL; empty = use provider default
     capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
+
+    auth_type: AuthType = AuthType.API_KEY
+    oauth_config: OAuthConfig | None = None
 
     # Credential reference - keyring key
     credential_ref: str | None = None

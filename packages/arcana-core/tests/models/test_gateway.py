@@ -878,21 +878,31 @@ async def test_context_manager_closes_on_exit():
 # ---------------------------------------------------------------------------
 
 
-def test_cache_key_same_connection():
-    k1 = _cache_key("ollama", "http://localhost:11434", None)
-    k2 = _cache_key("ollama", "http://localhost:11434", None)
-    assert k1 == k2
+def test_cache_key_same_connection_identity():
+    from uuid import UUID
+
+    cid = UUID("11111111-1111-1111-1111-111111111111")
+    assert _cache_key("ollama", "http://localhost:11434", cid) == _cache_key("ollama", "http://localhost:11434", cid)
 
 
-def test_cache_key_different_api_keys():
-    k1 = _cache_key("anthropic", "", "key-a")
-    k2 = _cache_key("anthropic", "", "key-b")
-    assert k1 != k2
+def test_cache_key_keys_on_connection_identity_not_the_token():
+    """A rotating credential must not fork the pool — same identity → same key."""
+    from uuid import UUID
+
+    cid = UUID("11111111-1111-1111-1111-111111111111")
+    other = UUID("22222222-2222-2222-2222-222222222222")
+    # Same connection id → one key regardless of which token is live behind it.
+    assert _cache_key("anthropic", "", cid) == _cache_key("anthropic", "", cid)
+    # Distinct connections (distinct ids) → distinct keys.
+    assert _cache_key("anthropic", "", cid) != _cache_key("anthropic", "", other)
 
 
 def test_cache_key_different_endpoints():
-    k1 = _cache_key("openai_compat", "http://localhost:1234", None)
-    k2 = _cache_key("openai_compat", "http://localhost:5678", None)
+    from uuid import UUID
+
+    cid = UUID("11111111-1111-1111-1111-111111111111")
+    k1 = _cache_key("openai_compat", "http://localhost:1234", cid)
+    k2 = _cache_key("openai_compat", "http://localhost:5678", cid)
     assert k1 != k2
 
 
