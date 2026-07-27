@@ -37,7 +37,7 @@ jobs:
         run: uv run pyright packages/arcana-cli/arcana_cli
 
       # Fast default tier: fully mocked and deterministic — no real process,
-      # network, or MCP server. The `slow` sandbox tests run in their own job.
+      # network, or MCP server. The `slow` sandbox tier runs separately below.
       - name: Unit tests — arcana-core (fast tier)
         run: uv run pytest packages/arcana-core/tests/ -v -m "not llm_eval and not slow"
 
@@ -49,34 +49,21 @@ jobs:
       - name: Security regression gate
         run: uv run pytest packages/arcana-core/tests/tools/security/ -v -m security
 
+      # The real-subprocess sandbox tier. Every `slow` test lives under tools/ or
+      # agents/, so this runs the whole tier — on each Python version in the matrix
+      # (subprocess/process-group behaviour is version-sensitive). Backend-specific
+      # tests (bwrap/container) self-skip with a loud reason when the binary is absent.
+      - name: Slow sandbox tier
+        run: uv run pytest packages/arcana-core/tests/tools/ packages/arcana-core/tests/agents/ -v -m "slow"
+
       # Line floor on the tool surface (tools/** + guardrails.py), measured over
-      # the whole tool suite including the slow sandbox tier.
+      # the whole tool suite — the slow tier included, which is where the subprocess
+      # sandbox code is exercised.
       - name: Tool coverage floor
         run: >-
           uv run pytest packages/arcana-core/tests/tools/ packages/arcana-core/tests/agents/
           -m "not llm_eval" -o addopts=""
           --cov=arcana.tools --cov-report=term-missing --cov-fail-under=90
-
-  sandbox:
-    name: Slow tier — real sandbox
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-
-      - name: Set up Python
-        run: uv python install 3.12
-
-      - name: Install dependencies
-        run: uv sync --all-packages --all-extras
-
-      # The one tier that spawns real subprocess sandboxes. Backend-specific tests
-      # (bwrap/container) self-skip with a loud reason when the binary is absent.
-      - name: Slow sandbox tests
-        run: uv run pytest packages/arcana-core/tests/ -v -m "slow"
 
   docs:
     name: Docs build
