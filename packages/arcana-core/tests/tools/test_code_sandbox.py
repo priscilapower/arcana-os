@@ -46,6 +46,7 @@ async def _run(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 async def test_runs_python_and_captures_stdout(tmp_path: Path):
     result = await _run("print(6 * 7)", workspace=tmp_path)
     assert result.exit_code == 0
@@ -54,6 +55,7 @@ async def test_runs_python_and_captures_stdout(tmp_path: Path):
     assert result.truncated is False
 
 
+@pytest.mark.slow
 async def test_nonzero_exit_is_carried_not_a_failure(tmp_path: Path):
     # A program that errors is a *successful* run carrying its exit code.
     result = await _run("import sys; sys.exit(7)", workspace=tmp_path)
@@ -61,12 +63,14 @@ async def test_nonzero_exit_is_carried_not_a_failure(tmp_path: Path):
     assert result.timed_out is False
 
 
+@pytest.mark.slow
 async def test_stderr_is_captured_separately(tmp_path: Path):
     result = await _run("import sys; sys.stderr.write('oops')", workspace=tmp_path)
     assert "oops" in result.stderr
     assert result.stdout == ""
 
 
+@pytest.mark.slow
 async def test_the_child_environment_holds_no_host_secret(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # NFR2: the sandbox child gets exactly the env it is handed, never the
     # parent's — a secret in Arcana's own environment must be unreachable.
@@ -80,6 +84,7 @@ async def test_the_child_environment_holds_no_host_secret(tmp_path: Path, monkey
     assert lines[1] == str(tmp_path)  # HOME points at the scratch workspace, not the real home
 
 
+@pytest.mark.slow
 async def test_a_timeout_kills_the_run_and_flags_it(tmp_path: Path):
     # A hang is bounded by the wall clock and killed via its process group; the
     # call returns promptly rather than blocking the loop.
@@ -87,6 +92,7 @@ async def test_a_timeout_kills_the_run_and_flags_it(tmp_path: Path):
     assert result.timed_out is True
 
 
+@pytest.mark.slow
 async def test_a_hang_after_closing_output_still_times_out(tmp_path: Path):
     # The escape a naive design misses: a child that closes stdout/stderr gives the
     # readers an early EOF, so the wall clock must bound the process reap too — not
@@ -103,12 +109,14 @@ async def test_a_hang_after_closing_output_still_times_out(tmp_path: Path):
     assert _time.monotonic() - started < 10  # bounded by the wall clock, not the 30s sleep
 
 
+@pytest.mark.slow
 async def test_output_over_the_cap_is_truncated(tmp_path: Path):
     result = await _run("print('x' * 100_000)", workspace=tmp_path, max_output_bytes=1000)
     assert result.truncated is True
     assert len(result.stdout.encode()) <= 1000
 
 
+@pytest.mark.slow
 async def test_the_workspace_is_the_working_directory(tmp_path: Path):
     result = await _run("import os; print(os.getcwd())", workspace=tmp_path)
     assert result.stdout.strip() == str(tmp_path)

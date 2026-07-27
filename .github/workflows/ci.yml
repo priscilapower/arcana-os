@@ -36,11 +36,34 @@ jobs:
       - name: Type check - arcana-cli
         run: uv run pyright packages/arcana-cli/arcana_cli
 
-      - name: Unit tests — arcana-core
-        run: uv run pytest packages/arcana-core/tests/ -v -m "not llm_eval"
+      # Fast default tier: fully mocked and deterministic — no real process,
+      # network, or MCP server. The `slow` sandbox tier runs separately below.
+      - name: Unit tests — arcana-core (fast tier)
+        run: uv run pytest packages/arcana-core/tests/ -v -m "not llm_eval and not slow"
 
-      - name: Unit tests — arcana-cli
-        run: uv run pytest packages/arcana-cli/tests/ -v -m "not llm_eval"
+      - name: Unit tests — arcana-cli (fast tier)
+        run: uv run pytest packages/arcana-cli/tests/ -v -m "not llm_eval and not slow"
+
+      # The security catalog + guard-has-test presence check as its own gate, so
+      # a new tool that ships without an adversarial test can't merge.
+      - name: Security regression gate
+        run: uv run pytest packages/arcana-core/tests/tools/security/ -v -m security
+
+      # The real-subprocess sandbox tier. Every `slow` test lives under tools/ or
+      # agents/, so this runs the whole tier — on each Python version in the matrix
+      # (subprocess/process-group behaviour is version-sensitive). Backend-specific
+      # tests (bwrap/container) self-skip with a loud reason when the binary is absent.
+      - name: Slow sandbox tier
+        run: uv run pytest packages/arcana-core/tests/tools/ packages/arcana-core/tests/agents/ -v -m "slow"
+
+      # Line floor on the tool surface (tools/** + guardrails.py), measured over
+      # the whole tool suite — the slow tier included, which is where the subprocess
+      # sandbox code is exercised.
+      - name: Tool coverage floor
+        run: >-
+          uv run pytest packages/arcana-core/tests/tools/ packages/arcana-core/tests/agents/
+          -m "not llm_eval" -o addopts=""
+          --cov=arcana.tools --cov-report=term-missing --cov-fail-under=90
 
   docs:
     name: Docs build

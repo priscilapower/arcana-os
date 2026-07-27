@@ -37,6 +37,14 @@ uv run pre-commit install
 Common tasks (run from the repo root):
 
 ```bash
+make check           # lint + format check + pyright (both packages)
+make test            # full test suite, both packages
+make done            # the pre-merge gate: check + test + security + coverage floor
+```
+
+Or the underlying tools directly:
+
+```bash
 uv run ruff check .                                    # lint
 uv run ruff format .                                   # format
 uv run pyright packages/arcana-core/arcana             # type check core
@@ -44,6 +52,25 @@ uv run pyright packages/arcana-cli/arcana_cli          # type check CLI
 uv run pytest packages/arcana-core/tests/ -v -m "not llm_eval"
 uv run pytest packages/arcana-cli/tests/ -v
 ```
+
+### Test tiers
+
+Tests are grouped by pytest marker so CI can run a fast, deterministic default
+lane and gate the rest:
+
+| Marker | What it is | How to run |
+|---|---|---|
+| _(none)_ | fast, fully-mocked unit + integration tests | `make test-fast` |
+| `integration` | cross-slice `Agent.run` over the tool gateway (still mocked) | `pytest -m integration` |
+| `security` | the security-regression catalog + guard-has-test presence check | `make test-security` |
+| `contract` | pins a stable shape (no-subscription run, `ToolResult`, single-source schema) | `pytest -m contract` |
+| `slow` | spawns a real subprocess/sandbox — gated out of the default lane | `make test-slow` |
+| `llm_eval` | needs a live LLM/embedding backend | `pytest -m llm_eval` |
+
+The default lane (`make test-fast`) never touches a real process, network, or MCP
+server. A tool that adds a guard **must** ship a `security`-marked test for it, or
+the presence check fails CI. `make coverage-tools` enforces the line floor on the
+tool surface (`arcana.tools`).
 
 `pre-commit` runs lint, format, and type checks on staged files; please make
 sure it passes before pushing.

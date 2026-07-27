@@ -59,4 +59,8 @@ testpaths = ["tests"]
 addopts = "--cov=arcana --cov-report=term-missing"
 markers = [
     "llm_eval: tests that need live LLM/embedding backends; excluded from the default CI lane",
+    "integration: cross-slice tests that drive Agent.run over the tool gateway (fully mocked).",
+    "security: the security-regression catalog — one class per adversarial-harness Finding; a guard with no security test fails CI.",
+    "contract: pins a stable shape — no-subscription run, ToolResult/CLI --json, single-source builtin schema.",
+    "slow: touches a real process/sandbox binary; gated out of the fast default tier and run opt-in.",
 ]

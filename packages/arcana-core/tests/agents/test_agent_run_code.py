@@ -10,6 +10,8 @@ from collections.abc import Sequence
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from arcana.agents.agent import Agent
 from arcana.cards.registry import CardRegistry
 from arcana.models.adapters.base import CompletionResponse, FunctionCall, ToolCallResult
@@ -71,6 +73,7 @@ def _agent(
     )
 
 
+@pytest.mark.slow
 async def test_an_agent_runs_code_and_uses_the_result():
     model = _model(
         [
@@ -137,6 +140,7 @@ async def test_require_confirmation_denies_run_code_in_an_autonomous_run():
     await adapter.aclose()
 
 
+@pytest.mark.slow
 async def test_require_confirmation_allows_run_code_with_a_confirmer():
     rules = [GuardrailRule(type=GuardrailRuleType.REQUIRE_CONFIRMATION, value=_RUN_CODE)]
 

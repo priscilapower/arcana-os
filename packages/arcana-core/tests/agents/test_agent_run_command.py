@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from arcana.agents.agent import Agent
 from arcana.cards.registry import CardRegistry
 from arcana.models.adapters.base import CompletionResponse, FunctionCall, ToolCallResult
@@ -77,6 +79,7 @@ def _agent(
     )
 
 
+@pytest.mark.slow
 async def test_an_agent_runs_a_command_and_uses_the_result(tmp_path: Path):
     model = _model(
         [
@@ -101,6 +104,7 @@ async def test_an_agent_runs_a_command_and_uses_the_result(tmp_path: Path):
     await adapter.aclose()
 
 
+@pytest.mark.slow
 async def test_run_command_reads_a_file_the_agent_wrote(tmp_path: Path):
     # The command shares the agent workspace, so it can operate on files staged
     # there — grep over a file written into the same jailed directory.
