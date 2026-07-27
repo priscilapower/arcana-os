@@ -7,6 +7,7 @@ from typing import Any, TypedDict
 
 import httpx
 
+from arcana.auth import CredentialProvider
 from arcana.models.adapters.base import (
     CompletionRequest,
     CompletionResponse,
@@ -21,6 +22,7 @@ from arcana.models.adapters.base import (
     ToolCallResult,
 )
 from arcana.models.errors import (
+    ModelAuthError,
     ModelBadRequestError,
     ModelNotFoundError,
     ModelTransientError,
@@ -211,6 +213,7 @@ class CustomAPIAdapter(ModelAdapter):
         base_url: str,
         *,
         api_key: str | None = None,
+        credentials: CredentialProvider | None = None,
         headers: dict[str, str] | None = None,
         chat_path: str = "/chat/completions",
         stream_path: str | None = None,
@@ -225,8 +228,8 @@ class CustomAPIAdapter(ModelAdapter):
         self._chat_path = "/" + chat_path.lstrip("/")
         self._stream_path = "/" + (stream_path or chat_path).lstrip("/")
         self._health_path = "/" + health_path.lstrip("/") if health_path else None
-
-        resolved_key = api_key or os.getenv("CUSTOM_API_KEY")
+        self._credentials = credentials
+        resolved_key = None if credentials is not None else (api_key or os.getenv("CUSTOM_API_KEY"))
         merged_headers: dict[str, str] = {"Content-Type": "application/json", **(headers or {})}
         if resolved_key:
             merged_headers.setdefault("Authorization", f"Bearer {resolved_key}")
@@ -236,6 +239,13 @@ class CustomAPIAdapter(ModelAdapter):
         self._stream_chunk_parser: _StreamChunkParser = stream_chunk_parser or _sse_chunk_parser
         self._client = httpx.AsyncClient(timeout=timeout, headers=merged_headers)
 
+    async def _auth_headers(self) -> dict[str, str] | None:
+        """Per-request ``Authorization: Bearer`` header, or ``None`` in legacy mode."""
+        if self._credentials is None:
+            return None
+        token = await self._credentials.get_token()
+        return {"Authorization": f"Bearer {token}"}
+
     def _translate(self, exc: Exception, model_id: str) -> Exception:
         if isinstance(exc, httpx.ConnectError):
             return ModelUnavailableError(f"Cannot connect to endpoint: {exc}")
@@ -243,6 +253,8 @@ class CustomAPIAdapter(ModelAdapter):
             return ModelTransientError(f"Request timed out: {exc}")
         if isinstance(exc, httpx.HTTPStatusError):
             status = exc.response.status_code
+            if status in (401, 403):
+                return ModelAuthError(f"Authentication failed (HTTP {status}): {exc}")
             if status == 404:
                 return ModelNotFoundError(f"Model not found: {model_id!r}")
             if status == 400:
@@ -266,24 +278,42 @@ class CustomAPIAdapter(ModelAdapter):
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
         model = request.model_id or self.model
         body = self._request_builder(request)
-        try:
-            response = await self._client.post(f"{self._base_url}{self._chat_path}", json=body)
-            response.raise_for_status()
-        except Exception as exc:
-            raise self._translate(exc, model) from exc
+        response = None
+        for attempt in (0, 1):
+            headers = await self._auth_headers()
+            try:
+                response = await self._client.post(f"{self._base_url}{self._chat_path}", json=body, headers=headers)
+                response.raise_for_status()
+                break
+            except Exception as exc:
+                if await self._reauth(exc, model, attempt):
+                    continue
+                raise self._translate(exc, model) from exc
+        assert response is not None  # the loop either assigns or raises
         return self._response_parser(response.json())
 
     async def stream(self, request: CompletionRequest) -> AsyncGenerator[ModelChunk, None]:
         model = request.model_id or self.model
         body = {**self._request_builder(request), "stream": True}
-        try:
-            async with self._client.stream("POST", f"{self._base_url}{self._stream_path}", json=body) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if token := self._stream_chunk_parser(line):
-                        yield ModelChunk(text=token)
-        except Exception as exc:
-            raise self._translate(exc, model) from exc
+        # Reactive refresh only before the first token; auth failures surface at
+        # open (raise_for_status), before any token is yielded.
+        for attempt in (0, 1):
+            headers = await self._auth_headers()
+            started = False
+            try:
+                async with self._client.stream(
+                    "POST", f"{self._base_url}{self._stream_path}", json=body, headers=headers
+                ) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if token := self._stream_chunk_parser(line):
+                            started = True
+                            yield ModelChunk(text=token)
+                return
+            except Exception as exc:
+                if not started and await self._reauth(exc, model, attempt):
+                    continue
+                raise self._translate(exc, model) from exc
 
     async def health_check(self) -> ModelHealth:
         model = self.model

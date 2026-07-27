@@ -2,6 +2,7 @@
 
 from arcana.types._utils import JsonObject, JsonValue
 from arcana.types.agent import Agent, AgentStatus
+from arcana.types.auth import AuthType, OAuthConfig, OAuthGrant, OAuthToken
 from arcana.types.card import (
     AgentConfig,
     Card,
@@ -81,6 +82,11 @@ __all__ = [
     # Agent
     "Agent",
     "AgentStatus",
+    # Auth
+    "AuthType",
+    "OAuthConfig",
+    "OAuthGrant",
+    "OAuthToken",
     # Card
     "Card",
     "TarotCard",

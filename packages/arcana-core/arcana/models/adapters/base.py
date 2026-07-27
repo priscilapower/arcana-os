@@ -3,12 +3,15 @@
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, NotRequired, Required, TypedDict
+from typing import TYPE_CHECKING, Any, NotRequired, Required, TypedDict
 
 from pydantic import TypeAdapter, ValidationError
 
-from arcana.models.errors import ModelBadRequestError
+from arcana.models.errors import ModelAuthError, ModelBadRequestError
 from arcana.types._utils import JsonObject
+
+if TYPE_CHECKING:
+    from arcana.auth import CredentialProvider
 
 _ARGS_ADAPTER: TypeAdapter[dict[str, Any]] = TypeAdapter(dict[str, Any])
 
@@ -154,6 +157,7 @@ class ModelAdapter(ABC):
     """Every LLM backend implements this interface."""
 
     supports_tools: bool = False
+    _credentials: "CredentialProvider | None" = None
 
     @abstractmethod
     async def complete(self, request: CompletionRequest) -> CompletionResponse: ...
@@ -169,6 +173,22 @@ class ModelAdapter(ABC):
 
     async def aclose(self) -> None:  # noqa: B027
         """Close underlying connections. Called by the gateway on shutdown. Default: no-op."""
+
+    async def _reauth(self, exc: Exception, model_id: str, attempt: int) -> bool:
+        """Whether to refresh the credential and retry once after an auth failure.
+
+        The shared reactive ``401→refresh→retry`` decision for every adapter that
+        consumes a ``CredentialProvider``: ``True`` only on the first attempt,
+        only for a translated :class:`ModelAuthError`, and only when a provider is
+        present and its refresh succeeds — which bounds the reactive path to a
+        single extra attempt. Adapters without a provider (legacy/keyless) always
+        get ``False``.
+        """
+        if attempt != 0 or self._credentials is None:
+            return False
+        if not isinstance(self._translate(exc, model_id), ModelAuthError):
+            return False
+        return await self._credentials.on_unauthorized()
 
     def _guard_tools(self, request: CompletionRequest) -> None:
         """Raise ModelBadRequestError if the caller passes tools and this adapter can't handle them."""

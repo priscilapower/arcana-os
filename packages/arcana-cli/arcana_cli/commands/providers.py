@@ -11,7 +11,10 @@ from rich.console import Console
 
 from arcana.agents.registry import AgentRegistry
 from arcana.models import ConnectionStore, ModelGateway
+from arcana.types.auth import AuthType, OAuthConfig
 from arcana.types.model import ModelConnection, ModelProvider
+from arcana_cli._async import run_async
+from arcana_cli._oauth import sign_in
 from arcana_cli.constants import AGENTS_BASE, CONNECTIONS_PATH
 from arcana_cli.ui.theme import GREEN, ORANGE, TXT3, dim, err, hl, make_table, ok, warn
 
@@ -175,8 +178,22 @@ def add_cmd(
     name: str | None = typer.Option(None, "--name", "-n", help="Connection name"),
     endpoint: str | None = typer.Option(None, "--endpoint", "-e", help="Custom base URL"),
     api_key: str | None = typer.Option(None, "--api-key", "-k", help="API key (stored in OS keyring)"),
+    api_key_env: str | None = typer.Option(
+        None, "--api-key-env", metavar="VAR", help="Read the API key from this environment variable"
+    ),
+    oauth: bool = typer.Option(False, "--oauth", help="Sign in with OAuth"),
+    issuer: str | None = typer.Option(None, "--issuer", help="OAuth issuer / metadata base (implies --oauth)"),
+    scope: list[str] | None = typer.Option(  # noqa: B008
+        None, "--scope", help="OAuth scope to request (repeatable)"
+    ),
+    device: bool = typer.Option(False, "--device", help="Use the device-code grant (headless / no browser)"),
 ) -> None:
-    """Add or update a model provider connection."""
+    """Add or update a model provider connection.
+
+    Defaults to the static API-key path for model providers; pass ``--oauth
+    --issuer <url>`` to sign in with OAuth instead. Keyless providers (Ollama)
+    need no credential. Tokens and keys go to the OS keyring — never to JSON.
+    """
     if provider is None:
         console.print(dim(f"Providers: {' '.join(_PROVIDERS)}"))
         provider = str(typer.prompt("Provider"))
@@ -184,6 +201,17 @@ def add_cmd(
     provider = provider.lower().replace("-", "_")
     if provider not in _PROVIDERS:
         console.print(err(f"Unknown provider: {provider!r}. Choose from: {', '.join(_PROVIDERS)}"))
+        raise typer.Exit(1)
+
+    use_oauth = oauth or issuer is not None
+    if use_oauth and (api_key is not None or api_key_env is not None):
+        console.print(err("Pass either OAuth (--oauth/--issuer) or an API key (--api-key/--api-key-env), not both."))
+        raise typer.Exit(1)
+    if use_oauth and provider not in _CREDENTIAL_PROVIDERS:
+        console.print(err(f"Provider '{provider}' is keyless — OAuth does not apply."))
+        raise typer.Exit(1)
+    if use_oauth and not issuer:
+        console.print(err("OAuth requires --issuer <metadata-url> for a model provider."))
         raise typer.Exit(1)
 
     if model_id is None:
@@ -199,8 +227,9 @@ def add_cmd(
         else:
             endpoint = default_ep
 
-    if api_key is None and provider in _NEEDS_KEY:
-        api_key = str(typer.prompt(f"API key for {provider}", hide_input=True, default=""))
+    resolved_key: str | None = None
+    if not use_oauth and provider in _NEEDS_KEY:
+        resolved_key = _read_added_key(api_key, api_key_env, provider)
 
     store = ConnectionStore(CONNECTIONS_PATH)
     existing = store.get_by_name(name)
@@ -214,29 +243,100 @@ def add_cmd(
         conn_id = uuid.uuid4()
         action = "Added"
 
+    auth_type = AuthType.API_KEY
+    oauth_config: OAuthConfig | None = None
+    credential_ref: str | None = None
+
+    # Run the OAuth flow *before* writing anything, so a failed/aborted sign-in
+    # leaves models.json untouched. The token lands in the keyring; the config
+    # (with the resolved client_id) is persisted for later refresh.
+    if use_oauth:
+        assert issuer is not None  # guarded above
+        credential_ref = f"{conn_id}_oauth_token"
+        config = OAuthConfig(issuer=issuer, scopes=list(scope or []))
+        try:
+            token, resolved = run_async(sign_in(config, device=device, console=console))
+        except Exception as exc:
+            console.print(err(f"OAuth sign-in failed: {exc}"))
+            raise typer.Exit(1) from exc
+        store.store_token(credential_ref, token)
+        auth_type = AuthType.OAUTH
+        oauth_config = resolved
+
     conn = ModelConnection(
         id=conn_id,
         name=name,
         provider=ModelProvider(provider),
         default_model=model_id,
         endpoint=endpoint or "",
+        auth_type=auth_type,
+        oauth_config=oauth_config,
+        credential_ref=credential_ref,
     )
 
     store.upsert(conn)
 
-    if api_key:
-        import keyring
+    if resolved_key:
+        store.set_credential(f"{conn_id}_api_key", resolved_key)
 
-        ref = f"{conn_id}_api_key"
-        keyring.set_password("arcana", ref, api_key)
-
-    key_note = f"  {hl('API key:')}  [{GREEN}]saved to OS keyring[/]\n" if api_key else ""
+    if use_oauth:
+        cred_note = f"  {hl('Auth:')}     [{GREEN}]OAuth — token in OS keyring[/]\n"
+    elif resolved_key:
+        cred_note = f"  {hl('API key:')}  [{GREEN}]saved to OS keyring[/]\n"
+    else:
+        cred_note = ""
     details = (
         f"\n  {hl('Provider:')} {provider}\n"
         f"  {hl('Model:')}    {model_id}\n"
-        f"  {hl('Endpoint:')} {endpoint or '(provider default)'}\n" + key_note
+        f"  {hl('Endpoint:')} {endpoint or '(provider default)'}\n" + cred_note
     )
     console.print("\n" + ok(f"{action} connection '{name}'") + details)
+
+
+def _read_added_key(api_key: str | None, api_key_env: str | None, provider: str) -> str | None:
+    """Resolve the API key for ``add``: direct flag, env var, or an interactive prompt."""
+    if api_key is not None:
+        return api_key
+    if api_key_env is not None:
+        key = os.environ.get(api_key_env)
+        if not key:
+            console.print(err(f"Environment variable {api_key_env!r} is not set or empty."))
+            raise typer.Exit(1)
+        return key
+    return str(typer.prompt(f"API key for {provider}", hide_input=True, default="")) or None
+
+
+@app.command("login")
+def login_cmd(
+    name: str = typer.Argument(..., help="Connection name (see: arcana providers list)"),
+    device: bool = typer.Option(False, "--device", help="Use the device-code grant (headless / no browser)"),
+) -> None:
+    """Re-run OAuth sign-in for an existing connection.
+
+    Use this when an OAuth connection's token has expired and can no longer be
+    refreshed — it reuses the connection's stored issuer/client and just refreshes
+    the keyring token in place. No need to re-`add` the connection.
+    """
+    store, conn = _resolve(name)
+    if conn.auth_type is not AuthType.OAUTH:
+        console.print(err(f"Connection '{conn.name}' uses an API key, not OAuth."))
+        console.print(dim(f"  Rotate its key with: arcana providers edit {conn.name} --rotate-key"))
+        raise typer.Exit(1)
+    if conn.oauth_config is None:
+        console.print(err(f"Connection '{conn.name}' has no OAuth config to sign in with."))
+        console.print(dim("  Recreate it with: arcana providers add ... --oauth --issuer <url>"))
+        raise typer.Exit(1)
+
+    ref = conn.credential_ref or f"{conn.id}_oauth_token"
+    try:
+        token, resolved = run_async(sign_in(conn.oauth_config, device=device, console=console))
+    except Exception as exc:
+        console.print(err(f"OAuth sign-in failed: {exc}"))
+        raise typer.Exit(1) from exc
+
+    store.store_token(ref, token)
+    store.upsert(conn.model_copy(update={"oauth_config": resolved, "credential_ref": ref}))
+    console.print(ok(f"Signed in to '{conn.name}' — token refreshed in the OS keyring."))
 
 
 @app.command("show")
@@ -246,19 +346,33 @@ def show_cmd(
     """Show a connection's details. Secrets are never printed."""
     store, conn = _resolve(name)
 
-    has_key = bool(store.get_api_key(conn.id))
-    cred_display = f"stored in keyring ({_cred_ref(conn)})" if has_key else "(none)"
     headers_display = ", ".join(f"{k}: {v}" for k, v in conn.headers.items()) if conn.headers else "(none)"
+    cred_display = _credential_display(store, conn)
 
     console.print(f"\n  {hl('Name:')}          {conn.name}")
     console.print(f"  {hl('Provider:')}      {conn.provider}")
     console.print(f"  {hl('Default Model:')} {conn.default_model or '(none)'}")
     console.print(f"  {hl('Endpoint:')}      {conn.endpoint or '(provider default)'}")
     console.print(f"  {hl('Headers:')}       {headers_display}")
+    console.print(f"  {hl('Auth type:')}     {conn.auth_type.value}")
     console.print(f"  {hl('Credential:')}    {cred_display}")
     console.print(f"  {hl('Created:')}       {conn.created_at.isoformat()}")
     console.print(f"  {hl('Updated:')}       {conn.updated_at.isoformat()}")
     console.print()
+
+
+def _credential_display(store: ConnectionStore, conn: ModelConnection) -> str:
+    """A redacted one-line credential summary — auth kind and expiry, never a secret."""
+    if conn.auth_type is AuthType.OAUTH:
+        ref = conn.credential_ref
+        token = store.get_token(ref) if ref else None
+        if token is None:
+            return "OAuth (not signed in)"
+        if token.expires_at is None:
+            return "OAuth (token in keyring, no expiry)"
+        return f"OAuth (token in keyring, expires {token.expires_at.isoformat()})"
+    has_key = bool(store.get_api_key(conn.id))
+    return f"API key in keyring ({_cred_ref(conn)})" if has_key else "(none)"
 
 
 @app.command("edit")

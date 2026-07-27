@@ -5,6 +5,7 @@ from enum import StrEnum
 from pydantic import BaseModel
 
 from arcana.types._utils import JsonObject, JsonValue
+from arcana.types.auth import AuthType, OAuthConfig
 
 
 class ToolType(StrEnum):
@@ -152,6 +153,7 @@ class Skill(BaseModel):
 class MCPTransport(StrEnum):
     SSE = "sse"
     STDIO = "stdio"
+    HTTP = "http"
     WEBSOCKET = "websocket"
 
 
@@ -192,9 +194,18 @@ class MCPServerConfig(BaseModel):
     env: dict[str, str] = {}
     env_allowlist: list[str] = []
 
-    # SSE transport auth: a keyring reference (never the token itself). The
-    # secret is resolved from the OS keyring at connect and injected as a
-    # header; it is never persisted here, logged, or placed on a span.
+    # How this server authenticates. Defaults to ``api_key`` so servers
+    # registered before OAuth existed load unchanged; the CLI `add` path defaults
+    # new HTTP/SSE servers to ``oauth`` when the target advertises it.
+    # ``oauth_config`` is the non-secret half — the token itself lives in the
+    # keyring under ``auth_key_ref``.
+    auth_type: AuthType = AuthType.API_KEY
+    oauth_config: OAuthConfig | None = None
+
+    # Auth material lives in the OS keyring under this reference (never the token
+    # itself). For ``api_key`` it holds a static bearer; for ``oauth`` it holds
+    # the serialized OAuthToken bundle. Resolved at connect and injected as a
+    # header; never persisted here, logged, or placed on a span.
     auth_key_ref: str | None = None
 
     # Per-server overrides for the adapter's env-backed defaults. ``None`` means

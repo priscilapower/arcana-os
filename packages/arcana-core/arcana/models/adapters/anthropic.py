@@ -17,12 +17,16 @@ try:
         ToolUseBlockParam,
     )
     from anthropic.types import (
+        Message as AnthropicMessage,
+    )
+    from anthropic.types import (
         MessageParam as AnthropicMessageParam,
     )
     from anthropic.types import ToolParam as AnthropicToolParam
 except ImportError as e:
     raise ImportError("Install arcana-core[anthropic] to use AnthropicAdapter") from e
 
+from arcana.auth import CredentialProvider
 from arcana.models.adapters.base import (
     CompletionRequest,
     CompletionResponse,
@@ -42,9 +46,16 @@ from arcana.models.errors import (
     ModelTransientError,
     ModelUnavailableError,
 )
+from arcana.types.auth import AuthType
 
 _ENV_VAR = "ANTHROPIC_API_KEY"
 _PROVIDER_KEY = "anthropic_api_key"
+
+# Placeholder auth values the SDK client is built with when a CredentialProvider
+# drives per-request auth: the real credential is injected via ``extra_headers``
+# on each call, so the frozen client value is never sent. Building with
+# ``auth_token`` (OAuth) vs ``api_key`` selects which header the SDK omits.
+_PLACEHOLDER = "arcana-per-request-auth"
 
 
 def _to_anthropic_tools(tools: list[ToolParam]) -> list[AnthropicToolParam]:
@@ -83,10 +94,15 @@ class AnthropicAdapter(ModelAdapter):
         model: str = "claude-sonnet-4-6",
         api_key: str | None = None,
         connection_id: UUID | None = None,
+        *,
+        credentials: CredentialProvider | None = None,
+        auth_type: AuthType = AuthType.API_KEY,
     ) -> None:
         self.model = model
         self._api_key = api_key
         self._connection_id = connection_id
+        self._credentials = credentials
+        self._auth_type = auth_type
         self._client: AsyncAnthropic | None = None
 
     def _translate(self, exc: Exception, model_id: str) -> Exception:
@@ -118,8 +134,18 @@ class AnthropicAdapter(ModelAdapter):
 
     def _get_client(self) -> AsyncAnthropic:
         if self._client is None:
-            key = self._api_key or self._resolve_key()
-            self._client = AsyncAnthropic(api_key=key)
+            if self._credentials is not None:
+                # Per-request auth: build with a placeholder for the right scheme
+                # so the SDK omits the *other* auth header, then override it on
+                # each call. OAuth → auth_token (Authorization: Bearer); api_key →
+                # api_key (x-api-key).
+                if self._auth_type is AuthType.OAUTH:
+                    self._client = AsyncAnthropic(auth_token=_PLACEHOLDER)
+                else:
+                    self._client = AsyncAnthropic(api_key=_PLACEHOLDER)
+            else:
+                key = self._api_key or self._resolve_key()
+                self._client = AsyncAnthropic(api_key=key)
         return self._client
 
     def _resolve_key(self) -> str:
@@ -129,6 +155,20 @@ class AnthropicAdapter(ModelAdapter):
         raise ValueError(
             "Anthropic API key not found. Set ANTHROPIC_API_KEY or run: arcana connect model anthropic --api-key <key>"
         )
+
+    async def _auth_headers(self) -> dict[str, str] | None:
+        """The per-request auth header, or ``None`` when the client carries the key.
+
+        Legacy (no provider): ``None`` — the frozen client already authenticates.
+        With a provider: the freshly-resolved credential, sent as ``Authorization:
+        Bearer`` for OAuth or ``x-api-key`` for an API key.
+        """
+        if self._credentials is None:
+            return None
+        token = await self._credentials.get_token()
+        if self._auth_type is AuthType.OAUTH:
+            return {"Authorization": f"Bearer {token}"}
+        return {"x-api-key": token}
 
     def _build_messages(self, request: CompletionRequest) -> list[AnthropicMessageParam]:
         result: list[AnthropicMessageParam] = []
@@ -180,26 +220,39 @@ class AnthropicAdapter(ModelAdapter):
         model = request.model_id or self.model
         client = self._get_client()
         messages = self._build_messages(request)
-        try:
-            if request.tools:
-                response = await client.messages.create(
+        tools = _to_anthropic_tools(list(request.tools)) if request.tools else None
+
+        async def _create(headers: dict[str, str] | None) -> AnthropicMessage:
+            if tools is not None:
+                return await client.messages.create(
                     model=model,
                     max_tokens=request.max_tokens,
                     system=request.system,
                     messages=messages,
                     temperature=request.temperature,
-                    tools=_to_anthropic_tools(list(request.tools)),
+                    tools=tools,
+                    extra_headers=headers,
                 )
-            else:
-                response = await client.messages.create(
-                    model=model,
-                    max_tokens=request.max_tokens,
-                    system=request.system,
-                    messages=messages,
-                    temperature=request.temperature,
-                )
-        except Exception as exc:
-            raise self._translate(exc, model) from exc
+            return await client.messages.create(
+                model=model,
+                max_tokens=request.max_tokens,
+                system=request.system,
+                messages=messages,
+                temperature=request.temperature,
+                extra_headers=headers,
+            )
+
+        response: AnthropicMessage | None = None
+        for attempt in (0, 1):
+            headers = await self._auth_headers()
+            try:
+                response = await _create(headers)
+                break
+            except Exception as exc:
+                if await self._reauth(exc, model, attempt):
+                    continue
+                raise self._translate(exc, model) from exc
+        assert response is not None  # the loop either assigns or raises
         text = next((block.text for block in response.content if isinstance(block, TextBlock)), "")
         tool_calls: list[ToolCallResult] | None = None
         tool_use_blocks = [b for b in response.content if isinstance(b, ToolUseBlock)]
@@ -224,35 +277,50 @@ class AnthropicAdapter(ModelAdapter):
         model = request.model_id or self.model
         client = self._get_client()
         messages = self._build_messages(request)
-        try:
-            if request.tools:
-                stream_cm = client.messages.stream(
+        tools = _to_anthropic_tools(list(request.tools)) if request.tools else None
+
+        def _open(headers: dict[str, str] | None):
+            if tools is not None:
+                return client.messages.stream(
                     model=model,
                     max_tokens=request.max_tokens,
                     system=request.system,
                     messages=messages,
                     temperature=request.temperature,
-                    tools=_to_anthropic_tools(list(request.tools)),
+                    tools=tools,
+                    extra_headers=headers,
                 )
-            else:
-                stream_cm = client.messages.stream(
-                    model=model,
-                    max_tokens=request.max_tokens,
-                    system=request.system,
-                    messages=messages,
-                    temperature=request.temperature,
-                )
-            async with stream_cm as stream:
-                async for text in stream.text_stream:
-                    yield ModelChunk(text=text)
-                final = await stream.get_final_message()
-                yield ModelChunk(
-                    text="",
-                    input_tokens=final.usage.input_tokens,
-                    output_tokens=final.usage.output_tokens,
-                )
-        except Exception as exc:
-            raise self._translate(exc, model) from exc
+            return client.messages.stream(
+                model=model,
+                max_tokens=request.max_tokens,
+                system=request.system,
+                messages=messages,
+                temperature=request.temperature,
+                extra_headers=headers,
+            )
+
+        # A reactive refresh-retry only makes sense before any token is emitted;
+        # an auth failure occurs at stream open, so once text has flowed the
+        # error is surfaced as-is (output cannot be cleanly replayed).
+        for attempt in (0, 1):
+            headers = await self._auth_headers()
+            started = False
+            try:
+                async with _open(headers) as stream:
+                    async for text in stream.text_stream:
+                        started = True
+                        yield ModelChunk(text=text)
+                    final = await stream.get_final_message()
+                    yield ModelChunk(
+                        text="",
+                        input_tokens=final.usage.input_tokens,
+                        output_tokens=final.usage.output_tokens,
+                    )
+                return
+            except Exception as exc:
+                if not started and await self._reauth(exc, model, attempt):
+                    continue
+                raise self._translate(exc, model) from exc
 
     async def health_check(self) -> ModelHealth:
         model = self.model

@@ -61,6 +61,12 @@ _CROSS_CUTTING_GUARDS = frozenset(
         "mcp:name_shadowing",  # a server claiming a trusted builtin's name
         "mcp:changed_withheld",  # a rug-pulled (mutated) tool withheld until re-approved
         "secret:no_plaintext",  # no credential in output, span, or mcps.json
+        # OAuth 2.1 credential guards — the fail-closed envelope around sign-in.
+        "oauth:ssrf",  # https-only issuers; internal/link-local metadata rejected
+        "oauth:state",  # PKCE/state — mismatched or error callback rejected
+        "oauth:token_leak",  # no access/refresh token in logs, JSON, or errors
+        "oauth:refresh_bound",  # reactive 401→refresh→retry fires at most once
+        "oauth:metadata_injection",  # crafted server metadata neutralized by Pydantic parsing
     }
 )
 

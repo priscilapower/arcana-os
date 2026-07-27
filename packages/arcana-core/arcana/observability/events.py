@@ -152,6 +152,28 @@ class GuardrailViolationEvent:
     timestamp: str = field(default_factory=_now_iso)
 
 
+# The credential-lifecycle phases an AuthEvent reports — the single source of
+# truth shared by the event field and the emitter's signature.
+AuthPhase = Literal["login", "refreshed", "refresh_failed"]
+
+
+@dataclass
+class AuthEvent:
+    """Emitted across the OAuth credential lifecycle (login / refresh).
+
+    The signal that lets an operator see when a token was refreshed or — the
+    important case — when a refresh *failed* and the user must re-authenticate.
+    ``credential_ref`` is the keyring reference (a non-secret pointer); the token
+    itself is **never** placed on the event, per the keyring-only rule.
+    """
+
+    credential_ref: str
+    phase: AuthPhase
+    success: bool
+    type: Literal["auth"] = field(default="auth", init=False)
+    timestamp: str = field(default_factory=_now_iso)
+
+
 AuditEvent = (
     SessionEvent
     | ModelCallEvent
@@ -161,6 +183,7 @@ AuditEvent = (
     | MemoryPruneEvent
     | MemoryDegradedEvent
     | GuardrailViolationEvent
+    | AuthEvent
 )
 
 

@@ -51,19 +51,33 @@ arcana providers list
 arcana providers add                                          # interactive
 arcana providers add -p ollama -m hermes-3 -n local
 arcana providers add -p anthropic -m claude-sonnet-4-6 -n claude -k sk-...
+arcana providers add -p anthropic -m claude-sonnet-4-6 -n claude \
+  --oauth --issuer https://auth.example.com                   # sign in instead of pasting a key
 arcana providers show local
 arcana providers edit local --base-url http://gpu-box:11434
 arcana providers edit claude --rotate-key
 arcana providers remove local
 ```
 
+A connection authenticates by either a static **API key** or **OAuth 2.1**
+sign-in, recorded on an `auth_type` discriminator. The API-key path is the
+default for model providers (pass `--api-key`/`--api-key-env`, or answer the
+prompt); `--oauth --issuer <metadata-url>` runs a browser (or `--device`)
+sign-in and stores the resulting token in the OS keyring. `show` surfaces the
+`auth_type` and, for OAuth, the token's expiry — never the token itself.
+
 | Subcommand | Description |
 |-----------|-------------|
 | `list` | List all saved connections |
 | `add` | Add a connection (interactive or via flags) |
+| `login <name>` | Re-run OAuth sign-in for an existing connection (refresh an expired token) |
 | `show <name>` | Show a connection's details (secrets redacted) |
 | `edit <name>` | Edit base URL, API key, or custom headers |
 | `remove <name>` | Remove a connection and its stored credential |
+
+When an OAuth connection's token expires and can no longer be refreshed, run
+`arcana providers login <name>` (not `add`) — it reuses the connection's stored
+issuer/client and just refreshes the keyring token in place.
 
 | `providers add` flag | Description |
 |------|-------------|
@@ -72,6 +86,11 @@ arcana providers remove local
 | `--name / -n` | Connection name |
 | `--endpoint / -e` | Custom base URL |
 | `--api-key / -k` | API key (stored in the OS keyring, never in plaintext) |
+| `--api-key-env VAR` | Read the API key from an environment variable |
+| `--oauth` | Sign in with OAuth 2.1 instead of pasting a key (requires `--issuer`) |
+| `--issuer` | OAuth issuer / metadata base URL |
+| `--scope` | OAuth scope to request (repeatable) |
+| `--device` | Use the device-code grant (headless / no browser) |
 
 | `providers edit` flag | Description |
 |------|-------------|
@@ -123,9 +142,9 @@ re-approve tools whose third-party schema has changed. Read commands work offlin
 from persisted state; only `add` / `refresh` need the server reachable.
 
 ```bash
-arcana mcp add --name notion-mcp --url https://mcp.notion.com/sse
+arcana mcp add --name notion-mcp --url https://mcp.notion.com/mcp   # OAuth auto-detected → sign in
 arcana mcp add --name notion-mcp --url https://mcp.notion.com/sse \
-  --header "Authorization=Bearer $NOTION_TOKEN"          # token → keyring
+  --header "Authorization=Bearer $NOTION_TOKEN"          # opt into a static token → keyring
 arcana mcp add --name local-mcp --command my-server --arg --stdio
 arcana mcp list
 arcana mcp show notion-mcp
@@ -144,18 +163,26 @@ arcana mcp remove notion-mcp --force          # scans dependent agents first
 | `approve <name>` | Re-approve `changed` tools (`--tool <qn>` repeatable, or `--all`) |
 | `remove <name>` | Remove a server, its tools, and any keyring credential |
 
-`add` infers the transport (`--url` → SSE, `--command` → stdio). Auth material
-goes to the OS keyring — `mcps.json` stores only a reference, and a token is never
-echoed, logged, or written to disk.
+`add` infers the transport (`--url` → HTTP/SSE, `--command` → stdio). An HTTP/SSE
+server **defaults to OAuth 2.1 sign-in** when it advertises OAuth (detected from
+the server's Protected Resource Metadata) or with `--oauth`/`--issuer`;
+`--header`/`--auth-key` opt into a static bearer, and a server that advertises
+neither is added unauthenticated. stdio servers keep their scoped-env-var auth.
+Auth material goes to the OS keyring — `mcps.json` stores only a reference, and a
+token is never echoed, logged, or written to disk.
 
 | `mcp add` flag | Description |
 |------|-------------|
 | `--name / -n` | Server name (e.g. `notion-mcp`) |
-| `--url` | SSE endpoint URL (implies `--transport sse`) |
+| `--url` | HTTP/SSE endpoint URL |
 | `--command` | stdio server command (implies `--transport stdio`) |
 | `--arg` | stdio command argument (repeatable) |
-| `--transport` | `sse` or `stdio` (inferred from `--url` / `--command`) |
-| `--header` | SSE auth `Authorization=Bearer <token>` — stored in the keyring |
+| `--transport` | `http`, `sse`, or `stdio` (inferred from `--url` / `--command`) |
+| `--oauth` | Sign in with OAuth (default when the server advertises it) |
+| `--issuer` | OAuth issuer / metadata base (skips 401/PRM auto-detect) |
+| `--scope` | OAuth scope to request (repeatable) |
+| `--device` | Use the device-code grant (headless / no browser) |
+| `--header` | Static auth `Authorization=Bearer <token>` — stored in the keyring |
 | `--auth-key` | Existing keyring reference holding the bearer token |
 
 A tool whose description or input schema changes since it was first trusted is

@@ -6,7 +6,6 @@ protocol and surface normalized ModelError subclasses.
 """
 
 import asyncio
-import hashlib
 import logging
 import random
 import time
@@ -14,7 +13,9 @@ from collections.abc import AsyncGenerator, Callable, Mapping
 from contextlib import aclosing
 from dataclasses import dataclass, field, replace
 from typing import Any
+from uuid import NAMESPACE_URL, UUID, uuid5
 
+from arcana.auth import ApiKeyCredentialProvider, CredentialProvider, OAuthCredentialProvider
 from arcana.models.adapters.base import (
     CompletionRequest,
     CompletionResponse,
@@ -22,7 +23,7 @@ from arcana.models.adapters.base import (
     ModelChunk,
     ModelHealth,
 )
-from arcana.models.connection_store import ConnectionStore
+from arcana.models.connection_store import ConnectionStore, resolve_api_key
 from arcana.models.errors import (
     ModelError,
     ModelNotConfiguredError,
@@ -31,6 +32,7 @@ from arcana.models.errors import (
 )
 from arcana.models.pricing import DEFAULT_PRICING, CostEvent, PricingTable, Usage
 from arcana.observability import ModelCallEvent, get_audit_log, get_metrics, get_tracer
+from arcana.types.auth import AuthType
 from arcana.types.model import ModelConnection, ModelProvider
 
 _log = logging.getLogger(__name__)
@@ -95,19 +97,27 @@ class RetryPolicy:
 # Provider registry
 # ---------------------------------------------------------------------------
 
-_AdapterFactory = Callable[[ModelConnection, str | None], ModelAdapter]
+_AdapterFactory = Callable[[ModelConnection, "CredentialProvider | None"], ModelAdapter]
 
 
 @dataclass
 class ProviderEntry:
-    """Maps a provider string to an adapter factory, its default endpoint, and canonical enum."""
+    """Maps a provider string to an adapter factory, endpoint, enum, and key names.
+
+    ``env_var`` / ``provider_key`` are the environment variable and provider-named
+    keyring entry the ``api_key`` credential path resolves through (mirroring each
+    adapter's precedence); both ``None`` marks a keyless provider (Ollama), for
+    which no credential provider is built.
+    """
 
     factory: _AdapterFactory
     default_endpoint: str
     provider: "ModelProvider"
+    env_var: str | None = None
+    provider_key: str | None = None
 
 
-def _ollama_factory(conn: ModelConnection, _api_key: str | None) -> ModelAdapter:
+def _ollama_factory(conn: ModelConnection, _credentials: "CredentialProvider | None") -> ModelAdapter:
     from arcana.models.adapters.ollama import OllamaAdapter
 
     return OllamaAdapter(
@@ -116,42 +126,76 @@ def _ollama_factory(conn: ModelConnection, _api_key: str | None) -> ModelAdapter
     )
 
 
-def _anthropic_factory(conn: ModelConnection, api_key: str | None) -> ModelAdapter:
+def _anthropic_factory(conn: ModelConnection, credentials: "CredentialProvider | None") -> ModelAdapter:
     from arcana.models.adapters.anthropic import AnthropicAdapter
 
-    return AnthropicAdapter(model=conn.default_model or "", api_key=api_key, connection_id=conn.id)
+    return AnthropicAdapter(
+        model=conn.default_model or "",
+        connection_id=conn.id,
+        credentials=credentials,
+        auth_type=conn.auth_type,
+    )
 
 
-def _openai_compat_factory(conn: ModelConnection, api_key: str | None) -> ModelAdapter:
+def _openai_compat_factory(conn: ModelConnection, credentials: "CredentialProvider | None") -> ModelAdapter:
     from arcana.models.adapters.openai_compat import OpenAICompatAdapter
 
     return OpenAICompatAdapter(
         model=conn.default_model or "",
         base_url=conn.endpoint or "https://api.openai.com/v1",
-        api_key=api_key,
+        credentials=credentials,
     )
 
 
-def _custom_factory(conn: ModelConnection, api_key: str | None) -> ModelAdapter:
+def _custom_factory(conn: ModelConnection, credentials: "CredentialProvider | None") -> ModelAdapter:
     from arcana.models.adapters.custom_api import CustomAPIAdapter
 
     return CustomAPIAdapter(
         model=conn.default_model or "",
         base_url=conn.endpoint,
-        api_key=api_key,
+        credentials=credentials,
     )
 
 
-# Single source of truth: provider alias → (factory, default endpoint, canonical enum).
-# Aliases (lmstudio, openai-compat) share a factory and all point to OPENAI_COMPAT.
+# Single source of truth: provider alias → (factory, default endpoint, canonical
+# enum, credential key names). Aliases (lmstudio, openai-compat) share a factory
+# and all point to OPENAI_COMPAT.
 _DEFAULT_ENTRIES: dict[str, ProviderEntry] = {
     "ollama": ProviderEntry(_ollama_factory, "http://localhost:11434", ModelProvider.OLLAMA),
-    "anthropic": ProviderEntry(_anthropic_factory, "", ModelProvider.ANTHROPIC),
-    "openai": ProviderEntry(_openai_compat_factory, "https://api.openai.com/v1", ModelProvider.OPENAI),
-    "lmstudio": ProviderEntry(_openai_compat_factory, "http://localhost:1234/v1", ModelProvider.OPENAI_COMPAT),
-    "openai-compat": ProviderEntry(_openai_compat_factory, "", ModelProvider.OPENAI_COMPAT),
-    "openai_compat": ProviderEntry(_openai_compat_factory, "", ModelProvider.OPENAI_COMPAT),
-    "custom": ProviderEntry(_custom_factory, "", ModelProvider.CUSTOM),
+    "anthropic": ProviderEntry(
+        _anthropic_factory, "", ModelProvider.ANTHROPIC, env_var="ANTHROPIC_API_KEY", provider_key="anthropic_api_key"
+    ),
+    "openai": ProviderEntry(
+        _openai_compat_factory,
+        "https://api.openai.com/v1",
+        ModelProvider.OPENAI,
+        env_var="OPENAI_API_KEY",
+        provider_key="openai_api_key",
+    ),
+    "lmstudio": ProviderEntry(
+        _openai_compat_factory,
+        "http://localhost:1234/v1",
+        ModelProvider.OPENAI_COMPAT,
+        env_var="OPENAI_API_KEY",
+        provider_key="openai_api_key",
+    ),
+    "openai-compat": ProviderEntry(
+        _openai_compat_factory,
+        "",
+        ModelProvider.OPENAI_COMPAT,
+        env_var="OPENAI_API_KEY",
+        provider_key="openai_api_key",
+    ),
+    "openai_compat": ProviderEntry(
+        _openai_compat_factory,
+        "",
+        ModelProvider.OPENAI_COMPAT,
+        env_var="OPENAI_API_KEY",
+        provider_key="openai_api_key",
+    ),
+    "custom": ProviderEntry(
+        _custom_factory, "", ModelProvider.CUSTOM, env_var="CUSTOM_API_KEY", provider_key="custom_api_key"
+    ),
 }
 
 
@@ -177,7 +221,14 @@ class ProviderRegistry:
                 f"Unknown provider: {provider!r}. "
                 f"Register it via ProviderRegistry.register() or add a connection with `arcana providers add`."
             )
+        # Derive a *stable* id from provider + endpoint so repeated calls for the
+        # same unconfigured provider resolve to one identity — and therefore one
+        # pooled adapter (the cache is keyed on connection identity). model_id is
+        # deliberately excluded: the adapter is model-agnostic (the request
+        # carries model_id), so all models on one provider share the adapter.
+        conn_id = uuid5(NAMESPACE_URL, f"arcana:default-connection:{provider}:{entry.default_endpoint}")
         return ModelConnection(
+            id=conn_id,
             name=f"{provider}/{model_id}",
             provider=entry.provider,
             default_model=model_id,
@@ -213,9 +264,41 @@ class _CacheEntry:
         self.unhealthy_since = None
 
 
-def _cache_key(provider: str, endpoint: str, api_key: str | None) -> str:
-    key_hash = hashlib.sha256((api_key or "").encode()).hexdigest()[:8]
-    return f"{provider}:{endpoint}:{key_hash}"
+def _cache_key(provider: str, endpoint: str, connection_id: UUID) -> str:
+    """Key the adapter pool on **connection identity**, never the credential.
+
+    A rotating OAuth token must not spawn a new pooled adapter on every refresh
+    (nor leak-multiply pool entries), so the key is ``provider:endpoint:id`` —
+    the connection's stable identity — rather than a hash of the access token.
+    """
+    return f"{provider}:{endpoint}:{connection_id}"
+
+
+def _build_credentials(conn: ModelConnection, entry: ProviderEntry) -> CredentialProvider | None:
+    """Build the connection's credential provider from its ``auth_type``.
+
+    ``oauth`` → an :class:`OAuthCredentialProvider` over the keyring token;
+    ``api_key`` → an :class:`ApiKeyCredentialProvider` wrapping ``resolve_api_key``
+    (the unchanged four-step precedence); a keyless provider (no key names) → no
+    provider at all. A ``oauth`` connection missing its config/reference is a
+    fail-closed configuration error, surfaced when the connection is first used.
+    """
+    if conn.auth_type is AuthType.OAUTH:
+        if conn.oauth_config is None or not conn.credential_ref:
+            raise ModelNotConfiguredError(
+                f"Connection {conn.name!r} is auth_type=oauth but has no OAuth config or credential reference. "
+                f"Recreate it with `arcana providers add`."
+            )
+        return OAuthCredentialProvider(
+            conn.oauth_config,
+            conn.credential_ref,
+            reauth_hint=f"arcana providers login {conn.name}",
+        )
+    if entry.env_var is None and entry.provider_key is None:
+        return None  # keyless provider (e.g. Ollama)
+    env_var = entry.env_var or ""
+    provider_key = entry.provider_key or ""
+    return ApiKeyCredentialProvider(lambda: resolve_api_key(conn.id, env_var, provider_key))
 
 
 # ---------------------------------------------------------------------------
@@ -479,8 +562,7 @@ class ModelGateway:
     async def _get_cache_entry(self, conn: ModelConnection) -> _CacheEntry:
         provider = str(conn.provider)
         endpoint = conn.endpoint
-        api_key = self._connections.get_api_key(conn.id)
-        key = _cache_key(provider, endpoint, api_key)
+        key = _cache_key(provider, endpoint, conn.id)
 
         if key not in self._cache_locks:
             self._cache_locks[key] = asyncio.Lock()
@@ -490,9 +572,10 @@ class ModelGateway:
                 entry = self._providers.get(provider)
                 if entry is None:
                     raise ValueError(f"No adapter registered for provider: {provider!r}")
+                credentials = _build_credentials(conn, entry)
                 # Build with empty default_model — request.model_id carries the actual model.
                 conn_for_factory = conn.model_copy(update={"default_model": ""})
-                adapter = entry.factory(conn_for_factory, api_key)
+                adapter = entry.factory(conn_for_factory, credentials)
                 await adapter.connect()
                 self._cache[key] = _CacheEntry(adapter=adapter)
 

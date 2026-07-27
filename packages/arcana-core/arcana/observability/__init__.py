@@ -18,6 +18,8 @@ from pathlib import Path
 from arcana.observability.audit import AuditLog
 from arcana.observability.events import (
     AuditEvent,
+    AuthEvent,
+    AuthPhase,
     GuardrailViolationEvent,
     MemoryDegradedEvent,
     MemoryDegradeReason,
@@ -92,6 +94,21 @@ def emit_guardrail_violation(event: GuardrailViolationEvent) -> None:
         pass
 
 
+def emit_auth_event(credential_ref: str, *, phase: AuthPhase, success: bool) -> None:
+    """Record an OAuth lifecycle event to the audit log (best effort).
+
+    Tokens are never on the event — only the keyring reference — so this is safe
+    to emit anywhere in the credential path. Like the other emitters, every
+    failure is swallowed: observability must never break authentication.
+    """
+    try:
+        audit = get_audit_log()
+        if audit is not None:
+            audit.append(AuthEvent(credential_ref=credential_ref, phase=phase, success=success))
+    except Exception:
+        pass
+
+
 __all__ = [
     # Configuration
     "configure_observability",
@@ -104,11 +121,14 @@ __all__ = [
     # Emitters
     "emit_degraded",
     "emit_guardrail_violation",
+    "emit_auth_event",
     # Classes
     "AuditLog",
     "ArcanaMetrics",
     # Events
     "AuditEvent",
+    "AuthEvent",
+    "AuthPhase",
     "SessionEvent",
     "ModelCallEvent",
     "RoutingEvent",
