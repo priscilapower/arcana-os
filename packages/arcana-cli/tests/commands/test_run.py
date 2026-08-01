@@ -123,8 +123,31 @@ def test_run_with_empty_prompt_exits_nonzero():
     assert "empty" in result.output
 
 
-def test_run_without_agent_exits_nonzero():
+def test_run_without_agent_and_no_agents_asks_for_agent(arcana_home):
+    # No agents configured → the World can't pick one → asks the user to name one.
     result = runner.invoke(app, ["run", "hello"])
+    assert result.exit_code != 0
+    assert "--agent" in result.output
+
+
+def test_run_without_agent_routes_to_sole_agent(agent_fixture, arcana_home, monkeypatch):
+    mock_runtime = MagicMock()
+    mock_runtime.run = AsyncMock(return_value="routed reply")
+    monkeypatch.setattr(run_mod, "ModelGateway", _MockGateway)
+    monkeypatch.setattr(AgentRegistry, "build_runtime", lambda *a, **k: mock_runtime)
+
+    result = runner.invoke(app, ["run", "hello"])  # no --agent
+    assert result.exit_code == 0, result.output
+    assert "routed reply" in result.output
+    assert "The World routed to" in result.output
+    assert "scout" in result.output
+
+
+def test_run_without_agent_ambiguous_asks_for_agent(arcana_home, conn_fixture):
+    reg = AgentRegistry(arcana_home / "agents")
+    reg.create(name="one", card=Card.HERMIT, model="ollama/hermes-3")
+    reg.create(name="two", card=Card.HERMIT, model="ollama/hermes-3")
+    result = runner.invoke(app, ["run", "hello"])  # two candidates, no rule/default
     assert result.exit_code != 0
     assert "--agent" in result.output
 
@@ -194,6 +217,20 @@ def test_run_with_agent_stream(agent_fixture, arcana_home, monkeypatch):
     result = runner.invoke(app, ["run", "hello", "--agent", "scout", "--stream"])
     assert result.exit_code == 0, result.output
     assert "Hello from stream" in result.output
+
+
+def test_run_with_agent_writes_explicit_routing_audit(agent_fixture, arcana_home, monkeypatch):
+    """--agent bypasses routing and records an EXPLICIT decision to the audit."""
+    mock_runtime = MagicMock()
+    mock_runtime.run = AsyncMock(return_value="ok")
+    monkeypatch.setattr(run_mod, "ModelGateway", _MockGateway)
+    monkeypatch.setattr(AgentRegistry, "build_runtime", lambda *a, **k: mock_runtime)
+
+    result = runner.invoke(app, ["run", "hello", "--agent", "scout"])
+    assert result.exit_code == 0, result.output
+    audit = arcana_home / "world" / "routing_audit.jsonl"
+    assert audit.exists()
+    assert '"layer":"explicit"' in audit.read_text()
 
 
 def test_run_with_agent_by_uuid(agent_fixture, arcana_home, monkeypatch):

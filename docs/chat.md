@@ -11,10 +11,12 @@ never drifts up the screen. It runs the same agent + session + memory path as
 arcana chat --agent researcher
 ```
 
-Pass an agent by name or UUID with `--agent` / `-a`. Add `--no-memory` to run
-stateless, or `--session <uuid>` to resume an earlier session — its recent turns
-are replayed on screen so you pick up where you left off. The full flag list is
-in the [CLI reference](cli.md).
+Pass an agent by name or UUID with `--agent` / `-a`. Omit it and **The World**
+picks the agent for you — its configured default, or the sole agent if you only
+have one; when it can't decide it asks you to name one with `--agent`. Add
+`--no-memory` to run stateless, or `--session <uuid>` to resume an earlier
+session — its recent turns are replayed on screen so you pick up where you left
+off. The full flag list is in the [CLI reference](cli.md).
 
 Replies stream in and render as Markdown. Model reasoning wrapped in
 `<think>…</think>` is dimmed rather than shown as raw tags, and inline LaTeX

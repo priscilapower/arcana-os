@@ -35,10 +35,13 @@ from arcana.agents.registry import AgentRegistry
 from arcana.agents.session_manager import SessionManager
 from arcana.models.connection_store import ConnectionStore
 from arcana.models.gateway import ModelGateway
+from arcana.types.agent import Agent as AgentRecord
+from arcana.types.session import SessionTrigger
+from arcana.world import NoRouteAskUser
 from arcana_cli.commands.chat.controller import _H_PAD, _ChatController
 from arcana_cli.commands.chat.editor import _agent_history, _build_key_bindings, _SlashCompleter
 from arcana_cli.commands.chat.render import _replay_blocks
-from arcana_cli.commands.run import build_session_runtime, find_agent
+from arcana_cli.commands.run import build_session_runtime, build_world_engine, find_agent
 from arcana_cli.constants import ARCANA_HOME
 from arcana_cli.ui.theme import ACCENT, SEP, SURFACE, SURFACE_HI, TXT2, TXT3, dim, err
 
@@ -203,16 +206,32 @@ def chat_cmd(
     """Start an interactive REPL with a card-configured agent."""
 
     async def _chat() -> None:
-        if not agent:
-            # World routing of the first message is deferred to the World Engine.
-            console.print(err("The World isn't available yet, pass --agent <name>."))
-            raise typer.Exit(1)
-
         reg = AgentRegistry(ARCANA_HOME / "agents")
-        record = find_agent(agent, reg)
-        if record is None:
-            console.print(err(f"No agent '{agent}'."))
-            raise typer.Exit(1)
+
+        # With --agent, chat opens with that agent. Without one, The World
+        # resolves a default agent to open the session (the opening task carries
+        # no text, so only default resolution applies); if it can't decide, the
+        # user is asked to name one. /switch re-resolves an agent mid-session.
+        record: AgentRecord | None
+        if agent:
+            record = find_agent(agent, reg)
+            if record is None:
+                console.print(err(f"No agent '{agent}'."))
+                raise typer.Exit(1)
+        else:
+            # The user ran `arcana chat`, so the routing (and the session it
+            # opens) is user-triggered even though The World picks the agent.
+            try:
+                decision = build_world_engine(reg).route("", trigger_origin=SessionTrigger.USER)
+            except NoRouteAskUser as exc:
+                console.print(err("The World couldn't pick an agent. Start the chat with --agent <name>."))
+                raise typer.Exit(1) from exc
+            record = reg.get(decision.resolved_agent_id) if decision.resolved_agent_id else None
+            if record is None:
+                console.print(err("The routed agent could not be loaded."))
+                raise typer.Exit(1)
+            console.print(dim(f"The World opened this chat with {record.name}."))
+
         if not record.model:
             console.print(
                 err(

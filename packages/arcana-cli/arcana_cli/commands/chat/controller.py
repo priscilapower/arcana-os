@@ -33,7 +33,7 @@ from arcana_cli.commands.chat.render import (
     _Transcript,
     _user_block,
 )
-from arcana_cli.commands.run import build_session_runtime, find_agent
+from arcana_cli.commands.run import build_session_runtime, build_world_engine, find_agent
 from arcana_cli.ui.theme import TXT3, card_color, dim, err
 
 # Package-internal exports — the app layout builds on these. Declared so the
@@ -278,6 +278,10 @@ class _ChatController:
         if not new_record.model:
             self._note(err(f"No model configured for agent '{escape(new_record.name)}'."))
             return
+        # /switch is an explicit reroute — record the decision in the routing
+        # audit, then load the named agent. Conversation-context transfer is out
+        # of scope here; this only re-resolves the agent.
+        build_world_engine(self.reg).route("", explicit_agent=new_record)
         if self.federation is not None:
             await self.federation.aclose()
         self._sm.close(self.session)
@@ -291,4 +295,4 @@ class _ChatController:
             self.reg, new_record, self._gw, self._sm, no_memory=self.memory_off
         )
         self.append_header()
-        self._note(dim("(World re-routing deferred - loaded the named agent directly.)"))
+        self._note(dim(f"(switched to {escape(new_record.name)} · explicit route)"))

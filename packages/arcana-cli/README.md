@@ -403,4 +403,4 @@ uv run pytest packages/arcana-cli/tests/ -v
 
 ## Roadmap
 
-Agents now run with persistent sessions and the federated memory layer wired into `run` and `chat`. Still to come are the commands whose backends land later — `arcana world`, `arcana spread`, and `arcana mcp` (the tool/MCP gateway and **The World** meta-agent).
+Agents run with persistent sessions and the federated memory layer wired into `run` and `chat`. **The World** now resolves *which agent runs a task* deterministically: `arcana world route "<prompt>"` shows the decision as a dry run, and `run`/`chat` route their first turn through it when you don't pass `--agent`. Still to come are the commands whose backends land later — `arcana spread`, and the rest of the World meta-agent (briefings, cross-agent memory, and the model-assisted routing tier).
