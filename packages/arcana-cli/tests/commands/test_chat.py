@@ -151,10 +151,10 @@ def _patch_build(monkeypatch, runtime, federation=None):
 # ---------------------------------------------------------------------------
 # Validation / error paths (exit before the full-screen app is built)
 # ---------------------------------------------------------------------------
-def test_chat_without_agent_prints_world_deferral(arcana_home):
+def test_chat_without_agent_and_no_agents_asks_for_agent(arcana_home):
+    # No agents configured → the World can't open the chat → asks for --agent.
     result = runner.invoke(app, ["chat"])
     assert result.exit_code != 0
-    assert "The World isn't available yet" in result.output
     assert "--agent" in result.output
 
 
@@ -338,8 +338,19 @@ async def test_switch_loads_named_agent(agent_fixture, arcana_home, monkeypatch)
     await _feed(c, ["/switch sage"])
     out = c.transcript.plain_text()
     assert "sage" in out
-    assert "deferred" in out.lower()
+    assert "explicit route" in out.lower()
     assert c.record.name == "sage"
+
+
+async def test_switch_records_explicit_routing_audit(agent_fixture, arcana_home, monkeypatch):
+    reg = AgentRegistry(arcana_home / "agents")
+    reg.create(name="sage", card=Card.HIGH_PRIESTESS, model="ollama/hermes-3")
+    c = _make_controller(arcana_home, agent_fixture, _mock_runtime())
+    _patch_build(monkeypatch, _mock_runtime())
+    await _feed(c, ["/switch sage"])
+    audit = arcana_home / "world" / "routing_audit.jsonl"
+    assert audit.exists()
+    assert '"layer":"explicit"' in audit.read_text()
 
 
 async def test_save_reports_snapshot(agent_fixture, arcana_home):

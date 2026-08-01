@@ -19,6 +19,7 @@ from arcana.models.adapters.fastembed_embedding import FastEmbedEmbeddingAdapter
 from arcana.models.connection_store import ConnectionStore
 from arcana.models.gateway import ModelGateway
 from arcana.types.agent import Agent as AgentRecord
+from arcana.world import NoRouteAskUser, RoutingAuditLog, WorldEngine, WorldStore
 from arcana_cli.constants import ARCANA_HOME
 from arcana_cli.ui.theme import (
     ACCENT,
@@ -56,6 +57,15 @@ def find_agent(name_or_id: str, reg: AgentRegistry) -> AgentRecord | None:
             console.print(f"  {a.id}")
         raise typer.Exit(1)
     return matches[0]
+
+
+def build_world_engine(reg: AgentRegistry) -> WorldEngine:
+    """A WorldEngine over the on-disk agents, rules, and routing audit log."""
+    return WorldEngine(
+        reg,
+        store=WorldStore(ARCANA_HOME),
+        audit=RoutingAuditLog(ARCANA_HOME / "world" / "routing_audit.jsonl"),
+    )
 
 
 def resolve_embedding_gateway() -> EmbeddingGateway | None:
@@ -134,7 +144,13 @@ def init_cmd() -> None:
             },
         }
         (ARCANA_HOME / "config.json").write_text(json.dumps(config, indent=2))
-        (ARCANA_HOME / "world.json").write_text(json.dumps({"active_spread": None, "routing_rules": []}, indent=2))
+        world: dict[str, object] = {
+            "active_spread": None,
+            "routing_rules": [],
+            "default_agent_id": None,
+            "retry_window_s": 60,
+        }
+        (ARCANA_HOME / "world.json").write_text(json.dumps(world, indent=2))
 
     console.print(
         make_panel_fit(
@@ -180,19 +196,39 @@ def run_cmd(
             console.print(err("Prompt cannot be empty."))
             raise typer.Exit(1)
 
-        if not agent:
-            console.print(err("--agent is required. Use: arcana run <prompt> --agent <name>"))
-            raise typer.Exit(1)
-
         if session_id and continue_:
             console.print(err("--session and --continue are mutually exclusive."))
             raise typer.Exit(1)
 
         reg = AgentRegistry(ARCANA_HOME / "agents")
-        record = find_agent(agent, reg)
-        if record is None:
-            console.print(err(f"No agent '{agent}'."))
-            raise typer.Exit(1)
+
+        # An explicit --agent bypasses routing; without one, The World's router
+        # resolves the agent. Either way a RoutingDecision is audited before the
+        # agent runs.
+        explicit: AgentRecord | None = None
+        if agent:
+            explicit = find_agent(agent, reg)
+            if explicit is None:
+                console.print(err(f"No agent '{agent}'."))
+                raise typer.Exit(1)
+
+        try:
+            decision = build_world_engine(reg).route(prompt, explicit_agent=explicit)
+        except NoRouteAskUser as exc:
+            console.print(err("The World couldn't pick an agent. Name one with --agent <name>."))
+            raise typer.Exit(1) from exc
+
+        if explicit is not None:
+            record = explicit
+        else:
+            # route() raises NoRouteAskUser rather than resolving to None, so a
+            # returned decision always names an agent here.
+            assert decision.resolved_agent_id is not None
+            record = reg.get(decision.resolved_agent_id)
+            if record is None:
+                console.print(err("The routed agent could not be loaded."))
+                raise typer.Exit(1)
+            console.print(dim(f"The World routed to {record.name} · {decision.layer.value}"))
 
         model_str = record.model
         if not model_str:

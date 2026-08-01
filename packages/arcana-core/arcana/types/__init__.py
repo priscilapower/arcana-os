@@ -73,7 +73,16 @@ from arcana.types.tool import (
     ToolType,
 )
 from arcana.types.workspace import Workspace
-from arcana.types.world import RoutingRule, Spread, SpreadLayout, WorldConfig
+from arcana.types.world import (
+    ResolutionLayer,
+    RoutingConfig,
+    RoutingDecision,
+    RoutingRule,
+    RuleMatchMode,
+    Spread,
+    SpreadLayout,
+    WorldConfig,
+)
 
 __all__ = [
     # JSON primitives
@@ -153,6 +162,10 @@ __all__ = [
     # World
     "WorldConfig",
     "RoutingRule",
+    "RuleMatchMode",
+    "ResolutionLayer",
+    "RoutingConfig",
+    "RoutingDecision",
     "Spread",
     "SpreadLayout",
     # Workspace
