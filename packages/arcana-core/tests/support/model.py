@@ -20,10 +20,12 @@ The first ``complete()`` asks for a ``web_search`` call; once its result is fed
 back, the second returns the final text and the loop stops.
 """
 
+import asyncio
 import json
 from collections.abc import AsyncGenerator, Sequence
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID, uuid4
 
 from arcana.models.adapters.base import (
     CompletionRequest,
@@ -32,6 +34,7 @@ from arcana.models.adapters.base import (
     ModelChunk,
     ToolCallResult,
 )
+from arcana.types import ModelConnection, ModelProvider
 
 
 def tool_call(name: str, *, call_id: str = "call-1", **arguments: Any) -> ToolCallResult:
@@ -123,3 +126,55 @@ class ScriptedModel:
         turn = self._script[self._turn]
         self._turn += 1
         return turn
+
+
+def reflex_reply(agent_id: UUID, *, confidence: float = 0.8, reasoning: str = "best fit") -> str:
+    """The JSON reply a reflex model returns to pick ``agent_id`` — for scripting
+    :class:`RoutingModel`'s ``content``."""
+    return json.dumps({"agent_id": str(agent_id), "confidence": confidence, "reasoning": reasoning})
+
+
+class RoutingModel:
+    """A ``ModelGateway`` stand-in for the reflex classifier (semantic routing).
+
+    Duck-types the two methods :class:`~arcana.world.reflex.ReflexClassifier`
+    uses — ``complete`` (async, one scripted reply) and ``resolve`` (sync, a
+    fixed connection). It records every request in :attr:`seen` and counts
+    ``complete`` calls in :attr:`completions`, so a test can assert *whether the
+    model was consulted at all* (the tier gate / no-model-call regression checks).
+
+    Set ``content`` to the JSON the classifier should parse, ``error`` to make
+    ``complete`` raise, ``delay`` to make it outlast the classifier's timeout, or
+    ``resolve_error`` to make ``resolve`` fail (an unresolvable reflex model).
+    """
+
+    def __init__(
+        self,
+        *,
+        content: str = "",
+        connection_id: UUID | None = None,
+        error: Exception | None = None,
+        delay: float | None = None,
+        resolve_error: Exception | None = None,
+    ) -> None:
+        self.content = content
+        self._conn_id = connection_id or uuid4()
+        self._error = error
+        self._delay = delay
+        self._resolve_error = resolve_error
+        self.completions = 0
+        self.seen: list[CompletionRequest] = []
+
+    async def complete(self, model: str, request: CompletionRequest) -> CompletionResponse:
+        self.completions += 1
+        self.seen.append(request)
+        if self._delay is not None:
+            await asyncio.sleep(self._delay)
+        if self._error is not None:
+            raise self._error
+        return CompletionResponse(content=self.content)
+
+    def resolve(self, model: str) -> ModelConnection:
+        if self._resolve_error is not None:
+            raise self._resolve_error
+        return ModelConnection(id=self._conn_id, name=model, provider=ModelProvider.OLLAMA)

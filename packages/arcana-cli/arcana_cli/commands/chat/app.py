@@ -222,7 +222,7 @@ def chat_cmd(
             # The user ran `arcana chat`, so the routing (and the session it
             # opens) is user-triggered even though The World picks the agent.
             try:
-                decision = build_world_engine(reg).route("", trigger_origin=SessionTrigger.USER)
+                decision = await build_world_engine(reg).route("", trigger_origin=SessionTrigger.USER)
             except NoRouteAskUser as exc:
                 console.print(err("The World couldn't pick an agent. Start the chat with --agent <name>."))
                 raise typer.Exit(1) from exc

@@ -143,6 +143,34 @@ class SessionManager:
                 pass
         return sorted(sessions, key=lambda s: s.started_at)
 
+    def latest_session(self, agent_id: UUID) -> Session | None:
+        """Return the agent's most recently written session, or ``None``.
+
+        Picks the newest session file by modification time and parses only that
+        one, so a caller that just needs the last session never deserializes the
+        agent's whole history. Returns ``None`` when there are none or the newest
+        file is unreadable.
+        """
+        sessions_dir = self._base / str(agent_id) / "sessions"
+        if not sessions_dir.exists():
+            return None
+        newest: Path | None = None
+        newest_mtime = -1.0
+        for path in sessions_dir.glob("*.json"):
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if mtime > newest_mtime:
+                newest_mtime = mtime
+                newest = path
+        if newest is None:
+            return None
+        try:
+            return Session.model_validate_json(newest.read_text())
+        except (OSError, ValueError):
+            return None
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------

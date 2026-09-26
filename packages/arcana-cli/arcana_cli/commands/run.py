@@ -3,6 +3,7 @@
 import asyncio
 import importlib.util
 import json
+import os
 from uuid import UUID
 
 import typer
@@ -19,7 +20,16 @@ from arcana.models.adapters.fastembed_embedding import FastEmbedEmbeddingAdapter
 from arcana.models.connection_store import ConnectionStore
 from arcana.models.gateway import ModelGateway
 from arcana.types.agent import Agent as AgentRecord
-from arcana.world import NoRouteAskUser, RoutingAuditLog, WorldEngine, WorldStore
+from arcana.types.session import Session
+from arcana.world import (
+    LearningSignalLog,
+    NoRouteAskUser,
+    QualitySignalSink,
+    ReflexClassifier,
+    RoutingAuditLog,
+    WorldEngine,
+    WorldStore,
+)
 from arcana_cli.constants import ARCANA_HOME
 from arcana_cli.ui.theme import (
     ACCENT,
@@ -59,13 +69,49 @@ def find_agent(name_or_id: str, reg: AgentRegistry) -> AgentRecord | None:
     return matches[0]
 
 
-def build_world_engine(reg: AgentRegistry) -> WorldEngine:
-    """A WorldEngine over the on-disk agents, rules, and routing audit log."""
+def build_world_engine(
+    reg: AgentRegistry,
+    *,
+    reflex: ReflexClassifier | None = None,
+    sessions: SessionManager | None = None,
+    signals: QualitySignalSink | None = None,
+) -> WorldEngine:
+    """A WorldEngine over the on-disk agents, rules, and routing audit log.
+
+    Passing a ``reflex`` classifier enables model-backed semantic routing;
+    ``sessions`` + ``signals`` enable the ``USER_RETRY`` learning signal. All are
+    optional — the default engine routes deterministically over the file-system inputs.
+    """
     return WorldEngine(
         reg,
         store=WorldStore(ARCANA_HOME),
         audit=RoutingAuditLog(ARCANA_HOME / "world" / "routing_audit.jsonl"),
+        reflex=reflex,
+        sessions=sessions,
+        signals=signals,
     )
+
+
+# The reflex model The World routes with, as a ``provider/model_id`` reference.
+# Set it to turn on semantic routing; unset, routing stays deterministic.
+REFLEX_MODEL_ENV = "ARCANA_REFLEX_MODEL"
+
+
+def resolve_reflex_classifier(gateway: ModelGateway) -> ReflexClassifier | None:
+    """Build the reflex classifier from the reflex-model reference, or ``None``.
+
+    Reads the model reference from ``ARCANA_REFLEX_MODEL``; absent it, The World
+    has no model to route with (the no-model tier) and the classifier is skipped.
+    """
+    reflex_model = os.environ.get(REFLEX_MODEL_ENV, "").strip()
+    if not reflex_model:
+        return None
+    return ReflexClassifier(gateway, reflex_model)
+
+
+def build_signal_sink() -> QualitySignalSink:
+    """The learning-loop sink for quality signals (append-only JSONL)."""
+    return LearningSignalLog(ARCANA_HOME / "world" / "quality_signals.jsonl")
 
 
 def resolve_embedding_gateway() -> EmbeddingGateway | None:
@@ -212,98 +258,134 @@ def run_cmd(
                 console.print(err(f"No agent '{agent}'."))
                 raise typer.Exit(1)
 
-        try:
-            decision = build_world_engine(reg).route(prompt, explicit_agent=explicit)
-        except NoRouteAskUser as exc:
-            console.print(err("The World couldn't pick an agent. Name one with --agent <name>."))
-            raise typer.Exit(1) from exc
-
-        if explicit is not None:
-            record = explicit
-        else:
-            # route() raises NoRouteAskUser rather than resolving to None, so a
-            # returned decision always names an agent here.
-            assert decision.resolved_agent_id is not None
-            record = reg.get(decision.resolved_agent_id)
-            if record is None:
-                console.print(err("The routed agent could not be loaded."))
-                raise typer.Exit(1)
-            console.print(dim(f"The World routed to {record.name} · {decision.layer.value}"))
-
-        model_str = record.model
-        if not model_str:
-            console.print(
-                err(
-                    f"No model configured for agent '{record.name}'. "
-                    f"Run: arcana agent edit {record.name} --model <provider/model_id>"
-                )
-            )
-            raise typer.Exit(1)
-
         store = ConnectionStore(ARCANA_HOME / "connections" / "models.json")
-        accent = card_color(record.card)
-        console.print(dim(f"Agent: {record.name} · {record.card.value} · {model_str}"))
-
         sm = SessionManager(ARCANA_HOME / "agents")
 
-        if session_id:
+        # One gateway serves both routing (the reflex call, when enabled) and
+        # the agent run, so a single connection pool is opened and closed.
+        async with ModelGateway(connections=store) as gw:
+            engine = build_world_engine(
+                reg,
+                reflex=resolve_reflex_classifier(gw),
+                sessions=sm,
+                signals=build_signal_sink(),
+            )
             try:
-                sid = UUID(session_id)
-            except ValueError as e:
-                console.print(err(f"Invalid session id: '{session_id}'"))
-                raise typer.Exit(1) from e
-            session = sm.load(record.id, sid)
-            if session is None:
-                console.print(err(f"Session '{session_id}' not found for agent '{record.name}'."))
-                raise typer.Exit(1)
-        elif continue_:
-            prior = sm.list_sessions(record.id)
-            if prior:
-                session = prior[-1]
-                console.print(dim(f"Resuming session {str(session.id)[:8]}…"))
-            else:
-                session = sm.start(record.id)
-                console.print(dim("No prior sessions found — starting a new one."))
-        else:
-            session = sm.start(record.id)
+                decision = await engine.route(prompt, explicit_agent=explicit)
+            except NoRouteAskUser as exc:
+                console.print(err("The World couldn't pick an agent. Name one with --agent <name>."))
+                raise typer.Exit(1) from exc
 
-        try:
-            async with ModelGateway(connections=store) as gw:
-                runtime_agent, federation = await build_session_runtime(reg, record, gw, sm, no_memory=no_memory)
-                try:
-                    if stream:
-                        live = Live(
-                            Spinner("dots", text=f"[bold {accent}]{PROMPT} thinking...[/]"),
-                            console=console,
-                            transient=True,
-                        )
-                        live.start()
-                        first = True
-                        async for chunk in runtime_agent.stream(prompt, session=session):
-                            if first:
-                                live.stop()
-                                first = False
-                            print(chunk, end="", flush=True)
-                        if first:
-                            live.stop()
-                        print()
-                    else:
-                        with console.status(
-                            f"[bold {accent}]{PROMPT} thinking...[/]",
-                            spinner="dots",
-                            spinner_style=f"bold {accent}",
-                        ):
-                            response = await runtime_agent.run(prompt, session=session)
-                        console.print(make_panel(response, card=record.card))
-                finally:
-                    # Release the private SQLite handle and any vector store with the run.
-                    if federation is not None:
-                        await federation.aclose()
-        except Exception as exc:
-            console.print(err(f"Error: {exc}"))
-            raise typer.Exit(1) from exc
+            if explicit is not None:
+                record = explicit
+            else:
+                # route() raises NoRouteAskUser rather than resolving to None, so a
+                # returned decision always names an agent here.
+                assert decision.resolved_agent_id is not None
+                record = reg.get(decision.resolved_agent_id)
+                if record is None:
+                    console.print(err("The routed agent could not be loaded."))
+                    raise typer.Exit(1)
+                console.print(dim(f"The World routed to {record.name} · {decision.layer.value}"))
+                if decision.low_confidence:
+                    console.print(warn(f"couldn't confidently route — using {record.name}"))
+
+            model_str = record.model
+            if not model_str:
+                console.print(
+                    err(
+                        f"No model configured for agent '{record.name}'. "
+                        f"Run: arcana agent edit {record.name} --model <provider/model_id>"
+                    )
+                )
+                raise typer.Exit(1)
+
+            accent = card_color(record.card)
+            console.print(dim(f"Agent: {record.name} · {record.card.value} · {model_str}"))
+
+            session = _resolve_session(sm, record, session_id, continue_)
+            await _run_agent_turn(
+                reg, record, gw, sm, session, prompt, stream=stream, no_memory=no_memory, accent=accent
+            )
 
         short_id = str(session.id)[:8]
         console.print(dim(f"session: {short_id}  ·  continue with  --session {session.id}  (or --continue)"))
 
     asyncio.run(_run())
+
+
+def _resolve_session(sm: SessionManager, record: AgentRecord, session_id: str | None, continue_: bool) -> Session:
+    """Load, resume, or start the session a run should use.
+
+    ``--session`` loads a specific session (error if missing/invalid);
+    ``--continue`` resumes the agent's most recent one (or starts fresh if none);
+    otherwise a new session is started.
+    """
+    if session_id:
+        try:
+            sid = UUID(session_id)
+        except ValueError as e:
+            console.print(err(f"Invalid session id: '{session_id}'"))
+            raise typer.Exit(1) from e
+        session = sm.load(record.id, sid)
+        if session is None:
+            console.print(err(f"Session '{session_id}' not found for agent '{record.name}'."))
+            raise typer.Exit(1)
+        return session
+    if continue_:
+        prior = sm.list_sessions(record.id)
+        if prior:
+            session = prior[-1]
+            console.print(dim(f"Resuming session {str(session.id)[:8]}…"))
+            return session
+        console.print(dim("No prior sessions found — starting a new one."))
+    return sm.start(record.id)
+
+
+async def _run_agent_turn(
+    reg: AgentRegistry,
+    record: AgentRecord,
+    gw: ModelGateway,
+    sm: SessionManager,
+    session: Session,
+    prompt: str,
+    *,
+    stream: bool,
+    no_memory: bool,
+    accent: str,
+) -> None:
+    """Run (or stream) one turn against the resolved agent, releasing memory after."""
+    try:
+        runtime_agent, federation = await build_session_runtime(reg, record, gw, sm, no_memory=no_memory)
+        try:
+            if stream:
+                live = Live(
+                    Spinner("dots", text=f"[bold {accent}]{PROMPT} thinking...[/]"),
+                    console=console,
+                    transient=True,
+                )
+                live.start()
+                first = True
+                async for chunk in runtime_agent.stream(prompt, session=session):
+                    if first:
+                        live.stop()
+                        first = False
+                    print(chunk, end="", flush=True)
+                if first:
+                    live.stop()
+                print()
+            else:
+                with console.status(
+                    f"[bold {accent}]{PROMPT} thinking...[/]",
+                    spinner="dots",
+                    spinner_style=f"bold {accent}",
+                ):
+                    response = await runtime_agent.run(prompt, session=session)
+                console.print(make_panel(response, card=record.card))
+        finally:
+            # Release the private SQLite handle and any vector store with the run.
+            if federation is not None:
+                await federation.aclose()
+    except Exception as exc:
+        console.print(err(f"Error: {exc}"))
+        raise typer.Exit(1) from exc

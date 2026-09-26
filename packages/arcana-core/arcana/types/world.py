@@ -13,6 +13,21 @@ from arcana.types.guardrails import GuardrailRule
 from arcana.types.session import SessionTrigger
 
 
+class CapabilityTier(StrEnum):
+    """The model capability available to the World for a routing decision.
+
+    The tier gates the reflex classifier: at ``NO_MODEL`` the World has no model
+    to consult, so routing stays fully deterministic (no reflex call). At
+    ``REFLEX`` or ``REASONING`` a reflex model is present and the classifier runs
+    on it — routing is ambient, so it always uses the cheap reflex model even when
+    a reasoning model is also configured.
+    """
+
+    NO_MODEL = "no_model"
+    REFLEX = "reflex"
+    REASONING = "reasoning"
+
+
 class ResolutionLayer(StrEnum):
     """Which layer of the routing pipeline resolved a task to its agent.
 
@@ -116,6 +131,21 @@ class RoutingConfig(BaseModel):
     retry_window_s: int = 60
 
 
+class ReflexPick(BaseModel):
+    """The reflex classifier's structured choice over the candidate pool.
+
+    One local reflex-model call ranks the pool and returns the best agent with a
+    ``confidence`` (0.0–1.0) and a one-line ``reasoning``. The engine stamps
+    these onto the :class:`RoutingDecision` (``reflex_confidence`` /
+    ``reflex_reasoning``) and, when ``confidence`` is below the configured
+    threshold, still uses the pick but flags it ``low_confidence``.
+    """
+
+    agent_id: UUID
+    confidence: float = Field(ge=0.0, le=1.0)
+    reasoning: str = ""
+
+
 class RoutingDecision(BaseModel):
     """The record of a single routing resolution — *which* agent runs a task and
     *how* the World arrived at it.
@@ -126,6 +156,12 @@ class RoutingDecision(BaseModel):
     here has to be reshaped when that lands. ``resolved_agent_id`` is ``None``
     only when the ``DEFAULT`` layer could not pick an agent and the caller must
     ask the user.
+
+    The ``reflex_*`` fields and ``low_confidence`` are set only on a ``REFLEX``
+    decision: ``reflex_model_id`` names the classifier model, ``reflex_confidence``
+    and ``reflex_reasoning`` carry its structured pick, and ``low_confidence`` is
+    ``True`` when the pick landed below the confidence threshold (the agent is
+    still selected, but the route is surfaced as unsure).
     """
 
     id: UUID = Field(default_factory=uuid4)
@@ -137,6 +173,9 @@ class RoutingDecision(BaseModel):
     spread_id: UUID | None = None
     trigger_origin: SessionTrigger = SessionTrigger.USER
     reflex_model_id: UUID | None = None  # the classifier model, on a REFLEX-layer decision
+    reflex_confidence: float | None = None  # the pick's confidence, on a REFLEX-layer decision
+    reflex_reasoning: str | None = None  # the pick's one-line rationale, on a REFLEX-layer decision
+    low_confidence: bool = False  # REFLEX pick below the confidence threshold
     latency_ms: int = 0
     created_at: datetime = Field(default_factory=now_utc)
 
