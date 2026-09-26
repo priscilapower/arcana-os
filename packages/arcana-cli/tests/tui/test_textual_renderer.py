@@ -370,7 +370,8 @@ def test_renderer_for_never_builds_the_textual_adapter():
     assert isinstance(renderer_for(json=False), TtyRenderer)
 
 
-def test_the_one_shot_renderer_path_does_not_import_textual():
-    code = "import sys, arcana_cli.ui.renderer; print('textual' in sys.modules)"
+@pytest.mark.parametrize("module", ["arcana_cli.ui.renderer", "arcana_cli.main"])
+def test_the_one_shot_paths_do_not_import_textual(module):
+    code = f"import sys, {module}; print('textual' in sys.modules)"
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert result.stdout.strip() == "False"

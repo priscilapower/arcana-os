@@ -91,9 +91,11 @@ def run_inline_headless(
 
 
 @asynccontextmanager
-async def arcana_pilot(size: tuple[int, int] = DEFAULT_SIZE) -> AsyncIterator[TuiHarness]:
-    """Run a fresh :class:`ArcanaApp` headless at ``size`` for the duration of the block."""
-    app = ArcanaApp()
+async def arcana_pilot(
+    size: tuple[int, int] = DEFAULT_SIZE, app: ArcanaApp | None = None
+) -> AsyncIterator[TuiHarness]:
+    """Run ``app`` (a fresh :class:`ArcanaApp` by default) headless at ``size`` for the duration of the block."""
+    app = app if app is not None else ArcanaApp()
     async with app.run_test(size=size) as pilot:
         await pilot.pause()
         yield TuiHarness(app, pilot)
