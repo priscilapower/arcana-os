@@ -92,7 +92,7 @@ def _imported_modules(path: Path) -> set[str]:
         parts = dotted.split(".")
         found.update(".".join(parts[: i + 1]) for i in range(len(parts)))
 
-    for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 add(alias.name)
@@ -153,7 +153,7 @@ PROMPT_ADAPTER = Path("ui") / "renderer" / "tty.py"
 def _line_prompt_uses(path: Path) -> list[str]:
     """Each ``typer.prompt`` / ``click.confirm`` … reference in ``path``, however it is imported."""
     uses: list[str] = []
-    for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
         if (
             isinstance(node, ast.Attribute)
             and node.attr in LINE_PROMPTS
@@ -212,7 +212,7 @@ EXIT_REPLAY = Path("commands") / "chat" / "app.py"
 def _direct_output(path: Path) -> list[str]:
     """Each ``Console(...)`` construction and direct write (``print``, ``x.print``, ``emit_json`` …) in ``path``."""
     found: list[str] = []
-    for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
         if not isinstance(node, ast.Call):
             continue
         func = node.func

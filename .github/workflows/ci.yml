@@ -72,6 +72,10 @@ jobs:
     name: CLI tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    # UTF-8 stdio and file defaults on Windows too (PEP 540): the CLI prints ✓ / ✗ / — and the
+    # goldens and fixtures are UTF-8.
+    env:
+      PYTHONUTF8: "1"
     strategy:
       fail-fast: false
       matrix:

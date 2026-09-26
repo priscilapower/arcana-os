@@ -407,6 +407,7 @@ def test_run_session_roundtrip(agent_fixture, arcana_home, monkeypatch):
 GOLDEN = Path(__file__).parent / "golden" / "run"
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _SHORT_ID = re.compile(r"session: [0-9a-f]{8}")
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _normalised(output: str) -> str:
@@ -452,7 +453,7 @@ def test_run_terminal_output_matches_golden(
     monkeypatch.setattr(AgentRegistry, "build_runtime", lambda *a, **k: mock_runtime)
 
     result = runner.invoke(app, args)
-    expected = (GOLDEN / f"{golden}.txt").read_text()
+    expected = (GOLDEN / f"{golden}.txt").read_text(encoding="utf-8")
     assert f"exit={result.exit_code}\n{_normalised(terminal.getvalue())}" == expected
 
 
@@ -544,7 +545,8 @@ def test_run_json_with_stream_is_a_usage_error(agent_fixture, arcana_home):
     result = runner.invoke(app, ["run", "hello", "--agent", "scout", "--json", "--stream"])
     assert result.exit_code == 2
     assert result.stdout == ""
-    assert "--stream" in result.stderr
+    # Typer colours its usage errors when GITHUB_ACTIONS / FORCE_COLOR is set (as on CI).
+    assert "--stream" in _ANSI.sub("", result.stderr)
 
 
 def test_run_ambiguous_agent_name_lists_the_ids(arcana_home, conn_fixture):

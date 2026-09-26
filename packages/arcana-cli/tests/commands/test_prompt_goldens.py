@@ -192,8 +192,8 @@ def transcript(w: World, scenario: Scenario) -> str:
 def test_prompt_transcript_matches_golden(world: World, name: str):
     got = transcript(world, SCENARIOS[name])
     if RECORD:
-        (GOLDEN / f"{name}.txt").write_text(got)
-    assert got == (GOLDEN / f"{name}.txt").read_text()
+        (GOLDEN / f"{name}.txt").write_text(got, encoding="utf-8")
+    assert got == (GOLDEN / f"{name}.txt").read_text(encoding="utf-8")
 
 
 SECRET_SCENARIOS = sorted(n for n, s in SCENARIOS.items() if API_KEY in s.input or BEARER in s.input)

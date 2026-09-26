@@ -29,6 +29,7 @@ from arcana_cli.main import app
 from tests.support.world import (
     MEMORY_ID,
     World,
+    install_world,
     no_home,
     seed_agent,
     seed_connection,
@@ -53,9 +54,28 @@ _DATE = re.compile(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:
 _LATENCY = re.compile(r"\b\d+ ms *")
 
 
+#: How long the temp home's parent directory's path is in every scenario. A table or panel that
+#: shows a path is as wide as the path, so a fixed length renders it at the same width on every
+#: machine; the path itself is then normalised to ``<tmp>``.
+HOME_PARENT_LENGTH = 128
+
+_TMP_PATH = re.compile(r"<tmp>[^\s│]*")
+
+
+@pytest.fixture
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> World:
+    """The shared temp home, under a parent directory whose path is :data:`HOME_PARENT_LENGTH` long."""
+    pad = HOME_PARENT_LENGTH - len(str(tmp_path)) - len(os.sep)
+    assert pad > 0, f"the temp dir {tmp_path} is longer than {HOME_PARENT_LENGTH} characters"
+    parent = tmp_path / ("p" * pad)
+    parent.mkdir()
+    return install_world(parent, monkeypatch)
+
+
 def normalised(output: str, w: World) -> str:
     """Ids, dates, latencies and the temp home are fresh per run; replace them so the golden is stable."""
     output = output.replace(str(w.root.parent), "<tmp>")
+    output = _TMP_PATH.sub(lambda m: m.group().replace("\\", "/"), output)  # Windows separators
     output = _UUID.sub("<id>", output)
     output = _SHORT_ID.sub("<short>…", output)
     output = _DATE.sub("<date>", output)
@@ -276,5 +296,5 @@ def test_terminal_output_matches_golden(world: World, name: str):
     path = GOLDEN / f"{name}.txt"
     if RECORD:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(got)
-    assert got == path.read_text()
+        path.write_text(got, encoding="utf-8")
+    assert got == path.read_text(encoding="utf-8")
