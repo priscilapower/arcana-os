@@ -1,0 +1,5 @@
+exit=1
+Model ID (e.g. hermes-3, claude-sonnet-4-6): claude
+Connection name [anthropic/claude]:
+✗ 'Connection name' needs an answer, but the piped input ran out; pass --name instead
+ 

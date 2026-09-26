@@ -1,0 +1,3 @@
+exit=1
+Remove MCP server 'notion-mcp'? [y/N]: n
+Cancelled.

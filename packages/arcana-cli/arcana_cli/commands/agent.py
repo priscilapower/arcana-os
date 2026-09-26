@@ -1,4 +1,11 @@
-"""Agent management commands."""
+"""Agent management commands.
+
+``create``, ``edit`` and ``delete`` are renderer-agnostic coroutines
+(``create_agent``, ``edit_agent``, ``delete_agent``): every question they ask
+goes through the :class:`~arcana_cli.ui.renderer.Renderer` they are handed, and
+each question names the option that answers it without a prompt. The Typer
+callbacks only pick the renderer and run the coroutine.
+"""
 
 from typing import Any
 from uuid import UUID
@@ -10,11 +17,13 @@ from arcana.agents.registry import AgentRegistry
 from arcana.cards.engine import BlendCompatibility, CardEngine
 from arcana.cards.registry import CardRegistry, get_registry
 from arcana.models.connection_store import ConnectionStore
+from arcana.types import ModelConnection
 from arcana.types.agent import Agent as AgentRecord
 from arcana.types.card import Card
 from arcana_cli._async import run_async
 from arcana_cli.constants import AGENTS_BASE, CONNECTIONS_PATH, ROMAN
 from arcana_cli.ui.card_picker import select_card, select_cards
+from arcana_cli.ui.renderer import Choice, Question, Renderer, confirm_or_cancel, renderer_for, required
 from arcana_cli.ui.theme import (
     GREEN,
     TXT3,
@@ -32,8 +41,10 @@ from arcana_cli.ui.theme import (
 app = typer.Typer(help="Manage agents.")
 console = Console()
 
-#: The option that answers the card picker without a terminal.
+#: The option that answers the card picker (and the modifier-card question) without a terminal.
 CARD_FLAG = "--card"
+#: The option that answers the model picker without a prompt.
+MODEL_FLAG = "--model"
 
 
 def _registry() -> AgentRegistry:
@@ -56,7 +67,7 @@ def _validate_card(raw: str) -> Card:
     raise ValueError(f"Unknown card: {raw!r}")
 
 
-def _resolve_agent(name_or_id: str) -> AgentRecord:
+def _resolve_agent(r: Renderer, name_or_id: str) -> AgentRecord:
     """Resolve a name or UUID string to an AgentRecord, with ambiguity detection."""
     reg = _registry()
     try:
@@ -64,83 +75,92 @@ def _resolve_agent(name_or_id: str) -> AgentRecord:
         record = reg.get(uid)
         if record is not None and not record.is_archived:
             return record
-        console.print(err(f"No agent with ID '{name_or_id}'."))
+        r.emit(err(f"No agent with ID '{name_or_id}'."))
         raise typer.Exit(1)
     except ValueError:
         pass
     matches = [a for a in reg.list() if a.name == name_or_id]
     if not matches:
-        console.print(err(f"No agent '{name_or_id}'."))
+        r.emit(err(f"No agent '{name_or_id}'."))
         raise typer.Exit(1)
     if len(matches) > 1:
-        console.print(err(f"Ambiguous name '{name_or_id}'. Use one of these IDs:"))
+        r.emit(err(f"Ambiguous name '{name_or_id}'. Use one of these IDs:"))
         for a in matches:
-            console.print(f"  {a.id}")
+            r.emit(f"  {a.id}")
         raise typer.Exit(1)
     return matches[0]
 
 
-def _pick_model() -> str:
-    """Interactive model picker — returns a provider[:name][/model_id] string."""
-    store = _store()
-    connections = store.all()
+def _model_ref_problem(answer: str) -> str | None:
+    """A validator for a typed model reference or model ID: blank is allowed, whitespace inside it is not."""
+    return "A model reference has no spaces." if any(c.isspace() for c in answer.strip()) else None
+
+
+class _TypeAReference:
+    """The model picker's last choice: type a model reference instead of picking a connection."""
+
+
+TYPE_A_REFERENCE = _TypeAReference()
+
+
+async def _pick_model(r: Renderer) -> str:
+    """Pick a configured connection, then a model ID on it; returns a provider[:name][/model_id] string.
+
+    The last choice types a whole model reference instead, for a model no
+    connection points at. ``--model`` answers the picker without a prompt.
+    """
+    connections = _store().all()
     if not connections:
-        console.print(err("No provider connections configured. Run: arcana providers add"))
+        r.emit(err("No provider connections configured. Run: arcana providers add"))
         raise typer.Exit(1)
 
-    table = make_table("Model Connections")
-    table.add_column("#", style=TXT3, width=4)
-    table.add_column("Name", style="bold")
-    table.add_column("Provider")
-    table.add_column("Default Model")
-    for i, c in enumerate(connections, 1):
-        table.add_row(str(i), c.name, str(c.provider), c.default_model or "(none)")
-    console.print(table)
-
-    prompt_default = connections[0].name
-    choice = typer.prompt("Choose a connection (name or #)", default=prompt_default)
-
-    try:
-        idx = int(choice) - 1
-        if 0 <= idx < len(connections):
-            conn = connections[idx]
-        else:
-            console.print(
-                err(f"Invalid selection. Enter a number between 1 and {len(connections)}, or a connection name.")
+    choices: list[Choice[ModelConnection | _TypeAReference]] = [
+        Choice(c, f"{c.name}  ({c.provider} · default model: {c.default_model or '(none)'})") for c in connections
+    ]
+    choices.append(Choice(TYPE_A_REFERENCE, "Other — type a model reference"))
+    picked = await r.select(choices, initial=[connections[0]], title="Model connection", flag=MODEL_FLAG)
+    if picked is None:
+        raise typer.Exit()
+    if isinstance(picked, _TypeAReference):
+        return (
+            await r.ask(
+                Question(
+                    "Model reference (provider[:name]/model_id)",
+                    validator=lambda a: required(a) or _model_ref_problem(a),
+                    flag=MODEL_FLAG,
+                )
             )
-            raise typer.Exit(1)
-    except ValueError as e:
-        found = store.get_by_name(choice)
-        if found is None:
-            console.print(err(f"No connection named '{choice}'."))
-            raise typer.Exit(1) from e
-        conn = found
+        ).strip()
 
-    model_id = typer.prompt(
-        "Model ID (blank to use connection default)",
-        default=conn.default_model or "",
+    model_id = (
+        await r.ask(
+            Question(
+                "Model ID (blank to use connection default)",
+                default=picked.default_model or "",
+                validator=_model_ref_problem,
+                flag=MODEL_FLAG,
+            )
+        )
     ).strip()
-
     if model_id:
-        return f"{conn.provider}:{conn.name}/{model_id}"
-    elif conn.default_model:
-        return f"{conn.provider}:{conn.name}"
-    else:
-        return str(conn.provider)
+        return f"{picked.provider}:{picked.name}/{model_id}"
+    if picked.default_model:
+        return f"{picked.provider}:{picked.name}"
+    return str(picked.provider)
 
 
-def _print_compat(compat: BlendCompatibility, registry: CardRegistry) -> None:
-    """Print tension/synergy warnings after modifier selection. Non-blocking."""
+def _print_compat(r: Renderer, compat: BlendCompatibility, registry: CardRegistry) -> None:
+    """Show tension/synergy warnings after modifier selection. Non-blocking."""
     if compat.has_tensions:
-        console.print(warn(f"\n  ✦ CLASH — {len(compat.tensions)} tension(s) in this blend:"))
+        r.emit(warn(f"\n  ✦ CLASH — {len(compat.tensions)} tension(s) in this blend:"))
         for a, b in compat.tensions:
-            console.print(warn(f"    ✗  {registry.get(a).name} ↔ {registry.get(b).name}"))
+            r.emit(warn(f"    ✗  {registry.get(a).name} ↔ {registry.get(b).name}"))
     if compat.has_synergies:
-        console.print(dim(f"\n  ✦ SYNERGY — {len(compat.synergies)} synergy/ies in this blend:"))
+        r.emit(dim(f"\n  ✦ SYNERGY — {len(compat.synergies)} synergy/ies in this blend:"))
         for a, b in compat.synergies:
-            console.print(dim(f"    ✓  {registry.get(a).name} + {registry.get(b).name}"))
+            r.emit(dim(f"    ✓  {registry.get(a).name} + {registry.get(b).name}"))
     if compat.has_tensions or compat.has_synergies:
-        console.print()
+        r.emit("")
 
 
 @app.command("create")
@@ -155,31 +175,35 @@ def create(
     ),
 ) -> None:
     """Create a new agent. Interactive if no flags provided."""
-    run_async(_create(name=name, card=card, model=model))
+    run_async(create_agent(renderer_for(json=False), name=name, card=card, model=model))
 
 
-async def _create(*, name: str | None, card: str | None, model: str | None) -> None:
-    agent_name = name or str(typer.prompt("Agent name"))
+async def create_agent(r: Renderer, *, name: str | None, card: str | None, model: str | None) -> None:
+    """Create an agent, asking for whatever the flags left out."""
+    agent_name = name or await r.ask(Question("Agent name", validator=required, flag="--name"))
 
     modifier_cards: list[Card] = []
 
     if not card:
-        card_enum = await select_card("Choose a primary card for this agent", flag=CARD_FLAG)
+        card_enum = await select_card("Choose a primary card for this agent", renderer=r, flag=CARD_FLAG)
         if card_enum is None:
             raise typer.Exit()
         if card_enum == Card.WORLD:
-            console.print(err("The World is reserved and cannot be assigned."))
+            r.emit(err("The World is reserved and cannot be assigned."))
             raise typer.Exit(1)
-        if typer.confirm("Blend with modifier cards?", default=False):
+        if await r.confirm("Blend with modifier cards?", default=False, flag=CARD_FLAG):
             raw_modifiers = await select_cards(
                 "Select modifier cards (Space to toggle, Enter to confirm)",
                 initial=[],
                 max_items=CardEngine.MAX_MODIFIERS,
                 exclude={card_enum, Card.WORLD},
+                renderer=r,
+                flag=CARD_FLAG,
             )
             modifier_cards = [m for m in raw_modifiers if m != card_enum]
             if modifier_cards:
                 _print_compat(
+                    r,
                     CardEngine(get_registry()).check_compatibility(card_enum, modifier_cards),
                     get_registry(),
                 )
@@ -187,19 +211,19 @@ async def _create(*, name: str | None, card: str | None, model: str | None) -> N
         try:
             card_enum = _validate_card(card)
         except ValueError as exc:
-            console.print(err(str(exc)))
+            r.emit(err(str(exc)))
             raise typer.Exit(1) from exc
         if card_enum == Card.WORLD:
-            console.print(err("The World is reserved and cannot be assigned."))
+            r.emit(err("The World is reserved and cannot be assigned."))
             raise typer.Exit(1)
 
     if model is not None:
         model_str = model.strip()
         if not model_str or " " in model_str:
-            console.print(err("--model must be non-empty with no whitespace."))
+            r.emit(err("--model must be non-empty with no whitespace."))
             raise typer.Exit(1)
     else:
-        model_str = _pick_model()
+        model_str = await _pick_model(r)
 
     registry = get_registry()
     record = _registry().create(
@@ -214,7 +238,7 @@ async def _create(*, name: str | None, card: str | None, model: str | None) -> N
         if modifier_cards
         else ""
     )
-    console.print(
+    r.emit(
         make_panel_fit(
             f"[bold {GREEN}]Agent '{record.name}' created.[/]\n\n"
             f"  {hl('ID:')}    [{TXT3}]{record.id}[/]\n"
@@ -251,7 +275,7 @@ def list_agents() -> None:
 @app.command("show")
 def show(name: str = typer.Argument(..., help="Agent name or UUID")) -> None:
     """Show full config for an agent."""
-    record = _resolve_agent(name)
+    record = _resolve_agent(renderer_for(json=False), name)
     model_label = record.model if record.model else "unset — re-assign with: arcana agent edit"
 
     modifier_str = ", ".join(c.value for c in record.modifier_cards) or "none"
@@ -289,10 +313,21 @@ def edit(
     tags: str | None = typer.Option(None, "--tags", "-t", help="Comma-separated tags"),
 ) -> None:
     """Edit an agent's name, description, card, model, or tags."""
-    run_async(_edit(name, new_name=new_name, description=description, card=card, model=model, tags=tags))
+    run_async(
+        edit_agent(
+            renderer_for(json=False),
+            name,
+            new_name=new_name,
+            description=description,
+            card=card,
+            model=model,
+            tags=tags,
+        )
+    )
 
 
-async def _edit(
+async def edit_agent(
+    r: Renderer,
     name: str,
     *,
     new_name: str | None,
@@ -301,36 +336,46 @@ async def _edit(
     model: str | None,
     tags: str | None,
 ) -> None:
-    record = _resolve_agent(name)
+    """Edit an agent, asking for whatever the flags left out; each prompt defaults to the current value."""
+    record = _resolve_agent(r, name)
 
-    updated_name = new_name if new_name is not None else typer.prompt("Name", default=record.name)
+    updated_name = (
+        new_name
+        if new_name is not None
+        else await r.ask(Question("Name", default=record.name, validator=required, flag="--name"))
+    )
     updated_desc = (
-        description if description is not None else typer.prompt("Description", default=record.description or "")
+        description
+        if description is not None
+        else await r.ask(Question("Description", default=record.description or "", flag="--description"))
     )
 
     if card is not None:
         try:
             updated_card = _validate_card(card)
         except ValueError as exc:
-            console.print(err(str(exc)))
+            r.emit(err(str(exc)))
             raise typer.Exit(1) from exc
         updated_modifiers = record.modifier_cards
     else:
-        picked = await select_card("Choose a card", initial=record.card, flag=CARD_FLAG)
+        picked = await select_card("Choose a card", initial=record.card, renderer=r, flag=CARD_FLAG)
         if picked is None:
             raise typer.Exit()
         updated_card = picked
         updated_modifiers = record.modifier_cards
-        if typer.confirm("Edit modifier cards?", default=bool(record.modifier_cards)):
+        if await r.confirm("Edit modifier cards?", default=bool(record.modifier_cards), flag=CARD_FLAG):
             raw_modifiers = await select_cards(
                 "Modifier cards (Space to toggle, Enter to confirm)",
                 initial=record.modifier_cards,
                 max_items=CardEngine.MAX_MODIFIERS,
                 exclude={updated_card, Card.WORLD},
+                renderer=r,
+                flag=CARD_FLAG,
             )
             updated_modifiers = [m for m in raw_modifiers if m != updated_card]
             if updated_modifiers:
                 _print_compat(
+                    r,
                     CardEngine(get_registry()).check_compatibility(updated_card, updated_modifiers),
                     get_registry(),
                 )
@@ -338,17 +383,26 @@ async def _edit(
     if model is not None:
         updated_model = model.strip()
         if not updated_model or " " in updated_model:
-            console.print(err("--model must be non-empty with no whitespace."))
+            r.emit(err("--model must be non-empty with no whitespace."))
             raise typer.Exit(1)
     else:
-        updated_model = typer.prompt("Model (provider[:name]/model_id)", default=record.model or "").strip()
+        updated_model = (
+            await r.ask(
+                Question(
+                    "Model (provider[:name]/model_id)",
+                    default=record.model or "",
+                    validator=_model_ref_problem,
+                    flag=MODEL_FLAG,
+                )
+            )
+        ).strip()
         if not updated_model:
             updated_model = record.model or ""
 
     if tags is not None:
         updated_tags = [t.strip() for t in tags.split(",") if t.strip()]
     else:
-        tags_input = typer.prompt("Tags (comma-separated)", default=", ".join(record.tags))
+        tags_input = await r.ask(Question("Tags (comma-separated)", default=", ".join(record.tags), flag="--tags"))
         updated_tags = [t.strip() for t in tags_input.split(",") if t.strip()]
 
     updates: dict[str, Any] = {
@@ -365,7 +419,7 @@ async def _edit(
         updates["system_prompt"] = config.system_prompt
 
     _registry().save(record.model_copy(update=updates))
-    console.print(ok(f"Agent '{updated_name}' updated."))
+    r.emit(ok(f"Agent '{updated_name}' updated."))
 
 
 @app.command("delete")
@@ -374,12 +428,17 @@ def delete(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
 ) -> None:
     """Delete an agent (soft-delete)."""
-    record = _resolve_agent(name)
+    run_async(delete_agent(renderer_for(json=False), name, yes=yes))
+
+
+async def delete_agent(r: Renderer, name: str, *, yes: bool) -> None:
+    """Soft-delete an agent once confirmed (or with ``yes``)."""
+    record = _resolve_agent(r, name)
     if not yes:
-        typer.confirm(f"Delete agent '{record.name}'?", abort=True)
+        await confirm_or_cancel(r, f"Delete agent '{record.name}'?")
     try:
         _registry().delete(record.id)
     except FileNotFoundError as e:
-        console.print(err(f"Agent '{record.name}' was already deleted."))
+        r.emit(err(f"Agent '{record.name}' was already deleted."))
         raise typer.Exit(1) from e
-    console.print(ok(f"Agent '{record.name}' deleted."))
+    r.emit(ok(f"Agent '{record.name}' deleted."))

@@ -1,0 +1,16 @@
+exit=0
+Bearer token: 
+✓ Connected 'notion-mcp' — 1 tool(s) discovered.
+
+  Name:      notion-mcp
+  Transport: sse
+  Endpoint:  https://mcp.notion.com/sse
+  Status:    connected
+  Auth:      api_key (keyring ref 'mcp_notion-mcp_auth')
+
+           notion-mcp · tools           
+┏━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━┓
+┃ Tool         ┃ Status ┃ Description  ┃
+┡━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━┩
+│ search_pages │ active │ Search pages │
+└──────────────┴────────┴──────────────┘

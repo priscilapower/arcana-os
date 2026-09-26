@@ -17,6 +17,12 @@ that answers it. Any other selection is a numbered list read as a line.
 Every blocking line read runs on a daemon thread (see :func:`_off_loop`), never
 on the event loop, so anything else scheduled on the loop keeps running while
 the user types.
+
+Line prompts read piped stdin as well as a terminal, so ``echo y | arcana …``
+answers a question. When piped input runs out before a question is answered
+there is nobody left to ask: the prompt fails closed with
+:class:`~arcana_cli.ui.renderer.port.NonInteractiveError` naming the flag that
+answers it, rather than aborting.
 """
 
 import asyncio
@@ -51,6 +57,8 @@ _R = TypeVar("_R")
 
 #: How :class:`NonInteractiveError` names this surface when it has no terminal to prompt on.
 NO_TERMINAL = "a non-interactive terminal"
+#: Why :class:`NonInteractiveError` refuses when piped input ran out before an answer.
+NO_INPUT = "the piped input ran out"
 
 
 def _is_terminal() -> bool:
@@ -59,6 +67,32 @@ def _is_terminal() -> bool:
         return sys.stdin.isatty() and sys.stdout.isatty()
     except (AttributeError, ValueError):  # a closed or replaced stream
         return False
+
+
+def _stdin_is_terminal() -> bool:
+    try:
+        return sys.stdin.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+class _NoAnswer(Exception):
+    """A line read reached the end of piped (non-terminal) stdin: the question can't be answered."""
+
+
+def _read_line(read: Callable[[], _R]) -> _R:
+    """Run the blocking prompt ``read``; end of input on a pipe becomes :class:`_NoAnswer`.
+
+    ``typer.prompt`` / ``typer.confirm`` report end of input as :class:`typer.Abort`.
+    At a terminal that is the user pressing Ctrl+D, and stays an abort; on a pipe it
+    means the answers ran out.
+    """
+    try:
+        return read()
+    except typer.Abort:
+        if _stdin_is_terminal():
+            raise
+        raise _NoAnswer from None
 
 
 def _settle_result(future: asyncio.Future[_R], result: _R) -> None:
@@ -175,8 +209,10 @@ class TtyRenderer:
         # renders as ``[]``, as it always has).
         show_default = not (q.secret and q.default)
         while True:
-            answer = await _off_loop(
+            answer = await self._prompt(
                 lambda: str(typer.prompt(q.prompt, default=q.default, hide_input=q.secret, show_default=show_default)),
+                prompt=q.prompt,
+                flag=q.flag,
                 hidden=q.secret,
             )
             problem = q.validator(answer) if q.validator is not None else None
@@ -185,7 +221,16 @@ class TtyRenderer:
             self._console.print(err(problem))
 
     async def confirm(self, text: str, *, default: bool = False, flag: str | None = None) -> bool:
-        return await _off_loop(lambda: bool(typer.confirm(text, default=default)))
+        return await self._prompt(lambda: bool(typer.confirm(text, default=default)), prompt=text, flag=flag)
+
+    async def _prompt(self, read: Callable[[], _R], *, prompt: str, flag: str | None, hidden: bool = False) -> _R:
+        """Run the line prompt ``read`` off the loop; out of piped input, fail closed naming ``flag``."""
+        try:
+            return await _off_loop(lambda: _read_line(read), hidden=hidden)
+        except _NoAnswer:
+            if not hidden:  # a hidden prompt ends its own line at end of input
+                self._stderr.print()
+            refuse(self._stderr, prompt, flag=flag, reason=NO_INPUT)
 
     @overload
     async def select(
@@ -233,7 +278,7 @@ class TtyRenderer:
             )
         else:
             picked = await self._select_numbered(
-                enabled, multi=multi, initial=initial, title=title, max_items=max_items
+                enabled, multi=multi, initial=initial, title=title, max_items=max_items, flag=flag
             )
         if multi:
             return picked
@@ -269,16 +314,22 @@ class TtyRenderer:
         initial: Sequence[T],
         title: str,
         max_items: int | None,
+        flag: str | None,
     ) -> list[T]:
         if title:
             self._console.print(eyebrow(title))
         for number, choice in enumerate(choices, 1):
             self._console.print(Text(f"  {number:2}. {choice.label}"))
         default = ", ".join(str(n) for n, c in enumerate(choices, 1) if c.value in initial)
-        hint = "comma-separated #s, blank for none" if multi else "#, blank to cancel"
+        if default:  # a blank answer takes the pre-selection, so it can't also mean "none"
+            hint = "comma-separated #s" if multi else "#"
+        else:
+            hint = "comma-separated #s, blank for none" if multi else "#, blank to cancel"
         while True:
-            raw = await _off_loop(
+            raw = await self._prompt(
                 lambda: str(typer.prompt(f"Choose ({hint})", default=default, show_default=bool(default))),
+                prompt=title or "a selection",
+                flag=flag,
             )
             indexes = _parse_numbers(raw, len(choices))
             if indexes is None:

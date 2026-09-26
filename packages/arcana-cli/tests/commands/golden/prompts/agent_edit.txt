@@ -1,0 +1,7 @@
+exit=0
+Name [scout]: ranger
+Description []: A quiet scout
+Edit modifier cards? [y/N]: n
+Model (provider[:name]/model_id) [ollama:ollama/hermes-3/hermes-3]: 
+Tags (comma-separated) []: field, research
+✓ Agent 'ranger' updated.

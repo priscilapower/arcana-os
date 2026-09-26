@@ -3,6 +3,11 @@
 Every command is a thin wrapper over :class:`MCPRegistry`: parse, call one core
 service, render. Secrets live only in the OS keyring — an ``mcps.json`` entry
 keeps a reference, never a token, and no command echoes one.
+
+``add`` and ``remove`` ask their questions (a bearer token, a removal
+confirmation) through the :class:`~arcana_cli.ui.renderer.Renderer` they are
+handed, so under ``--json`` a question fails closed naming the flag that
+answers it instead of blocking on stdin.
 """
 
 import re
@@ -29,6 +34,7 @@ from arcana_cli._async import run_async
 from arcana_cli._oauth import probe_oauth, sign_in
 from arcana_cli._render import EXIT_ERROR, EXIT_NOT_FOUND, emit_json, truncate
 from arcana_cli.constants import AGENTS_BASE, MCPS_PATH
+from arcana_cli.ui.renderer import Question, Renderer, confirm_or_cancel, renderer_for
 from arcana_cli.ui.theme import GREEN, ORANGE, RED, TXT3, dim, err, hl, make_table, ok, warn
 
 app = typer.Typer(
@@ -240,11 +246,20 @@ def _infer_transport(url: str | None, command: str | None, transport: str | None
     return requested
 
 
-def _bearer_from_header(headers: list[str]) -> str:
+#: The option that names a keyring reference holding the bearer token, instead of a prompt.
+AUTH_KEY_FLAG = "--auth-key"
+
+
+def _token_problem(answer: str) -> str | None:
+    """A validator for the hidden bearer-token question; never quotes the answer."""
+    return None if answer.strip() else "No bearer token provided."
+
+
+async def _bearer_from_header(r: Renderer, headers: list[str]) -> str:
     """Extract the bearer token from a single ``Authorization=...`` header.
 
     Only ``Authorization`` bearer headers are honoured — the SSE adapter sends
-    no others. An empty value prompts hidden. The token is never echoed.
+    no others. An empty value is asked as a secret question. The token is never echoed.
     """
     if len(headers) > 1:
         console.print(err("Only a single 'Authorization' header is supported for SSE MCP auth."))
@@ -261,7 +276,9 @@ def _bearer_from_header(headers: list[str]) -> str:
     if token.lower().startswith("bearer "):
         token = token[len("bearer ") :].strip()
     if not token:
-        token = typer.prompt("Bearer token", hide_input=True).strip()
+        token = (
+            await r.ask(Question("Bearer token", secret=True, validator=_token_problem, flag=AUTH_KEY_FLAG))
+        ).strip()
     if not token:
         console.print(err("No bearer token provided."))
         raise typer.Exit(EXIT_ERROR)
@@ -278,7 +295,8 @@ class _AddAuth:
     auth_key_ref: str | None
 
 
-def _resolve_add_auth(
+async def _resolve_add_auth(
+    r: Renderer,
     *,
     name: str,
     url: str | None,
@@ -313,7 +331,7 @@ def _resolve_add_auth(
         raise typer.Exit(EXIT_ERROR)
 
     if static_requested:
-        return _AddAuth(transport, AuthType.API_KEY, None, _store_auth(name, header, auth_key))
+        return _AddAuth(transport, AuthType.API_KEY, None, await _store_auth(r, name, header, auth_key))
 
     # OAuth — explicit issuer, or auto-detected from the server's Protected
     # Resource Metadata. The bare default falls back to keyless when nothing is
@@ -322,7 +340,7 @@ def _resolve_add_auth(
     if issuer:
         config = OAuthConfig(issuer=issuer, scopes=scope)
     else:
-        probed = run_async(probe_oauth(url)) if url else None
+        probed = await probe_oauth(url) if url else None
         if probed is None:
             if oauth:
                 console.print(err("--oauth was requested but the server does not advertise OAuth. Pass --issuer."))
@@ -332,7 +350,7 @@ def _resolve_add_auth(
 
     ref = _auth_ref(name)
     try:
-        token, resolved = run_async(sign_in(config, device=device, console=console))
+        token, resolved = await sign_in(config, device=device, console=console)
     except Exception as exc:
         console.print(err(f"OAuth sign-in failed: {exc}"))
         raise typer.Exit(EXIT_ERROR) from exc
@@ -347,7 +365,7 @@ def _resolve_add_auth(
     return _AddAuth(oauth_transport, AuthType.OAUTH, resolved, ref)
 
 
-def _store_auth(name: str, headers: list[str], auth_key: str | None) -> str | None:
+async def _store_auth(r: Renderer, name: str, headers: list[str], auth_key: str | None) -> str | None:
     """Resolve the server's ``auth_key_ref``, writing any inline token to keyring."""
     if auth_key and headers:
         console.print(err("Pass either --auth-key or --header, not both."))
@@ -356,7 +374,7 @@ def _store_auth(name: str, headers: list[str], auth_key: str | None) -> str | No
         return auth_key
     if not headers:
         return None
-    token = _bearer_from_header(headers)
+    token = await _bearer_from_header(r, headers)
     ref = _auth_ref(name)
     try:
         keyring.set_password(KEYRING_SERVICE, ref, token)
@@ -402,6 +420,44 @@ def add_cmd(
     that advertises neither is added unauthenticated. Auth material goes to the
     OS keyring; mcps.json stores only a reference.
     """
+    run_async(
+        add_server(
+            renderer_for(json_),
+            name=name,
+            url=url,
+            command=command,
+            args=list(arg or []),
+            transport=transport,
+            header=header or [],
+            auth_key=auth_key,
+            oauth=oauth,
+            issuer=issuer,
+            scope=list(scope or []),
+            device=device,
+            description=description,
+            json_=json_,
+        )
+    )
+
+
+async def add_server(
+    r: Renderer,
+    *,
+    name: str,
+    url: str | None,
+    command: str | None,
+    args: list[str],
+    transport: str | None,
+    header: list[str],
+    auth_key: str | None,
+    oauth: bool,
+    issuer: str | None,
+    scope: list[str],
+    device: bool,
+    description: str,
+    json_: bool,
+) -> None:
+    """Register, authenticate and discover one server; asks for a bearer token only when ``--header`` left it blank."""
     _validate_server_name(name)
     resolved_transport = _infer_transport(url, command, transport)
     reg = _load_registry()
@@ -411,16 +467,17 @@ def add_cmd(
         console.print(dim(f"  Or replace it:    arcana mcp remove {name}"))
         raise typer.Exit(EXIT_ERROR)
 
-    auth = _resolve_add_auth(
+    auth = await _resolve_add_auth(
+        r,
         name=name,
         url=url,
         transport=resolved_transport,
         explicit_transport=transport is not None,
-        header=header or [],
+        header=header,
         auth_key=auth_key,
         oauth=oauth,
         issuer=issuer,
-        scope=list(scope or []),
+        scope=scope,
         device=device,
     )
     cfg = MCPServerConfig(
@@ -428,13 +485,13 @@ def add_cmd(
         transport=auth.transport,
         server_url=url or "",
         command=command,
-        args=list(arg or []),
+        args=args,
         description=description,
         auth_type=auth.auth_type,
         oauth_config=auth.oauth_config,
         auth_key_ref=auth.auth_key_ref,
     )
-    server = run_async(reg.discover(cfg))
+    server = await reg.discover(cfg)
 
     if json_:
         emit_json(_server_detail(server))
@@ -633,6 +690,11 @@ def remove_cmd(
     Scans for agents subscribed to this server's tools and prints the blast
     radius; aborts unless --force is given.
     """
+    run_async(remove_server(renderer_for(json_), name, yes=yes, force=force, json_=json_))
+
+
+async def remove_server(r: Renderer, name: str, *, yes: bool, force: bool, json_: bool) -> None:
+    """Remove one server once confirmed (or with ``yes``); refuses while agents subscribe to it unless ``force``."""
     reg = _load_registry()
     server = _resolve_server(reg, name)
     dependents = _dependent_agents(name)
@@ -648,11 +710,8 @@ def remove_cmd(
             console.print(dim("\nRe-run with --force to remove anyway."))
         raise typer.Exit(EXIT_ERROR)
 
-    if json_ and not yes:
-        console.print(err("Use --yes with --json for a non-interactive remove."))
-        raise typer.Exit(EXIT_ERROR)
     if not yes:
-        typer.confirm(f"Remove MCP server '{name}'?", abort=True)
+        await confirm_or_cancel(r, f"Remove MCP server '{name}'?")
 
     if dependents and not json_:
         console.print(warn(f"{len(dependents)} agent(s) will lose these tools until re-subscribed elsewhere."))

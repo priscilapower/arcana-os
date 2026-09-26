@@ -1,17 +1,22 @@
 """Tests for the renderer port value types and the renderer selection."""
 
+import pytest
 import typer
 
 from arcana_cli._render import EXIT_ERROR
 from arcana_cli.ui.renderer import (
+    CANCELLED,
+    YES_FLAG,
     Choice,
     JsonRenderer,
     NonInteractiveError,
     Question,
     Renderer,
     TtyRenderer,
+    confirm_or_cancel,
     renderer_for,
 )
+from tests.support.renderer import RecordingRenderer
 
 
 def test_renderer_for_json_is_the_json_adapter():
@@ -53,3 +58,44 @@ def test_non_interactive_error_names_the_flag():
     exc = NonInteractiveError("Remove server?", flag="--yes")
     assert exc.flag == "--yes"
     assert str(exc).endswith("; pass --yes instead")
+
+
+def test_non_interactive_error_reason_replaces_the_surface_clause():
+    exc = NonInteractiveError("Delete?", flag="--yes", reason="the piped input ran out")
+    assert str(exc) == "'Delete?' needs an answer, but the piped input ran out; pass --yes instead"
+
+
+# ── confirm_or_cancel: the destructive-confirmation policy ────────────────
+
+
+async def test_confirm_or_cancel_returns_on_yes():
+    r = RecordingRenderer(confirms=[True])
+    await confirm_or_cancel(r, "Delete agent 'scout'?")
+    assert r.confirmations == ["Delete agent 'scout'?"]
+    assert r.notes == []
+
+
+async def test_confirm_or_cancel_on_no_says_cancelled_and_exits_1():
+    r = RecordingRenderer(confirms=[False])
+    with pytest.raises(typer.Exit) as exited:
+        await confirm_or_cancel(r, "Delete agent 'scout'?")
+    assert exited.value.exit_code == EXIT_ERROR
+    assert r.notes_text().strip() == CANCELLED
+
+
+async def test_confirm_or_cancel_defaults_to_no_and_names_yes():
+    seen: dict[str, object] = {}
+
+    class Spy(RecordingRenderer):
+        async def confirm(self, text: str, *, default: bool = False, flag: str | None = None) -> bool:
+            seen.update(default=default, flag=flag)
+            return True
+
+    await confirm_or_cancel(Spy(), "Remove?")
+    assert seen == {"default": False, "flag": YES_FLAG}
+
+
+async def test_confirm_or_cancel_fails_closed_under_json():
+    with pytest.raises(NonInteractiveError) as refused:
+        await confirm_or_cancel(JsonRenderer(), "Remove?")
+    assert refused.value.flag == YES_FLAG

@@ -282,6 +282,22 @@ async def test_select_numbered_blank_cancels(prompt: Callable[..., _ScriptedProm
     assert await r.select([Choice("a", "Alpha")], multi=True) == []
 
 
+async def test_select_numbered_hint_only_offers_blank_when_blank_means_none(prompt: Callable[..., _ScriptedPrompt]):
+    fake = prompt("", "2", "", "1")  # typer.prompt answers a blank line with its default
+    r, _ = _renderer()
+    choices = [Choice("a", "Alpha"), Choice("b", "Beta")]
+    assert await r.select(choices) is None
+    assert await r.select(choices, initial=["b"]) == "b"
+    assert await r.select(choices, multi=True) == []
+    assert await r.select(choices, multi=True, initial=["a"]) == ["a"]
+    assert [text for text, _ in fake.calls] == [
+        "Choose (#, blank to cancel)",
+        "Choose (#)",
+        "Choose (comma-separated #s, blank for none)",
+        "Choose (comma-separated #s)",
+    ]
+
+
 async def test_select_numbered_multi_with_initial_default(prompt: Callable[..., _ScriptedPrompt]):
     fake = prompt("1, 3")
     r, _ = _renderer()
@@ -435,3 +451,56 @@ def test_terminal_restored_puts_echo_back(monkeypatch: pytest.MonkeyPatch):
     finally:
         os.close(master)
         os.close(slave)
+
+
+# ── piped input that runs out ─────────────────────────────────────────────
+
+
+def _question_app(ask: Callable[[TtyRenderer], Any]) -> typer.Typer:
+    app = typer.Typer()
+
+    @app.command()
+    def cmd() -> None:
+        print("GOT", run_async(ask(TtyRenderer())))
+
+    return app
+
+
+@pytest.mark.parametrize(
+    ("ask", "prompt_text", "flag"),
+    [
+        (lambda r: r.ask(Question("Agent name", flag="--name")), "Agent name", "--name"),
+        (lambda r: r.ask(Question("API key", secret=True, flag="--api-key-env")), "API key", "--api-key-env"),
+        (lambda r: r.confirm("Delete agent 'scout'?", flag="--yes"), "Delete agent 'scout'?", "--yes"),
+        (
+            lambda r: r.select([Choice("a", "Alpha"), Choice("b", "Beta")], title="Pick one", flag="--pick"),
+            "Pick one",
+            "--pick",
+        ),
+    ],
+)
+def test_a_question_left_unanswered_by_piped_input_fails_closed_naming_its_flag(
+    ask: Callable[[TtyRenderer], Any], prompt_text: str, flag: str
+):
+    result = CliRunner().invoke(_question_app(ask), [], input="")
+    assert result.exit_code == EXIT_ERROR
+    assert isinstance(result.exception, SystemExit)  # a clean exit, no traceback
+    said = " ".join(result.output.split())  # the message wraps at the console width
+    assert f"{prompt_text!r} needs an answer, but the piped input ran out; pass {flag} instead" in said
+    assert "Aborted" not in result.output
+    assert "GOT" not in result.output
+
+
+def test_piped_answers_still_answer_questions():
+    result = CliRunner().invoke(_question_app(lambda r: r.confirm("Delete?", flag="--yes")), [], input="y\n")
+    assert result.exit_code == 0
+    assert "GOT True" in result.output
+
+
+def test_end_of_input_at_a_terminal_is_still_an_abort(monkeypatch: pytest.MonkeyPatch):
+    # Ctrl+D at a terminal is the user giving up, not a missing flag.
+    monkeypatch.setattr(tty_mod, "_stdin_is_terminal", lambda: True)
+    result = CliRunner().invoke(_question_app(lambda r: r.confirm("Delete?", flag="--yes")), [], input="")
+    assert result.exit_code == 1
+    assert "needs an answer" not in result.output
+    assert "Abort" in result.output

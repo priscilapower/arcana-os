@@ -1,0 +1,4 @@
+exit=1
+Delete agent 'scout'? [y/N]:
+✗ "Delete agent 'scout'?" needs an answer, but the piped input ran out; pass --yes instead
+ 

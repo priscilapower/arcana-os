@@ -117,3 +117,9 @@ async def test_a_status_stops_when_its_block_ends():
     async with r.status("working"):
         pass
     assert r.events == [("status", "working"), ("stop", "working")]
+
+
+async def test_a_blank_answer_takes_the_default():
+    r = RecordingRenderer(answers=["", ""])
+    assert await r.ask(Question("Name", default="scout")) == "scout"
+    assert await r.ask(Question("Tags")) == ""
