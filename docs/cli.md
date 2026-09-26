@@ -15,6 +15,18 @@ around `arcana-core`.
     :name: arcana
     :pretty: true
 
+## Commands and the session
+
+Every command, the slash command that runs it inside the
+[interactive session](chat.md) (the same code, parsed with the same options),
+and whether it takes `--json`. Generated from the command tree, so it can't
+drift from it.
+
+--8<-- "docs/snippets/cli-commands.md"
+
+Running `arcana` with no command opens the session (as `arcana chat` does);
+`arcana --help` lists the commands.
+
 ## JSON output (`--json`)
 
 Every command except the interactive ones (`arcana chat`, `arcana soul edit`)

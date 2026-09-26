@@ -1,18 +1,84 @@
-"""Textual is the CLI's only terminal driver: no module reads raw keys or runs a ``rich.live.Live`` display,
-only the line-prompt adapter behind the renderer port calls ``typer.prompt`` / ``typer.confirm``, and no
-command writes to the terminal itself — its output goes through the renderer port."""
+"""Textual is the CLI's only terminal driver.
+
+No other terminal toolkit is a dependency or imported, no module reads raw keys or runs a
+``rich.live.Live`` display, only the line-prompt adapter behind the renderer port calls
+``typer.prompt`` / ``typer.confirm``, and no command writes to the terminal itself — its output
+goes through the renderer port."""
 
 import ast
+import importlib.metadata
+import re
+import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 import arcana_cli
 
 SOURCE = Path(arcana_cli.__file__).parent
+LOCKFILE = SOURCE.parents[2] / "uv.lock"
 
-#: Modules the CLI no longer drives the terminal with: a raw-key reader and Rich's live display.
-BANNED = ("readchar", "rich.live")
+#: Modules the CLI no longer drives the terminal with: a raw-key reader, the old chat
+#: editor's toolkit, and Rich's live display.
+BANNED = ("readchar", "prompt_toolkit", "rich.live")
+
+#: Distributions ``arcana-cli`` must not pull in, directly or through a dependency
+#: (normalised names, as the lockfile spells them).
+BANNED_DISTRIBUTIONS = frozenset({"readchar", "prompt-toolkit"})
+
+
+def _normalise(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+# ── dependencies: one terminal toolkit ───────────────────────────────────
+
+
+def test_arcana_cli_does_not_depend_on_another_terminal_toolkit():
+    requirements = importlib.metadata.requires("arcana-cli") or []
+    declared = {_normalise(re.split(r"[\s;<>=!~\[(]", req, maxsplit=1)[0]) for req in requirements}
+    assert "textual" in declared
+    assert declared & BANNED_DISTRIBUTIONS == set()
+
+
+def _locked_closure(lock: dict[str, Any], root: str) -> set[str]:
+    """Every package ``root`` pulls in according to the lockfile, extras included, dev groups left out."""
+    by_name = {pkg["name"]: pkg for pkg in lock["package"]}
+    seen: set[str] = set()
+    todo = [root]
+    while todo:
+        name = todo.pop()
+        if name in seen or name not in by_name:
+            continue
+        seen.add(name)
+        pkg = by_name[name]
+        todo.extend(dep["name"] for dep in pkg.get("dependencies", []))
+        for extra in pkg.get("optional-dependencies", {}).values():
+            todo.extend(dep["name"] for dep in extra)
+    return seen
+
+
+@pytest.mark.skipif(not LOCKFILE.exists(), reason="needs the workspace lockfile")
+def test_nothing_arcana_cli_installs_pulls_in_another_terminal_toolkit():
+    lock = tomllib.loads(LOCKFILE.read_text(encoding="utf-8"))
+    closure = _locked_closure(lock, "arcana-cli")
+    assert {"arcana-core", "textual"} <= closure
+    assert closure & BANNED_DISTRIBUTIONS == set()
+
+
+def test_the_lockfile_scan_follows_transitive_dependencies():
+    lock = {
+        "package": [
+            {"name": "arcana-cli", "dependencies": [{"name": "a"}]},
+            {"name": "a", "optional-dependencies": {"x": [{"name": "readchar"}]}},
+            {"name": "readchar"},
+        ]
+    }
+    assert _locked_closure(lock, "arcana-cli") == {"arcana-cli", "a", "readchar"}
+
+
+# ── imports: no other terminal driver ────────────────────────────────────
 
 
 def _imported_modules(path: Path) -> set[str]:
@@ -55,6 +121,9 @@ def test_no_module_imports_a_banned_terminal_driver(module: str):
         ("readchar", "import readchar"),
         ("readchar", "from readchar import key"),
         ("readchar", "import readchar.key as k"),
+        ("prompt_toolkit", "from prompt_toolkit import PromptSession"),
+        ("prompt_toolkit", "from prompt_toolkit.history import FileHistory"),
+        ("prompt_toolkit", "import prompt_toolkit.application as a"),
         ("rich.live", "from rich.live import Live"),
         ("rich.live", "import rich.live"),
         ("rich.live", "from rich import live"),

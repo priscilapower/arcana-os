@@ -227,7 +227,10 @@ async def test_newline_key_replaces_a_selection():
 
 def test_known_limitation_legacy_alt_enter_parses_as_plain_enter():
     # Without the kitty keyboard protocol, Option+Enter sends ESC CR, which
-    # Textual's parser reads as a plain Enter: the modifier is lost.
+    # Textual's parser reads as a plain Enter: the modifier is lost (ADR-024 A4,
+    # https://github.com/Textualize/textual/issues/6378). When this starts failing,
+    # Textual fixed it: make these tests expect a newline, raise the textual lower
+    # bound, and drop the limitation from docs/chat.md.
     assert _keys("g\x1b\rh\r") == ["g", "enter", "h", "enter"]
 
 

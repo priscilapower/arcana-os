@@ -43,9 +43,7 @@ from arcana_cli.constants import AGENTS_BASE, MCPS_PATH
 from arcana_cli.ui.renderer import Question, Renderer, View, confirm_or_cancel, fail, lines, renderer_for
 from arcana_cli.ui.theme import GREEN, ORANGE, RED, TXT3, dim, hl, make_table, ok, warn
 
-app = typer.Typer(
-    help="Manage MCP server connections and their tools (add / list / show / refresh / approve / remove)."
-)
+app = typer.Typer(help="Manage MCP server connections and their tools.")
 
 
 # ---------------------------------------------------------------------------

@@ -22,7 +22,7 @@ from arcana_cli.constants import AGENTS_BASE, ARCANA_HOME
 from arcana_cli.ui.renderer import Renderer, View, fail, lines, renderer_for
 from arcana_cli.ui.theme import dim, err, make_table
 
-app = typer.Typer(help="Inspect and drive The World's task router (route).")
+app = typer.Typer(help="Inspect and drive The World's task router.")
 
 
 def _agent_name(reg: AgentRegistry, decision: RoutingDecision) -> str:
