@@ -8,15 +8,22 @@ The few things only the running app can do (quit, clear the visible
 transcript, re-scope input history, run a turn as a cancellable worker) go
 through the app bound with :meth:`_ChatController.bind_app`.
 
-The setup wizards (``/agent``, ``/providers``, ``/mcp``; see :mod:`.wizards`)
-run inside a turn's worker, so their dialogs can be awaited and Ctrl+C cancels
-them. Whatever a wizard raises ends as a transcript note, never the session;
-afterwards the session picks up what it changed. One change it deliberately
-doesn't pick up on its own: an MCP server added in the session stays out of the
-running agent's tools until ``/mcp approve`` admits it.
+Besides its own commands (``/switch``, ``/fresh`` …), the session runs every
+``arcana`` command as a slash command (``/providers add``, ``/memory list``; see
+:mod:`arcana_cli.tui.slash_registry`). One runs inside a turn's worker, so its
+dialogs can be awaited and Ctrl+C cancels it. Whatever it raises ends as a
+transcript note, never the session; afterwards the session picks up what it
+changed. One change it deliberately doesn't pick up on its own: an MCP server
+added in the session stays out of the running agent's tools until
+``/mcp approve`` admits it.
+
+Slash commands only ever come from the input box: a model's reply is text,
+whatever it says.
 """
 
 import asyncio
+from collections.abc import Awaitable, Callable
+from uuid import UUID
 
 import typer
 from rich.console import Group
@@ -34,9 +41,11 @@ from arcana.models.gateway import ModelGateway
 from arcana.tools import MCPRegistry, ToolConfirmer
 from arcana.types.agent import Agent as AgentRecord
 from arcana.types.session import MessageRole, Session
+from arcana_cli.command_impl import CommandGroup
 from arcana_cli.commands.chat.render import (
     _agent_eyebrow_block,
     _card_table,
+    _command_help,
     _footer_line,
     _header_block,
     _help_table,
@@ -46,12 +55,12 @@ from arcana_cli.commands.chat.render import (
     _replay_blocks,
     _user_block,
 )
-from arcana_cli.commands.chat.wizards import Params, Wizard, WizardUsageError, find_wizard, redacted
 from arcana_cli.commands.run import AmbiguousAgentError, build_session_runtime, build_world_engine, resolve_agent
 from arcana_cli.tui.app import ArcanaApp
 from arcana_cli.tui.history import AgentHistory
+from arcana_cli.tui.slash_registry import HELP_OPTION, Params, SlashCommand, SlashUsageError, slash_registry
 from arcana_cli.ui.card_panel import card_panel
-from arcana_cli.ui.input_model import _SLASH_SUBCOMMANDS, WizardGroup
+from arcana_cli.ui.input_model import SessionCommandName
 from arcana_cli.ui.renderer import CANCELLED, Choice, Renderer
 from arcana_cli.ui.theme import card_color, dim, err, warn
 
@@ -62,16 +71,19 @@ __all__ = ["_ChatController", "_friendly_error"]
 #: The title of the agent picker a bare ``/switch`` opens.
 SWITCH_TITLE = "Switch to agent"
 
-#: Why a wizard line carrying a secret is refused.
+#: Why a slash line carrying a secret is refused.
 SECRET_ON_THE_LINE = (
     "A secret can't go on the command line here: the transcript and your input history would keep it. "
-    "Leave it off and the wizard asks for it in a hidden prompt."
+    "Leave it off and the command asks for it in a hidden prompt."
 )
+
+#: The command groups whose commands can change the current agent's record (its card, model or tools).
+AGENT_GROUPS = frozenset({CommandGroup.AGENT, CommandGroup.TOOLS})
 
 
 def _keeps_in_history(raw: str) -> bool:
     """Whether a submitted line may go into the input history: not if it carries a secret."""
-    return redacted(raw) is None
+    return slash_registry().redacted(raw) is None
 
 
 def _friendly_error(exc: Exception) -> str:
@@ -146,6 +158,21 @@ class _ChatController:
         self.exited = False
         self._app: ArcanaApp | None = None
         self._turn: Worker[None] | None = None
+        self.commands = slash_registry()
+        #: Agents whose deletion this session has already noted.
+        self._deleted_noted: set[UUID] = set()
+        self._session_commands: dict[SessionCommandName, Callable[[str], Awaitable[None]]] = {
+            SessionCommandName.HELP: self._help,
+            SessionCommandName.MEMORY: self._memory,
+            SessionCommandName.CARD: self._card,
+            SessionCommandName.SWITCH: self._switch,
+            SessionCommandName.RETRY: self._retry,
+            SessionCommandName.SAVE: self._save,
+            SessionCommandName.CLEAR: self._clear,
+            SessionCommandName.FRESH: self._fresh,
+            SessionCommandName.NO_MEMORY: self._no_memory,
+            SessionCommandName.EXIT: self._exit,
+        }
 
     # -- app wiring -------------------------------------------------------
     def bind_app(self, app: ArcanaApp) -> None:
@@ -153,6 +180,7 @@ class _ChatController:
         self._app = app
         app.chat_input.set_history(AgentHistory.for_agent(self.record.id))
         app.chat_input.agent_names = lambda: [r.name for r in self.reg.list()]
+        app.chat_input.vocabulary = self.commands.vocabulary()
         app.chat_input.keep_in_history = _keeps_in_history
         self._refresh_footer()
 
@@ -226,7 +254,7 @@ class _ChatController:
             return
         # Slash detection runs on the visible line (paste placeholders intact),
         # so a pasted chunk is never mistaken for a command.
-        hidden = redacted(stripped) if stripped.startswith("/") else None
+        hidden = self.commands.redacted(stripped) if stripped.startswith("/") else None
         self.renderer.emit(_user_block(hidden if hidden is not None else raw))
         if hidden is not None:
             self._note(err(SECRET_ON_THE_LINE))
@@ -254,37 +282,49 @@ class _ChatController:
         except Exception as exc:
             self._note(err(escape(_friendly_error(exc))))
 
-    async def _handle_slash(self, cmd: str) -> None:
-        name, _, arg = cmd.partition(" ")
-        arg = arg.strip()
-        if name == "/exit":
-            self.request_exit()
-        elif name == "/help":
-            self.renderer.emit(Group(Text(""), _help_table()))
-        elif name == "/card":
-            self.renderer.emit(Group(Text(""), _card_table(self.runtime_agent, self.record)))
-        elif name == "/memory":
-            self.renderer.emit(Group(Text(""), await _memory_renderable(self.federation, self.session)))
-        elif name == "/retry":
-            await self._retry()
-        elif name == "/save":
-            self._sm.close(self.session)
-            self._note(dim(f"session saved — {str(self.session.id)[:8]}…"))
-        elif name == "/clear":
-            # Clears what's on screen; the exit replay still prints the whole session.
-            if self._app is not None:
-                self._app.transcript.clear()
-            self.append_header()
-        elif name in ("/fresh", "/no-memory"):
-            await self._new_session(memory_off=name == "/no-memory")
-        elif name == "/switch":
-            await self._switch(arg)
-        elif name in _SLASH_SUBCOMMANDS:
-            await self._wizard(cmd)
-        else:
-            self._note(err(f"Unknown command {escape(name)}. Type /help."))
+    async def _handle_slash(self, line: str) -> None:
+        """Run a slash line: the session's own command, or a generated one; an unknown one is a note.
 
-    async def _retry(self) -> None:
+        The session's own commands win; ``/memory`` alone is the session's view,
+        and ``/memory <action>`` the ``arcana memory`` command.
+        """
+        name, _, arg = line.partition(" ")
+        arg = arg.strip()
+        own = next((c for c in SessionCommandName if c == name), None)
+        if own is not None and not (arg and name in self.commands.groups):
+            await self._session_commands[own](arg)
+            return
+        await self._command(line)
+
+    async def _help(self, _arg: str) -> None:
+        self.renderer.emit(Group(Text(""), _help_table(self.commands)))
+
+    async def _memory(self, _arg: str) -> None:
+        self.renderer.emit(Group(Text(""), await _memory_renderable(self.federation, self.session)))
+
+    async def _card(self, _arg: str) -> None:
+        self.renderer.emit(Group(Text(""), _card_table(self.runtime_agent, self.record)))
+
+    async def _save(self, _arg: str) -> None:
+        self._sm.close(self.session)
+        self._note(dim(f"session saved — {str(self.session.id)[:8]}…"))
+
+    async def _clear(self, _arg: str) -> None:
+        # Clears what's on screen; the exit replay still prints the whole session.
+        if self._app is not None:
+            self._app.transcript.clear()
+        self.append_header()
+
+    async def _fresh(self, _arg: str) -> None:
+        await self._new_session(memory_off=False)
+
+    async def _no_memory(self, _arg: str) -> None:
+        await self._new_session(memory_off=True)
+
+    async def _exit(self, _arg: str) -> None:
+        self.request_exit()
+
+    async def _retry(self, _arg: str) -> None:
         last_user = next(
             (m.content for m in reversed(self.session.messages) if m.role == MessageRole.USER),
             None,
@@ -385,54 +425,73 @@ class _ChatController:
         self.append_header()
         self._note(dim(f"(switched to {escape(new_record.name)} · explicit route)"))
 
-    # -- setup wizards ------------------------------------------------------
-    async def _wizard(self, line: str) -> None:
-        """Run the wizard ``line`` names; any failure (or cancel) is a note, and the session carries on."""
-        wizard, args = find_wizard(line)
-        if wizard is None:
-            command = line.split(" ", 1)[0]
-            self._note(err(f"Usage: {command} {'|'.join(_SLASH_SUBCOMMANDS[command])} [options]"))
+    # -- arcana commands ----------------------------------------------------
+    async def _command(self, line: str) -> None:
+        """Run the ``arcana`` command ``line`` names; any failure (or cancel) is a note, and the session carries on."""
+        found = self.commands.resolve(line)
+        command = found.command
+        if found.excluded is not None:
+            one_shot = "arcana " + found.excluded.removeprefix("/")
+            self._note(err(escape(f"{found.excluded} isn't available in the session: {found.excluded_reason}.")))
+            self._note(dim(escape(f"Run it outside the session: {one_shot}")))
+            return
+        if found.group is not None:
+            actions = "|".join(self.commands.groups[found.group])
+            self._note(err(escape(f"Usage: {found.group} {actions} [options]")))
+            return
+        if command is None:
+            self._note(err(f"Unknown command {escape(line.split(' ', 1)[0])}. Type /help."))
+            return
+        if command.asks_for_help(found.args):
+            self.renderer.emit(Group(Text(""), _command_help(command)))
             return
         try:
-            params = wizard.parse(args)
-        except WizardUsageError as exc:
-            self._note(err(escape(f"{wizard.name}: {exc}")))
-            self._note(dim(f"It takes the options of {wizard.one_shot} (see {wizard.one_shot} --help)."))
+            params = await command.parse(self.renderer, found.args)
+        except SlashUsageError as exc:
+            self._note(err(escape(f"{command.name}: {exc}")))
+            self._note(dim(escape(f"Usage: {command.usage()} — see {command.name} {HELP_OPTION}")))
             return
-        mcp_before = self._mcp_servers_on_disk()
+        except typer.Abort:
+            self._note(dim(CANCELLED))
+            return
+        mcp_before = self._mcp_servers_on_disk() if command.group == CommandGroup.MCP else set[str]()
         succeeded = False
         try:
-            await wizard.run(self.renderer, params)
+            await command.run(self.renderer, params)
             succeeded = True
         except typer.Abort:
             self._note(dim(CANCELLED))
         except typer.Exit as exc:
-            # The wizard said why before it exited; a clean exit (nothing to do) counts as done.
+            # The command said why before it exited; a clean exit (nothing to do) counts as done.
             succeeded = exc.exit_code == 0
         except asyncio.CancelledError:
             self._note(dim(" …cancelled"))
             raise
         except Exception as exc:
-            self._note(err(escape(f"{wizard.name} failed: {exc}")))
-        await self._after_wizard(wizard, params, succeeded=succeeded, mcp_before=mcp_before)
+            self._note(err(escape(f"{command.name} failed: {exc}")))
+        await self._after_command(command, params, succeeded=succeeded, mcp_before=mcp_before)
 
-    async def _after_wizard(self, wizard: Wizard, params: Params, *, succeeded: bool, mcp_before: set[str]) -> None:
-        """Pick up what ``wizard`` changed: agents, provider connections, or MCP servers."""
-        if wizard.command is WizardGroup.AGENT:
+    async def _after_command(
+        self, command: SlashCommand, params: Params, *, succeeded: bool, mcp_before: set[str]
+    ) -> None:
+        """Pick up what ``command`` changed: the current agent, provider connections, or MCP servers."""
+        if command.group in AGENT_GROUPS:
             await self._reload_agent()
-        elif wizard.command is WizardGroup.PROVIDERS:
+        elif command.group == CommandGroup.PROVIDERS:
             # The next model call re-reads the connections and reconnects with them.
             self._connections.reload()
             await self._gw.aclose()
-        elif wizard.command is WizardGroup.MCP:
-            approved = params.get("name") if succeeded and wizard.admits_server else None
+        elif command.group == CommandGroup.MCP:
+            approved = params.get("name") if succeeded and command.impl.admits_server else None
             await self._settle_tools(approved=approved if isinstance(approved, str) else None, before=mcp_before)
 
     async def _reload_agent(self) -> None:
-        """Rebuild the runtime when a wizard edited the current agent; say so when it deleted it."""
+        """Rebuild the runtime when a command edited the current agent; say so (once) when it deleted it."""
         fresh = self.reg.get(self.record.id)
         if fresh is None or fresh.is_archived:
-            self._note(warn(f"'{escape(self.record.name)}' was deleted; this session runs on until you /switch."))
+            if self.record.id not in self._deleted_noted:
+                self._deleted_noted.add(self.record.id)
+                self._note(warn(f"'{escape(self.record.name)}' was deleted; this session runs on until you /switch."))
             return
         if fresh == self.record:
             return
@@ -448,9 +507,9 @@ class _ChatController:
         return {server.name for server in registry.list_servers()}
 
     async def _settle_tools(self, *, approved: str | None, before: set[str]) -> None:
-        """Keep the session's MCP tools in step with an ``/mcp`` wizard.
+        """Keep the session's MCP tools in step with an ``/mcp`` command.
 
-        A server the wizard added is held back until approved; one it removed is
+        A server the command added is held back until approved; one it removed is
         dropped at once. After ``/mcp approve`` of server ``approved``, the tools
         are re-read from every server, still leaving out the ones added here and
         not yet approved.

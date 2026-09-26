@@ -10,6 +10,7 @@ import click
 import typer
 
 from arcana_cli._async import run_async
+from arcana_cli.command_impl import command_impl
 from arcana_cli.constants import ARCANA_HOME
 from arcana_cli.ui.renderer import Renderer, View, fail, renderer_for
 from arcana_cli.ui.theme import dim
@@ -57,6 +58,7 @@ def show_cmd(json_: bool = typer.Option(False, "--json", help="Emit JSON")) -> N
     run_async(show_soul(renderer_for(json_)))
 
 
+@command_impl("soul show")
 async def show_soul(r: Renderer) -> None:
     """The current soul.md, or a hint when there is none yet."""
     path = str(_SOUL_PATH)

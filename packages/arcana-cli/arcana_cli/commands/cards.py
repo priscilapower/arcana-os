@@ -15,6 +15,7 @@ import typer
 from arcana.cards.registry import get_registry
 from arcana.types.card import Card, TarotCard
 from arcana_cli._async import run_async
+from arcana_cli.command_impl import command_impl
 from arcana_cli.constants import ROMAN
 from arcana_cli.ui.card_panel import card_panel
 from arcana_cli.ui.card_picker import select_card
@@ -53,6 +54,7 @@ def _card_view(card: TarotCard) -> View:
 BROWSE_INSTEAD = "a card name to 'arcana cards show'"
 
 
+@command_impl("cards")
 async def list_cards(r: Renderer) -> None:
     """Offer every card but THE WORLD (reserved for the meta-agent) and show the one picked."""
     picked = await select_card("Browse the Major Arcana", renderer=r, flag=BROWSE_INSTEAD)
@@ -73,6 +75,7 @@ async def card_catalog(r: Renderer) -> None:
     r.emit(View(table, [_card_summary(c) for c in cards]))
 
 
+@command_impl("cards show")
 async def show_card(r: Renderer, name: str) -> None:
     """Show one card, resolved by key, short key, or unique name fragment."""
     r.emit(_card_view(_resolve_card(r, name)))

@@ -2,60 +2,76 @@
 
 The parts of chat input editing that don't depend on any terminal toolkit: when
 Enter submits versus continues a line, when a paste collapses to a placeholder
-(and how placeholders expand back), and the in-session slash-command vocabulary.
+(and how placeholders expand back), and the slash commands only the session has.
 The editor widget binds keys and completion onto these rules; keeping them here
 means the rules are defined once and testable without a toolkit.
 """
 
+from dataclasses import dataclass
 from enum import StrEnum
 
 # Package-internal exports — the input rules the chat editor, controller, and
 # render module build on. Declared so the split doesn't read as dead code under
 # strict unused-symbol checks.
 __all__ = [
-    "_SLASH_COMMANDS",
-    "_SLASH_NAMES",
-    "_SLASH_SUBCOMMANDS",
-    "WizardGroup",
+    "SESSION_COMMANDS",
+    "SessionCommand",
+    "SessionCommandName",
     "_PasteRegistry",
     "_should_collapse_paste",
     "_submits_on_enter",
     "_trailing_backslashes",
 ]
 
-# In-session slash commands (name → help text). Shared by `/help` and completion.
-_SLASH_COMMANDS: list[tuple[str, str]] = [
-    ("/help", "list these commands"),
-    ("/memory", "show what this agent recalls from this session"),
-    ("/card", "print the resolved card config — temperature, tone, weights"),
-    ("/switch [name]", "load another agent in a new session (no name: pick one)"),
-    ("/retry", "re-run your last message"),
-    ("/save", "force a session snapshot to disk now"),
-    ("/clear", "clear the screen (the session is kept)"),
-    ("/fresh", "start a new session"),
-    ("/no-memory", "start a new stateless session (memory off)"),
-    ("/agent create|edit|delete", "create, edit or delete an agent (same options as arcana agent …)"),
-    ("/providers add|edit|remove|login", "set up a model provider (same options as arcana providers …)"),
-    ("/mcp add|approve|remove", "connect an MCP server; its tools reach this session once approved"),
-    ("/exit", "close the session and quit"),
-]
-_SLASH_NAMES: list[str] = [name.split(" ")[0] for name, _ in _SLASH_COMMANDS]
+
+class SessionCommandName(StrEnum):
+    """The slash commands only the session has: no ``arcana …`` command runs them."""
+
+    HELP = "/help"
+    MEMORY = "/memory"
+    CARD = "/card"
+    SWITCH = "/switch"
+    RETRY = "/retry"
+    SAVE = "/save"
+    CLEAR = "/clear"
+    FRESH = "/fresh"
+    NO_MEMORY = "/no-memory"
+    EXIT = "/exit"
 
 
-class WizardGroup(StrEnum):
-    """The slash commands that take a sub-action, each running ``arcana <group> <action>``."""
+@dataclass(frozen=True)
+class SessionCommand:
+    """A slash command only the session has (no ``arcana …`` command runs it).
 
-    AGENT = "/agent"
-    PROVIDERS = "/providers"
-    MCP = "/mcp"
+    ``usage`` is how ``/help`` shows it; ``takes_agent`` marks the command whose
+    argument names an agent, so it completes agent names.
+    """
+
+    name: SessionCommandName
+    usage: str
+    help: str
+    takes_agent: bool = False
 
 
-# The sub-actions of each wizard command, for completion and dispatch.
-_SLASH_SUBCOMMANDS: dict[str, tuple[str, ...]] = {
-    WizardGroup.AGENT: ("create", "edit", "delete"),
-    WizardGroup.PROVIDERS: ("add", "edit", "remove", "login"),
-    WizardGroup.MCP: ("add", "approve", "remove"),
-}
+#: The session-only slash commands, in the order ``/help`` lists them. Every other
+#: slash command is generated from the ``arcana`` command tree.
+SESSION_COMMANDS: tuple[SessionCommand, ...] = (
+    SessionCommand(SessionCommandName.HELP, "/help", "list these commands"),
+    SessionCommand(SessionCommandName.MEMORY, "/memory", "show what this agent recalls from this session"),
+    SessionCommand(SessionCommandName.CARD, "/card", "print the resolved card config — temperature, tone, weights"),
+    SessionCommand(
+        SessionCommandName.SWITCH,
+        "/switch [name]",
+        "load another agent in a new session (no name: pick one)",
+        takes_agent=True,
+    ),
+    SessionCommand(SessionCommandName.RETRY, "/retry", "re-run your last message"),
+    SessionCommand(SessionCommandName.SAVE, "/save", "force a session snapshot to disk now"),
+    SessionCommand(SessionCommandName.CLEAR, "/clear", "clear the screen (the session is kept)"),
+    SessionCommand(SessionCommandName.FRESH, "/fresh", "start a new session"),
+    SessionCommand(SessionCommandName.NO_MEMORY, "/no-memory", "start a new stateless session (memory off)"),
+    SessionCommand(SessionCommandName.EXIT, "/exit", "close the session and quit"),
+)
 
 # A pasted chunk spanning at least this many lines is collapsed to a placeholder.
 _PASTE_COLLAPSE_MIN_LINES = 4

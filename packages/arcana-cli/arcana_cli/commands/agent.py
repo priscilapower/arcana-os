@@ -23,6 +23,7 @@ from arcana.types import ModelConnection
 from arcana.types.agent import Agent as AgentRecord
 from arcana.types.card import Card
 from arcana_cli._async import run_async
+from arcana_cli.command_impl import AGENT_METAVAR, command_impl
 from arcana_cli.constants import AGENTS_BASE, CONNECTIONS_PATH, ROMAN
 from arcana_cli.ui.card_picker import select_card, select_cards
 from arcana_cli.ui.renderer import (
@@ -193,8 +194,8 @@ def _print_compat(r: Renderer, compat: BlendCompatibility, registry: CardRegistr
 
 @app.command("create")
 def create(
-    name: str = typer.Option(None, "--name", "-n", help="Agent name"),
-    card: str = typer.Option(None, "--card", "-c", help="Card id (e.g. 'hermit')"),
+    name: str | None = typer.Option(None, "--name", "-n", help="Agent name"),
+    card: str | None = typer.Option(None, "--card", "-c", help="Card id (e.g. 'hermit')"),
     model: str | None = typer.Option(
         None,
         "--model",
@@ -207,6 +208,7 @@ def create(
     run_async(create_agent(renderer_for(json_), name=name, card=card, model=model))
 
 
+@command_impl("agent create")
 async def create_agent(r: Renderer, *, name: str | None, card: str | None, model: str | None) -> None:
     """Create an agent, asking for whatever the flags left out."""
     agent_name = name or await r.ask(Question("Agent name", validator=required, flag="--name"))
@@ -282,6 +284,7 @@ def list_cmd(json_: bool = typer.Option(False, "--json", help="Emit JSON")) -> N
     run_async(list_agents(renderer_for(json_)))
 
 
+@command_impl("agent list")
 async def list_agents(r: Renderer) -> None:
     """Every live agent: a table, or an array of agent summaries."""
     records = _registry().list()
@@ -304,13 +307,14 @@ async def list_agents(r: Renderer) -> None:
 
 @app.command("show")
 def show(
-    name: str = typer.Argument(..., help="Agent name or UUID"),
+    name: str = typer.Argument(..., metavar=AGENT_METAVAR, help="Agent name or UUID"),
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Show full config for an agent."""
     run_async(show_agent(renderer_for(json_), name))
 
 
+@command_impl("agent show")
 async def show_agent(r: Renderer, name: str) -> None:
     """One agent's full config (the human view previews the system prompt; JSON carries all of it)."""
     record = _resolve_agent(r, name)
@@ -344,7 +348,7 @@ async def show_agent(r: Renderer, name: str) -> None:
 
 @app.command("edit")
 def edit(
-    name: str = typer.Argument(..., help="Agent name or UUID"),
+    name: str = typer.Argument(..., metavar=AGENT_METAVAR, help="Agent name or UUID"),
     new_name: str | None = typer.Option(None, "--name", "-n", help="New name"),
     description: str | None = typer.Option(None, "--description", "-d", help="Description"),
     card: str | None = typer.Option(None, "--card", "-c", help="Card id"),
@@ -368,6 +372,7 @@ def edit(
     )
 
 
+@command_impl("agent edit")
 async def edit_agent(
     r: Renderer,
     name: str,
@@ -465,7 +470,7 @@ async def edit_agent(
 
 @app.command("delete")
 def delete(
-    name: str = typer.Argument(..., help="Agent name or UUID"),
+    name: str = typer.Argument(..., metavar=AGENT_METAVAR, help="Agent name or UUID"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
@@ -473,6 +478,7 @@ def delete(
     run_async(delete_agent(renderer_for(json_), name, yes=yes))
 
 
+@command_impl("agent delete")
 async def delete_agent(r: Renderer, name: str, *, yes: bool) -> None:
     """Soft-delete an agent once confirmed (or with ``yes``)."""
     record = _resolve_agent(r, name)

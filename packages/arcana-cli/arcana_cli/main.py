@@ -6,6 +6,7 @@ chat`` does (The World picks the agent); ``arcana --help`` lists the commands.
 
 import typer
 
+from arcana_cli.command_impl import CommandGroup
 from arcana_cli.commands import agent, cards, chat, mcp, memory, providers, run, soul, tools, world
 
 app = typer.Typer(
@@ -14,14 +15,14 @@ app = typer.Typer(
     rich_markup_mode="rich",
 )
 
-app.add_typer(agent.app, name="agent")
-app.add_typer(cards.app, name="cards")
-app.add_typer(mcp.app, name="mcp")
-app.add_typer(memory.app, name="memory")
-app.add_typer(providers.app, name="providers")
-app.add_typer(soul.app, name="soul")
-app.add_typer(tools.app, name="tools")
-app.add_typer(world.app, name="world")
+app.add_typer(agent.app, name=CommandGroup.AGENT)
+app.add_typer(cards.app, name=CommandGroup.CARDS)
+app.add_typer(mcp.app, name=CommandGroup.MCP)
+app.add_typer(memory.app, name=CommandGroup.MEMORY)
+app.add_typer(providers.app, name=CommandGroup.PROVIDERS)
+app.add_typer(soul.app, name=CommandGroup.SOUL)
+app.add_typer(tools.app, name=CommandGroup.TOOLS)
+app.add_typer(world.app, name=CommandGroup.WORLD)
 
 app.command(name="run")(run.run_cmd)
 app.command(name="chat")(chat.chat_cmd)

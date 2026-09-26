@@ -26,6 +26,7 @@ from arcana.types.auth import AuthType, OAuthConfig
 from arcana.types.model import ModelConnection, ModelProvider
 from arcana_cli._async import run_async
 from arcana_cli._oauth import sign_in_or_exit
+from arcana_cli.command_impl import any_value, command_impl
 from arcana_cli.constants import AGENTS_BASE, CONNECTIONS_PATH
 from arcana_cli.ui.renderer import (
     Question,
@@ -201,6 +202,7 @@ def list_cmd(json_: bool = typer.Option(False, "--json", help="Emit JSON")) -> N
     run_async(list_providers(renderer_for(json_)))
 
 
+@command_impl("providers list")
 async def list_providers(r: Renderer) -> None:
     """Every saved connection: a table, or an array of connection summaries."""
     connections = ConnectionStore(CONNECTIONS_PATH).all()
@@ -258,13 +260,14 @@ def add_cmd(
             api_key_env=api_key_env,
             oauth=oauth,
             issuer=issuer,
-            scope=list(scope or []),
+            scope=scope,
             device=device,
             yes=yes,
         )
     )
 
 
+@command_impl("providers add", secrets={"api_key": any_value})
 async def add_provider(
     r: Renderer,
     *,
@@ -276,7 +279,7 @@ async def add_provider(
     api_key_env: str | None,
     oauth: bool,
     issuer: str | None,
-    scope: list[str],
+    scope: list[str] | None,
     device: bool,
     yes: bool,
 ) -> None:
@@ -342,7 +345,7 @@ async def add_provider(
     if use_oauth:
         assert issuer is not None  # guarded above
         credential_ref = f"{conn_id}_oauth_token"
-        config = OAuthConfig(issuer=issuer, scopes=scope)
+        config = OAuthConfig(issuer=issuer, scopes=list(scope or []))
         token, resolved = await sign_in_or_exit(r, config, device=device, code=1)
         store.store_token(credential_ref, token)
         auth_type = AuthType.OAUTH
@@ -407,6 +410,7 @@ def login_cmd(
     run_async(login_provider(renderer_for(json_), name, device=device))
 
 
+@command_impl("providers login")
 async def login_provider(r: Renderer, name: str, *, device: bool) -> None:
     """Sign an OAuth connection in again, replacing its keyring token; nothing changes if the sign-in fails."""
     store, conn = _resolve(r, name)
@@ -445,6 +449,7 @@ def show_cmd(
     run_async(show_provider(renderer_for(json_), name))
 
 
+@command_impl("providers show")
 async def show_provider(r: Renderer, name: str) -> None:
     """One connection's details; the credential is the same redacted summary in both views."""
     store, conn = _resolve(r, name)
@@ -531,6 +536,7 @@ def edit_cmd(
     )
 
 
+@command_impl("providers edit")
 async def edit_provider(
     r: Renderer,
     name: str,
@@ -621,6 +627,7 @@ def remove_cmd(
     run_async(remove_provider(renderer_for(json_), name, yes=yes, force=force))
 
 
+@command_impl("providers remove")
 async def remove_provider(r: Renderer, name: str, *, yes: bool, force: bool) -> None:
     """Remove a connection once confirmed (or with ``yes``); refuses while agents depend on it unless ``force``."""
     store, conn = _resolve(r, name)
