@@ -163,6 +163,25 @@ async def test_blank_enter_submits_empty_text_without_recording_history():
         assert c.box.recall.entries == ()
 
 
+async def test_a_line_the_filter_refuses_is_submitted_but_not_recorded():
+    async with chat() as c:
+        c.box.keep_in_history = lambda raw: "secret" not in raw
+        await c.type("keep me")
+        await c.press("enter")
+        await c.type("secret line")
+        await c.press("enter")
+        assert c.submitted == ["keep me", "secret line"]
+        assert c.box.recall.entries == ("keep me",)
+
+
+async def test_a_wizard_sub_action_completes_from_the_menu():
+    async with chat() as c:
+        await c.type("/mcp a")
+        assert c.box.menu_open
+        await c.press("tab")
+        assert c.box.text == "/mcp add"
+
+
 # ── Ctrl+J, Alt+Enter, Shift+Enter ───────────────────────────────────────
 
 

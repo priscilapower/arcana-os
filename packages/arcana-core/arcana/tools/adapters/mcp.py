@@ -29,9 +29,11 @@ envelope is part of the contract, not an afterthought:
 
 import asyncio
 import os
+import sys
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from contextlib import AsyncExitStack
-from typing import Any, Protocol
+from contextvars import ContextVar
+from typing import Any, Protocol, TextIO
 from urllib.parse import urlsplit
 
 import httpx
@@ -67,7 +69,13 @@ from arcana.types.tool import (
 # user's MCP token lives beside their model credentials under one OS keychain
 # namespace, and the CLI that *writes* a token uses the same namespace this
 # adapter *reads* from — the two must never drift.
-__all__ = ["KEYRING_SERVICE", "MCPToolAdapter", "diff_discovered"]
+__all__ = ["KEYRING_SERVICE", "MCPToolAdapter", "diff_discovered", "stdio_errlog"]
+
+#: Where a stdio server's stderr goes; unset, the process's own stderr. An app
+#: drawing on the terminal points it at a file for as long as it runs, so a
+#: child's diagnostics can't write over the screen. A context variable, so every
+#: task started inside the app's context sees the same sink.
+stdio_errlog: ContextVar[TextIO | None] = ContextVar("stdio_errlog", default=None)
 
 
 def build_mcp_credentials(cfg: MCPServerConfig) -> CredentialProvider | None:
@@ -355,7 +363,9 @@ class MCPToolAdapter(ToolAdapter):
         stack = AsyncExitStack()
         try:
             if self._cfg.transport is MCPTransport.STDIO:
-                read, write = await stack.enter_async_context(stdio_client(self._stdio_params()))
+                read, write = await stack.enter_async_context(
+                    stdio_client(self._stdio_params(), errlog=stdio_errlog.get() or sys.stderr)
+                )
             elif self._cfg.transport is MCPTransport.SSE:
                 client = sse_client(self._remote_url(), headers=await self._auth_headers())
                 read, write = await stack.enter_async_context(client)

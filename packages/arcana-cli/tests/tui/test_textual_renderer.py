@@ -1,5 +1,6 @@
 """Tests for TextualRenderer — the renderer port over the running app, driven through Pilot."""
 
+import asyncio
 import io
 import logging
 import subprocess
@@ -17,7 +18,7 @@ from textual.worker import WorkerFailed
 from arcana.types.card import Card
 from arcana_cli.tui.app import ArcanaApp
 from arcana_cli.tui.card_picker import CardPickerScreen
-from arcana_cli.tui.screens import ConfirmScreen, MultiSelectScreen, PromptScreen, SelectScreen
+from arcana_cli.tui.screens import ConfirmScreen, MultiSelectScreen, PromptScreen, SelectScreen, WaitScreen
 from arcana_cli.ui.card_picker import card_choices
 from arcana_cli.ui.renderer import JsonRenderer, Question, Renderer, TtyRenderer, renderer_for
 from arcana_cli.ui.renderer.port import Choice
@@ -255,12 +256,16 @@ async def test_ask_reasks_until_the_validator_accepts(tui):
         assert await worker.wait() == "8080"
 
 
-async def test_ask_escape_returns_the_default(tui):
+async def test_ask_escape_aborts_even_with_a_default(tui):
+    """Esc cancels the question (and so the wizard asking it); an empty Enter is what takes the default."""
     async with tui() as h:
         worker = h.start(h.renderer.ask(Question("Model", default="hermes-3")))
         await h.wait_for_screen(PromptScreen)
         await h.pilot.press(*"typed", "escape")
-        assert await worker.wait() == "hermes-3"
+        with pytest.raises(WorkerFailed) as failed:
+            await worker.wait()
+        assert isinstance(failed.value.error, typer.Abort)
+        assert "hermes-3" not in h.retained_text()
 
 
 async def test_ask_escape_without_a_default_aborts(tui):
@@ -312,7 +317,7 @@ async def test_secret_default_is_not_shown_as_a_placeholder(tui):
         worker = h.start(h.renderer.ask(Question("API key", default=SECRET, secret=True)))
         screen = await h.wait_for_screen(PromptScreen)
         assert screen.query_one(Input).placeholder == ""
-        await h.pilot.press("escape")
+        await h.pilot.press("enter")
         assert await worker.wait() == SECRET
         assert SECRET not in h.retained_text()
 
@@ -496,3 +501,57 @@ def test_the_one_shot_paths_do_not_import_textual(module):
     code = f"import sys, {module}; print('textual' in sys.modules)"
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert result.stdout.strip() == "False"
+
+
+# ── waiting ───────────────────────────────────────────────────────────────
+
+
+async def _wait_until_released(h: Any, release: asyncio.Event) -> str:
+    async with h.renderer.waiting("Waiting for authorization…", title="Sign in") as wait:
+        wait.show(Text("enter code ABCD"))
+        await release.wait()
+    return "done"
+
+
+async def test_waiting_shows_a_dialog_until_the_block_ends(tui):
+    release = asyncio.Event()
+    async with tui() as h:
+        worker = h.start(_wait_until_released(h, release))
+        screen = await h.wait_for_screen(WaitScreen)
+        assert isinstance(screen, WaitScreen)
+        assert screen.shown is not None and "ABCD" in str(screen.shown)
+        release.set()
+        assert await worker.wait() == "done"
+        assert not isinstance(h.app.screen, WaitScreen)
+        assert "ABCD" not in h.retained_text()  # the dialog's content never reaches the transcript
+
+
+async def test_escape_on_a_wait_raises_abort_out_of_the_block(tui):
+    release = asyncio.Event()
+    async with tui() as h:
+        worker = h.start(_wait_until_released(h, release))
+        await h.wait_for_screen(WaitScreen)
+        await h.pilot.press("escape")
+        with pytest.raises(WorkerFailed) as failed:
+            await worker.wait()
+        assert isinstance(failed.value.error, typer.Abort)
+        assert not isinstance(h.app.screen, WaitScreen)
+
+
+async def test_cancelling_the_worker_takes_the_wait_dialog_down(tui):
+    release = asyncio.Event()
+    async with tui() as h:
+        worker = h.start(_wait_until_released(h, release))
+        await h.wait_for_screen(WaitScreen)
+        worker.cancel()
+        for _ in range(20):
+            await h.pilot.pause()
+        assert worker.is_cancelled
+        assert not isinstance(h.app.screen, WaitScreen)
+
+
+async def test_waiting_outside_a_worker_fails_fast(tui):
+    async with tui() as h:
+        with pytest.raises(RuntimeError, match="inside an app worker"):
+            async with h.renderer.waiting("x"):
+                pass

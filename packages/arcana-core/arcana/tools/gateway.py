@@ -296,7 +296,9 @@ class ToolGateway:
         return next((a for a in self._adapters if a.supports(name)), None)
 
 
-def default_tool_gateway(agent_id: UUID | None = None, *, home: Path | None = None) -> ToolGateway:
+def default_tool_gateway(
+    agent_id: UUID | None = None, *, home: Path | None = None, registry: MCPRegistry | None = None
+) -> ToolGateway:
     """A ToolGateway wired to the builtin adapter plus one adapter per MCP server.
 
     Registers one :class:`MCPToolAdapter` for every configured server alongside
@@ -318,8 +320,11 @@ def default_tool_gateway(agent_id: UUID | None = None, *, home: Path | None = No
     the tools are offered but refuse to run until an operator turns them on and
     chooses a sandbox backend. ``run_command`` additionally runs in the agent's
     jailed workspace, so it is available only when an ``agent_id`` gives it one.
+
+    ``registry`` is the set of MCP servers the gateway offers; omitted, it is the
+    process-wide :func:`~arcana.tools.registry.get_mcp_registry`.
     """
-    registry = get_mcp_registry()
+    registry = registry if registry is not None else get_mcp_registry()
     builtin = BuiltinToolAdapter(
         fs_config=FsToolsConfig.for_agent(agent_id, home=home),
         code_config=CodeToolsConfig(),

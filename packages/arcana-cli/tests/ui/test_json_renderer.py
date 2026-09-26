@@ -119,3 +119,12 @@ def test_non_interactive_error_exits_with_error_code_through_typer():
     assert result.exit_code == EXIT_ERROR
     assert result.stdout == ""
     assert "pass --name instead" in " ".join(result.stderr.split())
+
+
+async def test_waiting_instructions_go_to_stderr_never_the_json_stream(capsys: pytest.CaptureFixture[str]):
+    r, stderr = _renderer()
+    async with r.waiting("Waiting for authorization…") as wait:
+        wait.show(Text("enter code ABCD"))
+    assert capsys.readouterr().out == ""
+    assert "enter code ABCD" in stderr.getvalue()
+    assert "Waiting for authorization…" in stderr.getvalue()

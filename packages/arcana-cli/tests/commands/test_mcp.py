@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+import arcana_cli._oauth as oauth_mod
 import arcana_cli.commands.mcp as mcp_mod
 from arcana.agents.registry import AgentRegistry
 from arcana.tools.registry import MCPRegistry
@@ -130,12 +131,12 @@ def test_mcp_login_refreshes_token_for_existing_oauth_server(home, monkeypatch):
     saved: dict[str, str] = {}
     monkeypatch.setattr("keyring.set_password", lambda s, r, v: saved.__setitem__(r, v))
 
-    async def _fake_sign_in(config, *, device, console, client_factory=None):
+    async def _fake_sign_in(r, config, *, device, client_factory=None):
         return OAuthToken(
             access_token="fresh", refresh_token="r2", expires_at=datetime(2999, 1, 1, tzinfo=UTC)
         ), config
 
-    monkeypatch.setattr(mcp_mod, "sign_in", _fake_sign_in)
+    monkeypatch.setattr(oauth_mod, "sign_in", _fake_sign_in)
 
     result = runner.invoke(app, ["mcp", "login", "notion-mcp"])
     assert result.exit_code == 0, result.output
@@ -414,3 +415,18 @@ def test_remove_confirms_without_yes(home):
     result = runner.invoke(app, ["mcp", "remove", "notion-mcp"], input="n\n")
     assert result.exit_code != 0  # aborted
     assert "notion-mcp" in (home / "connections" / "mcps.json").read_text()
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["mcp", "approve", "ghost", "--all", "--json"],
+        ["mcp", "remove", "ghost", "--yes", "--json"],
+        ["mcp", "add", "--name", "builtin", "--url", "https://a/sse", "--json"],
+    ],
+)
+def test_a_json_command_that_fails_keeps_stdout_clean(home, argv):
+    result = runner.invoke(app, argv)
+    assert result.exit_code != 0
+    assert result.stdout == ""
+    assert result.stderr.strip()

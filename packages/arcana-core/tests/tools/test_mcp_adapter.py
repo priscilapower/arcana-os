@@ -5,16 +5,20 @@ so nothing here opens a real transport or spawns a subprocess.
 """
 
 import asyncio
+import sys
+from pathlib import Path
 from typing import Any
 
 import pytest
 from mcp.types import EmbeddedResource, ImageContent, TextContent, TextResourceContents
 from pydantic import AnyUrl
 
+import arcana.tools.adapters.mcp as mcp_adapter_mod
 from arcana.tools.adapters.mcp import (
     MCP_DEFAULT_MAX_RESULT_BYTES,
     MCPToolAdapter,
     diff_discovered,
+    stdio_errlog,
 )
 from arcana.types.tool import MCPServerConfig, MCPTransport, ToolDefinition, ToolStatus, ToolType
 from tests.support.tools import (
@@ -260,6 +264,39 @@ def test_stdio_requires_command():
     adapter = MCPToolAdapter(MCPServerConfig(name="local", transport=MCPTransport.STDIO))
     with pytest.raises(ValueError, match="requires 'command'"):
         adapter._stdio_params()  # pyright: ignore[reportPrivateUsage]
+
+
+def _capture_errlog(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    """Stub the stdio transport to record the ``errlog`` it is opened with, then fail the connect."""
+    seen: list[object] = []
+
+    def fake_stdio_client(_params: object, errlog: object) -> Any:
+        seen.append(errlog)
+        raise ConnectionError("no child spawned in tests")
+
+    monkeypatch.setattr(mcp_adapter_mod, "stdio_client", fake_stdio_client)
+    return seen
+
+
+async def test_stdio_child_stderr_defaults_to_the_process_stderr(monkeypatch: pytest.MonkeyPatch):
+    seen = _capture_errlog(monkeypatch)
+    adapter = MCPToolAdapter(MCPServerConfig(name="local", transport=MCPTransport.STDIO, command="srv"))
+    with pytest.raises(ConnectionError):
+        await adapter._open()  # pyright: ignore[reportPrivateUsage]
+    assert seen == [sys.stderr]
+
+
+async def test_stdio_child_stderr_follows_the_errlog_context(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    seen = _capture_errlog(monkeypatch)
+    adapter = MCPToolAdapter(MCPServerConfig(name="local", transport=MCPTransport.STDIO, command="srv"))
+    with (tmp_path / "stdio.log").open("a") as log:
+        token = stdio_errlog.set(log)
+        try:
+            with pytest.raises(ConnectionError):
+                await adapter._open()  # pyright: ignore[reportPrivateUsage]
+        finally:
+            stdio_errlog.reset(token)
+    assert seen == [log]
 
 
 # ---------------------------------------------------------------------------

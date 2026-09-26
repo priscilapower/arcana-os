@@ -40,10 +40,12 @@ from rich.text import Text
 from arcana_cli.ui.renderer.port import (
     Choice,
     JsonAble,
+    PrintedWait,
     Question,
     StatusHandle,
     StreamRender,
     StreamSink,
+    WaitHandle,
     initial_indexes,
     refuse,
 )
@@ -359,3 +361,11 @@ class TtyRenderer:
             yield sink
         finally:
             sink.write("\n")
+
+    @asynccontextmanager
+    async def waiting(self, msg: str, *, title: str = "") -> AsyncGenerator[WaitHandle]:
+        """Print what the user has to do, then ``msg``; Ctrl+C aborts the command as ever.
+
+        No spinner: one would redraw over the instructions printed beside it.
+        """
+        yield PrintedWait(self._console, msg)

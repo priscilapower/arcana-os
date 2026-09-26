@@ -23,6 +23,8 @@ from arcana.agents.registry import AgentRegistry
 from arcana.agents.session_manager import SessionManager
 from arcana.cards.engine import CardEngine
 from arcana.cards.registry import get_registry
+from arcana.models.connection_store import ConnectionStore
+from arcana.tools import MCPRegistry
 from arcana.types.agent import Agent as AgentRecord
 from arcana.types.card import Card
 from arcana.types.model import ModelConnection, ModelProvider
@@ -105,6 +107,8 @@ def make_controller(
 ) -> _ChatController:
     """A controller over ``runtime`` (a :class:`RecordingRenderer` by default), opened (header shown)."""
     sm = SessionManager(home / "agents")
+    tools = MCPRegistry(connections_file=home / "connections" / "mcps.json")
+    tools.load()
     controller = _ChatController(
         renderer=renderer if renderer is not None else RecordingRenderer(),
         reg=AgentRegistry(home / "agents"),
@@ -115,6 +119,8 @@ def make_controller(
         runtime_agent=runtime,
         federation=federation,
         memory_off=memory_off,
+        connections=ConnectionStore(home / "connections" / "models.json"),
+        tools=tools,
     )
     controller.open()
     return controller
@@ -137,13 +143,17 @@ class FakeGateway:
     """An async-context stand-in for ``ModelGateway`` that opens no connections."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        pass
+        self.closed = False
 
     async def __aenter__(self) -> "FakeGateway":
         return self
 
     async def __aexit__(self, *exc: object) -> None:
         return None
+
+    async def aclose(self) -> None:
+        """Drops the (nonexistent) cached adapters, as ``ModelGateway.aclose`` does."""
+        self.closed = True
 
 
 class FakeFederation:

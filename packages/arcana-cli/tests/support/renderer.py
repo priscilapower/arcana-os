@@ -19,9 +19,10 @@ from collections.abc import AsyncGenerator, Iterable, Sequence
 from contextlib import asynccontextmanager
 from typing import Any, Literal, TypeVar, overload
 
+import typer
 from rich.console import Console, RenderableType
 
-from arcana_cli.ui.renderer import Choice, JsonAble, Question, StatusHandle, StreamRender, StreamSink
+from arcana_cli.ui.renderer import Choice, JsonAble, Question, StatusHandle, StreamRender, StreamSink, WaitHandle
 
 T = TypeVar("T")
 
@@ -64,6 +65,10 @@ class RecordingRenderer:
 
     :attr:`events` orders statuses, their stops and streamed chunks, so a test
     can check that a status ended before the first chunk arrived.
+
+    A :meth:`waiting` block is recorded in :attr:`waits` (its message) and what
+    it shows in :attr:`shown`; ``call_off_waits`` makes every wait raise
+    :class:`typer.Abort` as a user pressing Esc would, once it has shown something.
     """
 
     def __init__(
@@ -72,6 +77,7 @@ class RecordingRenderer:
         answers: Iterable[str] = (),
         confirms: Iterable[bool] = (),
         selections: Iterable[object] = (),
+        call_off_waits: bool = False,
     ) -> None:
         self.emitted: list[RenderableType | JsonAble] = []
         self.notes: list[RenderableType] = []
@@ -83,6 +89,9 @@ class RecordingRenderer:
         self.statuses: list[str] = []
         self.streamed: list[str] = []
         self.events: list[Event] = []
+        self.waits: list[str] = []
+        self.shown: list[RenderableType] = []
+        self._call_off_waits = call_off_waits
         self._answers = deque(answers)
         self._confirms = deque(confirms)
         self._selections = deque(selections)
@@ -98,6 +107,10 @@ class RecordingRenderer:
     def text(self, width: int = 100) -> str:
         """Everything emitted, rendered as plain text (no ANSI) at ``width`` columns."""
         return _plain(self.emitted, width)
+
+    def shown_text(self, width: int = 100) -> str:
+        """Everything a :meth:`waiting` block showed, rendered as plain text."""
+        return _plain(self.shown, width)
 
     def notes_text(self, width: int = 100) -> str:
         """Every note, rendered as plain text (no ANSI) at ``width`` columns."""
@@ -201,6 +214,22 @@ class RecordingRenderer:
             text = "".join(self.streamed[start:])
             if render is not None and text:
                 self.emitted.append(render(text))
+
+    @asynccontextmanager
+    async def waiting(self, msg: str, *, title: str = "") -> AsyncGenerator[WaitHandle]:
+        self.waits.append(msg)
+        yield _RecordedWait(self.shown, call_off=self._call_off_waits)
+
+
+class _RecordedWait:
+    def __init__(self, shown: list[RenderableType], *, call_off: bool) -> None:
+        self._shown = shown
+        self._call_off = call_off
+
+    def show(self, renderable: RenderableType) -> None:
+        self._shown.append(renderable)
+        if self._call_off:
+            raise typer.Abort()
 
 
 def _plain(renderables: Iterable[RenderableType | JsonAble], width: int) -> str:

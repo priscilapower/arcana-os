@@ -1,7 +1,8 @@
 """arcana providers — full CRUD for model provider connections.
 
-``add``, ``edit`` and ``remove`` are renderer-agnostic coroutines
-(``add_provider``, ``edit_provider``, ``remove_provider``): every question goes
+``add``, ``edit``, ``remove`` and ``login`` are renderer-agnostic coroutines
+(``add_provider``, ``edit_provider``, ``remove_provider``, ``login_provider``):
+every question (and an OAuth sign-in's instructions) goes
 through the :class:`~arcana_cli.ui.renderer.Renderer` they are handed and names
 the option that answers it without a prompt. An API key is asked as a secret
 question, so it reaches the keyring and nothing else — no output, no log, no
@@ -22,7 +23,7 @@ from arcana.models import ConnectionStore, ModelGateway
 from arcana.types.auth import AuthType, OAuthConfig
 from arcana.types.model import ModelConnection, ModelProvider
 from arcana_cli._async import run_async
-from arcana_cli._oauth import sign_in
+from arcana_cli._oauth import sign_in_or_exit
 from arcana_cli.constants import AGENTS_BASE, CONNECTIONS_PATH
 from arcana_cli.ui.renderer import Question, Renderer, confirm_or_cancel, renderer_for, required
 from arcana_cli.ui.theme import GREEN, ORANGE, TXT3, dim, err, hl, make_table, ok, warn
@@ -323,11 +324,7 @@ async def add_provider(
         assert issuer is not None  # guarded above
         credential_ref = f"{conn_id}_oauth_token"
         config = OAuthConfig(issuer=issuer, scopes=scope)
-        try:
-            token, resolved = await sign_in(config, device=device, console=console)
-        except Exception as exc:
-            r.emit(err(f"OAuth sign-in failed: {exc}"))
-            raise typer.Exit(1) from exc
+        token, resolved = await sign_in_or_exit(r, config, device=device, code=1)
         store.store_token(credential_ref, token)
         auth_type = AuthType.OAUTH
         oauth_config = resolved
@@ -382,26 +379,26 @@ def login_cmd(
     refreshed — it reuses the connection's stored issuer/client and just refreshes
     the keyring token in place. No need to re-`add` the connection.
     """
-    store, conn = _resolve(renderer_for(json=False), name)
+    run_async(login_provider(renderer_for(json=False), name, device=device))
+
+
+async def login_provider(r: Renderer, name: str, *, device: bool) -> None:
+    """Sign an OAuth connection in again, replacing its keyring token; nothing changes if the sign-in fails."""
+    store, conn = _resolve(r, name)
     if conn.auth_type is not AuthType.OAUTH:
-        console.print(err(f"Connection '{conn.name}' uses an API key, not OAuth."))
-        console.print(dim(f"  Rotate its key with: arcana providers edit {conn.name} --rotate-key"))
+        r.emit(err(f"Connection '{conn.name}' uses an API key, not OAuth."))
+        r.emit(dim(f"  Rotate its key with: arcana providers edit {conn.name} --rotate-key"))
         raise typer.Exit(1)
     if conn.oauth_config is None:
-        console.print(err(f"Connection '{conn.name}' has no OAuth config to sign in with."))
-        console.print(dim("  Recreate it with: arcana providers add ... --oauth --issuer <url>"))
+        r.emit(err(f"Connection '{conn.name}' has no OAuth config to sign in with."))
+        r.emit(dim("  Recreate it with: arcana providers add ... --oauth --issuer <url>"))
         raise typer.Exit(1)
 
     ref = conn.credential_ref or f"{conn.id}_oauth_token"
-    try:
-        token, resolved = run_async(sign_in(conn.oauth_config, device=device, console=console))
-    except Exception as exc:
-        console.print(err(f"OAuth sign-in failed: {exc}"))
-        raise typer.Exit(1) from exc
-
+    token, resolved = await sign_in_or_exit(r, conn.oauth_config, device=device, code=1)
     store.store_token(ref, token)
     store.upsert(conn.model_copy(update={"oauth_config": resolved, "credential_ref": ref}))
-    console.print(ok(f"Signed in to '{conn.name}' — token refreshed in the OS keyring."))
+    r.emit(ok(f"Signed in to '{conn.name}' — token refreshed in the OS keyring."))
 
 
 @app.command("show")

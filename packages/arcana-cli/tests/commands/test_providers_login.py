@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 import pytest
 from typer.testing import CliRunner
 
+import arcana_cli._oauth as oauth_mod
 import arcana_cli.commands.providers as providers_mod
 from arcana.models import ConnectionStore
 from arcana.types.auth import AuthType, OAuthConfig, OAuthToken
@@ -34,10 +35,10 @@ def _seed(path, **kw) -> ModelConnection:
 
 
 def _stub_sign_in(monkeypatch, token: OAuthToken, config: OAuthConfig):
-    async def _fake(cfg, *, device, console, client_factory=None):
+    async def _fake(r, cfg, *, device, client_factory=None):
         return token, config
 
-    monkeypatch.setattr(providers_mod, "sign_in", _fake)
+    monkeypatch.setattr(oauth_mod, "sign_in", _fake)
 
 
 def test_login_refreshes_token_for_existing_oauth_connection(store_path, monkeypatch):

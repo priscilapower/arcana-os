@@ -266,3 +266,12 @@ def test_default_gateway_registers_one_adapter_per_server(tmp_path: Path):
         assert not isinstance(adapters[0], MCPToolAdapter)
     finally:
         get_mcp_registry.cache_clear()
+
+
+def test_default_gateway_offers_the_registry_it_is_given():
+    reg = _mcp_registry(_connected_config())
+    gw = default_tool_gateway(registry=reg.without(()))
+    adapters = gw._adapters  # pyright: ignore[reportPrivateUsage]
+    assert [a for a in adapters if isinstance(a, MCPToolAdapter)]
+    empty = default_tool_gateway(registry=reg.without({"notion-mcp"}))
+    assert not [a for a in empty._adapters if isinstance(a, MCPToolAdapter)]  # pyright: ignore[reportPrivateUsage]

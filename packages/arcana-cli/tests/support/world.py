@@ -53,7 +53,7 @@ class World:
 
 def install_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> World:
     root = tmp_path / ".arcana"
-    (root / "agents").mkdir(parents=True)
+    (root / "agents").mkdir(parents=True, exist_ok=True)
     w = World(root)
     monkeypatch.setenv("HOME", str(tmp_path))
     for mod in (agent_mod, providers_mod, mcp_mod, memory_mod, tools_mod):

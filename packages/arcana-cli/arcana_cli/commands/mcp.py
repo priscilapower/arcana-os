@@ -4,15 +4,18 @@ Every command is a thin wrapper over :class:`MCPRegistry`: parse, call one core
 service, render. Secrets live only in the OS keyring — an ``mcps.json`` entry
 keeps a reference, never a token, and no command echoes one.
 
-``add`` and ``remove`` ask their questions (a bearer token, a removal
-confirmation) through the :class:`~arcana_cli.ui.renderer.Renderer` they are
-handed, so under ``--json`` a question fails closed naming the flag that
-answers it instead of blocking on stdin.
+``add``, ``approve``, ``remove`` and ``login`` are renderer-agnostic coroutines
+(``add_server``, ``approve_server``, ``remove_server``, ``login_server``): their
+output, their errors (as notes, off a ``--json`` stdout) and their questions (a
+bearer token, a removal confirmation, an OAuth sign-in's instructions) go
+through the :class:`~arcana_cli.ui.renderer.Renderer` they are handed, so under
+``--json`` a question fails closed naming the flag that answers it instead of
+blocking on stdin.
 """
 
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NoReturn
 
 import keyring
 import typer
@@ -23,7 +26,7 @@ from arcana.agents.registry import AgentRegistry
 from arcana.auth import load_token, save_token
 from arcana.tools.adapters.mcp import KEYRING_SERVICE
 from arcana.tools.registry import MCPRegistry
-from arcana.types.auth import AuthType, OAuthConfig
+from arcana.types.auth import AuthType, OAuthConfig, OAuthToken
 from arcana.types.tool import (
     MCPServerConfig,
     MCPServerStatus,
@@ -31,7 +34,7 @@ from arcana.types.tool import (
     ToolStatus,
 )
 from arcana_cli._async import run_async
-from arcana_cli._oauth import probe_oauth, sign_in
+from arcana_cli._oauth import probe_oauth, sign_in_or_exit
 from arcana_cli._render import EXIT_ERROR, EXIT_NOT_FOUND, emit_json, truncate
 from arcana_cli.constants import AGENTS_BASE, MCPS_PATH
 from arcana_cli.ui.renderer import Question, Renderer, confirm_or_cancel, renderer_for
@@ -54,13 +57,24 @@ def _load_registry() -> MCPRegistry:
     return reg
 
 
-def _resolve_server(reg: MCPRegistry, name: str) -> MCPServerConfig:
+def _fail(r: Renderer, *lines: str, code: int = EXIT_ERROR) -> NoReturn:
+    """Note an error (its first line) and any hints (the rest), then exit ``code``.
+
+    Notes, not output: under ``--json`` they go to stderr and stdout stays a
+    clean JSON stream.
+    """
+    first, *hints = lines
+    r.note(err(first))
+    for hint in hints:
+        r.note(dim(hint))
+    raise typer.Exit(code)
+
+
+def _resolve_server(r: Renderer, reg: MCPRegistry, name: str) -> MCPServerConfig:
     """Return the named server, or exit ``2`` (not found)."""
     server = reg.get_server(name)
     if server is None:
-        console.print(err(f"No MCP server named {name!r}."))
-        console.print(dim("  Run: arcana mcp list"))
-        raise typer.Exit(EXIT_NOT_FOUND)
+        _fail(r, f"No MCP server named {name!r}.", "  Run: arcana mcp list", code=EXIT_NOT_FOUND)
     return server
 
 
@@ -119,22 +133,22 @@ def _auth_display(server: MCPServerConfig) -> str:
     return "(none)"
 
 
-def _print_server(server: MCPServerConfig) -> None:
+def _print_server(r: Renderer, server: MCPServerConfig) -> None:
     """Human detail for one server. Only the keyring reference is shown — the
     token itself never leaves the keychain."""
     endpoint = server.server_url if server.transport in _URL_TRANSPORTS else _stdio_repr(server)
-    console.print(f"\n  {hl('Name:')}      {server.name}")
-    console.print(f"  {hl('Transport:')} {server.transport.value}")
-    console.print(f"  {hl('Endpoint:')}  {endpoint}")
-    console.print(f"  {hl('Status:')}    {_status_markup(server.status)}")
-    console.print(f"  {hl('Auth:')}      {_auth_display(server)}")
+    r.emit(f"\n  {hl('Name:')}      {server.name}")
+    r.emit(f"  {hl('Transport:')} {server.transport.value}")
+    r.emit(f"  {hl('Endpoint:')}  {endpoint}")
+    r.emit(f"  {hl('Status:')}    {_status_markup(server.status)}")
+    r.emit(f"  {hl('Auth:')}      {_auth_display(server)}")
     if server.description:
-        console.print(f"  {hl('About:')}     {server.description}")
-    console.print()
+        r.emit(f"  {hl('About:')}     {server.description}")
+    r.emit("")
     if server.discovered_tools:
-        console.print(_tools_table(server))
+        r.emit(_tools_table(server))
     else:
-        console.print(dim("  No tools discovered."))
+        r.emit(dim("  No tools discovered."))
 
 
 def _server_summary(server: MCPServerConfig) -> dict[str, Any]:
@@ -209,40 +223,33 @@ _RESERVED_NAMES = frozenset({"builtin"})
 _NAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
-def _validate_server_name(name: str) -> None:
+def _validate_server_name(r: Renderer, name: str) -> None:
     if name.lower() in _RESERVED_NAMES:
-        console.print(err(f"{name!r} is reserved. Choose another server name."))
-        raise typer.Exit(EXIT_ERROR)
+        _fail(r, f"{name!r} is reserved. Choose another server name.")
     if not _NAME_PATTERN.match(name):
-        console.print(err(f"Invalid server name {name!r}. Use letters, digits, '.', '_', or '-' (no '/' or spaces)."))
-        raise typer.Exit(EXIT_ERROR)
+        _fail(r, f"Invalid server name {name!r}. Use letters, digits, '.', '_', or '-' (no '/' or spaces).")
 
 
 # The transports a URL server may use (stdio is command-driven, never a URL).
 _URL_TRANSPORTS = frozenset({MCPTransport.SSE, MCPTransport.HTTP})
 
 
-def _infer_transport(url: str | None, command: str | None, transport: str | None) -> MCPTransport:
+def _infer_transport(r: Renderer, url: str | None, command: str | None, transport: str | None) -> MCPTransport:
     if url and command:
-        console.print(err("Pass either --url (HTTP/SSE) or --command (stdio), not both."))
-        raise typer.Exit(EXIT_ERROR)
+        _fail(r, "Pass either --url (HTTP/SSE) or --command (stdio), not both.")
     if not url and not command:
-        console.print(err("Provide --url for an HTTP/SSE server or --command for a stdio server."))
-        raise typer.Exit(EXIT_ERROR)
+        _fail(r, "Provide --url for an HTTP/SSE server or --command for a stdio server.")
     inferred = MCPTransport.SSE if url else MCPTransport.STDIO
     if transport is None:
         return inferred
     try:
         requested = MCPTransport(transport.lower())
-    except ValueError as exc:
-        console.print(err(f"Unknown transport {transport!r}. Use 'http', 'sse', or 'stdio'."))
-        raise typer.Exit(EXIT_ERROR) from exc
+    except ValueError:
+        _fail(r, f"Unknown transport {transport!r}. Use 'http', 'sse', or 'stdio'.")
     if url and requested not in _URL_TRANSPORTS:
-        console.print(err(f"--transport {requested.value} conflicts with --url (use 'http' or 'sse')."))
-        raise typer.Exit(EXIT_ERROR)
+        _fail(r, f"--transport {requested.value} conflicts with --url (use 'http' or 'sse').")
     if command and requested is not MCPTransport.STDIO:
-        console.print(err(f"--transport {requested.value} conflicts with --command (stdio)."))
-        raise typer.Exit(EXIT_ERROR)
+        _fail(r, f"--transport {requested.value} conflicts with --command (stdio).")
     return requested
 
 
@@ -262,16 +269,13 @@ async def _bearer_from_header(r: Renderer, headers: list[str]) -> str:
     no others. An empty value is asked as a secret question. The token is never echoed.
     """
     if len(headers) > 1:
-        console.print(err("Only a single 'Authorization' header is supported for SSE MCP auth."))
-        raise typer.Exit(EXIT_ERROR)
+        _fail(r, "Only a single 'Authorization' header is supported for SSE MCP auth.")
     raw = headers[0]
     if "=" not in raw:
-        console.print(err("Invalid --header. Expected 'Authorization=Bearer <token>'."))
-        raise typer.Exit(EXIT_ERROR)
+        _fail(r, "Invalid --header. Expected 'Authorization=Bearer <token>'.")
     key, value = raw.split("=", 1)
     if key.strip().lower() != "authorization":
-        console.print(err(f"Unsupported header {key.strip()!r}. SSE MCP auth accepts only 'Authorization'."))
-        raise typer.Exit(EXIT_ERROR)
+        _fail(r, f"Unsupported header {key.strip()!r}. SSE MCP auth accepts only 'Authorization'.")
     token = value.strip()
     if token.lower().startswith("bearer "):
         token = token[len("bearer ") :].strip()
@@ -280,8 +284,7 @@ async def _bearer_from_header(r: Renderer, headers: list[str]) -> str:
             await r.ask(Question("Bearer token", secret=True, validator=_token_problem, flag=AUTH_KEY_FLAG))
         ).strip()
     if not token:
-        console.print(err("No bearer token provided."))
-        raise typer.Exit(EXIT_ERROR)
+        _fail(r, "No bearer token provided.")
     return token
 
 
@@ -322,13 +325,11 @@ async def _resolve_add_auth(
 
     if transport is MCPTransport.STDIO:
         if static_requested or oauth_requested:
-            console.print(err("stdio servers authenticate via scoped env vars, not --header/--auth-key/--oauth."))
-            raise typer.Exit(EXIT_ERROR)
+            _fail(r, "stdio servers authenticate via scoped env vars, not --header/--auth-key/--oauth.")
         return _AddAuth(MCPTransport.STDIO, AuthType.API_KEY, None, None)
 
     if static_requested and oauth_requested:
-        console.print(err("Pass either a static bearer (--header/--auth-key) or OAuth (--oauth/--issuer), not both."))
-        raise typer.Exit(EXIT_ERROR)
+        _fail(r, "Pass either a static bearer (--header/--auth-key) or OAuth (--oauth/--issuer), not both.")
 
     if static_requested:
         return _AddAuth(transport, AuthType.API_KEY, None, await _store_auth(r, name, header, auth_key))
@@ -343,22 +344,13 @@ async def _resolve_add_auth(
         probed = await probe_oauth(url) if url else None
         if probed is None:
             if oauth:
-                console.print(err("--oauth was requested but the server does not advertise OAuth. Pass --issuer."))
-                raise typer.Exit(EXIT_ERROR)
+                _fail(r, "--oauth was requested but the server does not advertise OAuth. Pass --issuer.")
             return _AddAuth(transport, AuthType.API_KEY, None, None)  # keyless
         config = probed.model_copy(update={"scopes": scope}) if scope else probed
 
     ref = _auth_ref(name)
-    try:
-        token, resolved = await sign_in(config, device=device, console=console)
-    except Exception as exc:
-        console.print(err(f"OAuth sign-in failed: {exc}"))
-        raise typer.Exit(EXIT_ERROR) from exc
-    try:
-        save_token(ref, token)
-    except Exception as exc:
-        console.print(err(f"Could not write the OAuth token to the OS keyring: {exc}"))
-        raise typer.Exit(EXIT_ERROR) from exc
+    token, resolved = await sign_in_or_exit(r, config, device=device, code=EXIT_ERROR)
+    _save_oauth_token(r, ref, token)
     # OAuth-authenticated MCP servers ride streamable-HTTP; default to it unless
     # the user explicitly pinned a transport.
     oauth_transport = transport if explicit_transport else MCPTransport.HTTP
@@ -368,8 +360,7 @@ async def _resolve_add_auth(
 async def _store_auth(r: Renderer, name: str, headers: list[str], auth_key: str | None) -> str | None:
     """Resolve the server's ``auth_key_ref``, writing any inline token to keyring."""
     if auth_key and headers:
-        console.print(err("Pass either --auth-key or --header, not both."))
-        raise typer.Exit(EXIT_ERROR)
+        _fail(r, "Pass either --auth-key or --header, not both.")
     if auth_key:
         return auth_key
     if not headers:
@@ -381,9 +372,17 @@ async def _store_auth(r: Renderer, name: str, headers: list[str], auth_key: str 
     except Exception as exc:
         # No OS keyring backend (headless / CI / container). Fail cleanly before
         # anything is persisted — mcps.json is untouched at this point.
-        console.print(err(f"Could not write the auth token to the OS keyring: {exc}"))
+        r.note(err(f"Could not write the auth token to the OS keyring: {exc}"))
         raise typer.Exit(EXIT_ERROR) from exc
     return ref
+
+
+def _save_oauth_token(r: Renderer, ref: str, token: OAuthToken) -> None:
+    try:
+        save_token(ref, token)
+    except Exception as exc:
+        r.note(err(f"Could not write the OAuth token to the OS keyring: {exc}"))
+        raise typer.Exit(EXIT_ERROR) from exc
 
 
 @app.command("add")
@@ -457,15 +456,22 @@ async def add_server(
     description: str,
     json_: bool,
 ) -> None:
-    """Register, authenticate and discover one server; asks for a bearer token only when ``--header`` left it blank."""
-    _validate_server_name(name)
-    resolved_transport = _infer_transport(url, command, transport)
+    """Register, authenticate and discover one server; asks for a bearer token only when ``--header`` left it blank.
+
+    Nothing is left behind by a run that doesn't finish: a credential this
+    command put in the keyring is taken out again if discovery is cancelled
+    before the server is registered.
+    """
+    _validate_server_name(r, name)
+    resolved_transport = _infer_transport(r, url, command, transport)
     reg = _load_registry()
     if reg.get_server(name) is not None:
-        console.print(err(f"An MCP server named {name!r} already exists."))
-        console.print(dim(f"  Re-discover with: arcana mcp refresh {name}"))
-        console.print(dim(f"  Or replace it:    arcana mcp remove {name}"))
-        raise typer.Exit(EXIT_ERROR)
+        _fail(
+            r,
+            f"An MCP server named {name!r} already exists.",
+            f"  Re-discover with: arcana mcp refresh {name}",
+            f"  Or replace it:    arcana mcp remove {name}",
+        )
 
     auth = await _resolve_add_auth(
         r,
@@ -491,17 +497,23 @@ async def add_server(
         oauth_config=auth.oauth_config,
         auth_key_ref=auth.auth_key_ref,
     )
-    server = await reg.discover(cfg)
+    try:
+        server = await reg.discover(cfg)
+    except BaseException:
+        # Discovery never raises on its own (an unreachable server is registered
+        # as such), so this is a cancellation: don't strand the credential.
+        _delete_owned_credential(cfg)
+        raise
 
     if json_:
-        emit_json(_server_detail(server))
+        r.emit(_server_detail(server))
     else:
-        console.print(ok(f"Connected '{name}' — {len(server.discovered_tools)} tool(s) discovered."))
-        _print_server(server)
+        r.emit(ok(f"Connected '{name}' — {len(server.discovered_tools)} tool(s) discovered."))
+        _print_server(r, server)
 
     if server.status is MCPServerStatus.UNREACHABLE:
-        console.print(warn(f"Server '{name}' was registered but could not be reached."))
-        console.print(dim(f"  Retry with: arcana mcp refresh {name}"))
+        r.note(warn(f"Server '{name}' was registered but could not be reached."))
+        r.note(dim(f"  Retry with: arcana mcp refresh {name}"))
         raise typer.Exit(EXIT_ERROR)
 
 
@@ -537,12 +549,12 @@ def show_cmd(
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Show a server's detail and discovered tools. Secrets are never printed."""
-    reg = _load_registry()
-    server = _resolve_server(reg, name)
+    r = renderer_for(json_)
+    server = _resolve_server(r, _load_registry(), name)
     if json_:
         emit_json(_server_detail(server))
         return
-    _print_server(server)
+    _print_server(r, server)
 
 
 @app.command("refresh")
@@ -551,8 +563,9 @@ def refresh_cmd(
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Re-discover a server's tools and re-run the changed-tool diff."""
+    r = renderer_for(json_)
     reg = _load_registry()
-    server = _resolve_server(reg, name)
+    server = _resolve_server(r, reg, name)
     before = {t.name: t.status for t in server.discovered_tools}
     refreshed = run_async(reg.discover(server))
     newly_changed = [
@@ -564,7 +577,7 @@ def refresh_cmd(
     if json_:
         emit_json({**_server_detail(refreshed), "newly_changed": newly_changed})
     else:
-        _print_server(refreshed)
+        _print_server(r, refreshed)
         changed_total = sum(1 for t in refreshed.discovered_tools if t.status is ToolStatus.CHANGED)
         if changed_total:
             console.print(warn(f"\n  {changed_total} tool(s) changed and are withheld until approved."))
@@ -587,42 +600,40 @@ def login_cmd(
     refreshed — it reuses the server's stored issuer/client, refreshes the keyring
     token, and re-discovers tools. No need to re-`add` the server.
     """
+    run_async(login_server(renderer_for(json_), name, device=device, json_=json_))
+
+
+async def login_server(r: Renderer, name: str, *, device: bool, json_: bool) -> None:
+    """Sign an OAuth server in again, store the new token and re-discover its tools."""
     reg = _load_registry()
-    server = _resolve_server(reg, name)
+    server = _resolve_server(r, reg, name)
     if server.auth_type is not AuthType.OAUTH:
-        console.print(err(f"Server '{name}' does not use OAuth — nothing to sign in to."))
-        raise typer.Exit(EXIT_ERROR)
+        _fail(r, f"Server '{name}' does not use OAuth — nothing to sign in to.")
     if server.oauth_config is None:
-        console.print(err(f"Server '{name}' has no OAuth config to sign in with."))
-        console.print(dim(f"  Recreate it with: arcana mcp add --name {name} --url <url> --oauth --issuer <url>"))
-        raise typer.Exit(EXIT_ERROR)
+        _fail(
+            r,
+            f"Server '{name}' has no OAuth config to sign in with.",
+            f"  Recreate it with: arcana mcp add --name {name} --url <url> --oauth --issuer <url>",
+        )
 
     ref = server.auth_key_ref or _auth_ref(name)
-    try:
-        token, resolved = run_async(sign_in(server.oauth_config, device=device, console=console))
-    except Exception as exc:
-        console.print(err(f"OAuth sign-in failed: {exc}"))
-        raise typer.Exit(EXIT_ERROR) from exc
-    try:
-        save_token(ref, token)
-    except Exception as exc:
-        console.print(err(f"Could not write the OAuth token to the OS keyring: {exc}"))
-        raise typer.Exit(EXIT_ERROR) from exc
+    token, resolved = await sign_in_or_exit(r, server.oauth_config, device=device, code=EXIT_ERROR)
+    _save_oauth_token(r, ref, token)
 
     # Persist the (possibly newly-registered) client + ref, then re-discover now
     # that a live token is held.
     server.oauth_config = resolved
     server.auth_key_ref = ref
-    refreshed = run_async(reg.discover(server))
+    refreshed = await reg.discover(server)
 
     if json_:
-        emit_json(_server_detail(refreshed))
+        r.emit(_server_detail(refreshed))
     else:
-        console.print(ok(f"Signed in to '{name}' — {len(refreshed.discovered_tools)} tool(s) discovered."))
-        _print_server(refreshed)
+        r.emit(ok(f"Signed in to '{name}' — {len(refreshed.discovered_tools)} tool(s) discovered."))
+        _print_server(r, refreshed)
 
     if refreshed.status is MCPServerStatus.UNREACHABLE:
-        console.print(warn(f"Server '{name}' was authenticated but could not be reached."))
+        r.note(warn(f"Server '{name}' was authenticated but could not be reached."))
         raise typer.Exit(EXIT_ERROR)
 
 
@@ -636,46 +647,48 @@ def approve_cmd(
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Re-approve changed tools, admitting their new metadata (the trust gate)."""
+    run_async(approve_server(renderer_for(json_), name, tool=list(tool or []), all_=all_, json_=json_))
+
+
+async def approve_server(r: Renderer, name: str, *, tool: list[str], all_: bool, json_: bool) -> None:
+    """Approve the named changed tools (or every one with ``all_``), making them resolvable again."""
     reg = _load_registry()
-    server = _resolve_server(reg, name)
+    server = _resolve_server(r, reg, name)
 
     if all_ and tool:
-        console.print(err("Pass either --tool or --all, not both."))
-        raise typer.Exit(EXIT_ERROR)
+        _fail(r, "Pass either --tool or --all, not both.")
     if not all_ and not tool:
-        console.print(err("Specify --tool <name> (repeatable) or --all."))
-        raise typer.Exit(EXIT_ERROR)
+        _fail(r, "Specify --tool <name> (repeatable) or --all.")
 
     targets: list[str] | None
     if all_:
         targets = None
     else:
         targets = []
-        for qn in tool or []:
+        for qn in tool:
             local = qn.split("/", 1)[1] if "/" in qn else qn
             td = server.get_tool(local)
             if td is None:
-                console.print(err(f"No tool {local!r} on server {name!r}."))
-                raise typer.Exit(EXIT_NOT_FOUND)
+                _fail(r, f"No tool {local!r} on server {name!r}.", code=EXIT_NOT_FOUND)
             if td.status is not ToolStatus.CHANGED:
-                console.print(dim(f"  '{local}' is already active — skipping."))
+                r.note(dim(f"  '{local}' is already active — skipping."))
                 continue
             targets.append(local)
         if not targets:
-            console.print(dim(f"Nothing to approve on '{name}'."))
+            r.note(dim(f"Nothing to approve on '{name}'."))
             raise typer.Exit()
 
     approved = reg.approve(name, targets)
-    refreshed = _resolve_server(reg, name)
+    refreshed = _resolve_server(r, reg, name)
 
     if json_:
-        emit_json({"approved": approved, "status": refreshed.status.value})
+        r.emit({"approved": approved, "status": refreshed.status.value})
         return
     if not approved:
-        console.print(dim(f"Nothing to approve on '{name}' — no changed tools matched."))
+        r.emit(dim(f"Nothing to approve on '{name}' — no changed tools matched."))
         return
-    console.print(ok(f"Approved {len(approved)} tool(s) on '{name}': {', '.join(approved)}"))
-    console.print(f"  {hl('Status:')} {_status_markup(refreshed.status)}")
+    r.emit(ok(f"Approved {len(approved)} tool(s) on '{name}': {', '.join(approved)}"))
+    r.emit(f"  {hl('Status:')} {_status_markup(refreshed.status)}")
 
 
 @app.command("remove")
@@ -696,30 +709,30 @@ def remove_cmd(
 async def remove_server(r: Renderer, name: str, *, yes: bool, force: bool, json_: bool) -> None:
     """Remove one server once confirmed (or with ``yes``); refuses while agents subscribe to it unless ``force``."""
     reg = _load_registry()
-    server = _resolve_server(reg, name)
+    server = _resolve_server(r, reg, name)
     dependents = _dependent_agents(name)
 
     if dependents and not force:
         if json_:
             # A list (not a dict) so two agents sharing a name both survive.
-            emit_json({"aborted": "dependents", "dependents": [{"agent": n, "tools": subs} for n, subs in dependents]})
+            r.emit({"aborted": "dependents", "dependents": [{"agent": n, "tools": subs} for n, subs in dependents]})
         else:
-            console.print(warn(f"Agents subscribe to tools from '{name}':"))
+            r.emit(warn(f"Agents subscribe to tools from '{name}':"))
             for agent_name, subs in dependents:
-                console.print(f"  {hl(agent_name)}  [{TXT3}]{', '.join(subs)}[/]")
-            console.print(dim("\nRe-run with --force to remove anyway."))
+                r.emit(f"  {hl(agent_name)}  [{TXT3}]{', '.join(subs)}[/]")
+            r.emit(dim("\nRe-run with --force to remove anyway."))
         raise typer.Exit(EXIT_ERROR)
 
     if not yes:
         await confirm_or_cancel(r, f"Remove MCP server '{name}'?")
 
     if dependents and not json_:
-        console.print(warn(f"{len(dependents)} agent(s) will lose these tools until re-subscribed elsewhere."))
+        r.emit(warn(f"{len(dependents)} agent(s) will lose these tools until re-subscribed elsewhere."))
 
     reg.remove_server(name)
     _delete_owned_credential(server)
 
     if json_:
-        emit_json({"removed": name})
+        r.emit({"removed": name})
         return
-    console.print(ok(f"MCP server '{name}' removed."))
+    r.emit(ok(f"MCP server '{name}' removed."))

@@ -8,8 +8,6 @@ runtime build stubbed out.
 
 import asyncio
 import io
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
@@ -25,7 +23,6 @@ from arcana.types.card import Card
 from arcana.types.session import MessageRole, SessionStatus
 from arcana_cli._render import EXIT_ERROR
 from arcana_cli.commands.chat.app import ChatApp, run_chat
-from arcana_cli.commands.chat.controller import _ChatController
 from arcana_cli.tui.card_picker import CardPickerScreen
 from arcana_cli.tui.history import AgentHistory
 from arcana_cli.tui.screens import ConfirmScreen
@@ -39,7 +36,8 @@ from tests.support.chat import (
     patch_build,
     use_arcana_home,
 )
-from tests.support.tui import TuiHarness, arcana_pilot, run_inline_headless, wait_for_screen
+from tests.support.chat_app import ChatSession, chat_session
+from tests.support.tui import arcana_pilot, run_inline_headless, wait_for_screen
 
 
 @pytest.fixture()
@@ -50,52 +48,6 @@ def arcana_home(tmp_path, monkeypatch):
 @pytest.fixture()
 def agent_fixture(arcana_home):
     return create_agent(arcana_home)
-
-
-class _Session:
-    """A running chat app, its controller, and helpers to drive it."""
-
-    def __init__(self, h: TuiHarness, controller: _ChatController) -> None:
-        self.h = h
-        self.app = h.app
-        self.pilot = h.pilot
-        self.c = controller
-
-    async def send(self, text: str) -> None:
-        """Type ``text`` and press Enter (the turn starts; it may still be running)."""
-        await self.pilot.press(*text, "enter")
-
-    async def settle(self) -> None:
-        """Let the running turn finish."""
-        for _ in range(100):
-            await self.pilot.pause()
-            if not self.c.busy:
-                return
-        raise AssertionError("the turn never finished")
-
-    async def until(self, check: Any, what: str) -> None:
-        for _ in range(100):
-            await self.pilot.pause(0.01)
-            if check():
-                return
-        raise AssertionError(f"never happened: {what}")
-
-    def retained(self) -> str:
-        return self.h.retained_text()
-
-    def live_text(self) -> str:
-        """The live block as drawn on screen right now."""
-        live = self.app.live
-        return "\n".join(live.render_line(y).text for y in range(live.size.height))
-
-
-@asynccontextmanager
-async def chat_session(home, record, runtime) -> AsyncIterator[_Session]:
-    app = ChatApp()
-    controller = make_controller(home, record, runtime, renderer=TextualRenderer(app))
-    app.controller = controller
-    async with arcana_pilot(app=app) as h:
-        yield _Session(h, controller)
 
 
 # ── a turn on screen ──────────────────────────────────────────────────────
@@ -278,7 +230,7 @@ async def test_a_turn_can_await_a_dialog_and_ctrl_c_takes_it_down(agent_fixture,
         await h.pilot.press(*"go", "enter")
         await wait_for_screen(h.pilot, ConfirmScreen)
         await h.pilot.press("ctrl+c")
-        s = _Session(h, controller)
+        s = ChatSession(h, controller)
         await s.settle()
         assert not isinstance(app.screen, ConfirmScreen)
         assert answers == []
@@ -301,7 +253,7 @@ async def test_a_turn_dialog_answer_reaches_the_turn(agent_fixture, arcana_home)
         await h.pilot.press(*"go", "enter")
         await wait_for_screen(h.pilot, ConfirmScreen)
         await h.pilot.press("y")
-        s = _Session(h, controller)
+        s = ChatSession(h, controller)
         await s.settle()
         assert "allowed" in s.retained()
 
