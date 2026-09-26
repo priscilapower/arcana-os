@@ -7,6 +7,7 @@ scenario needs in place.
 """
 
 import asyncio
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import UUID
@@ -14,10 +15,14 @@ from uuid import UUID
 import pytest
 
 import arcana_cli.commands.agent as agent_mod
+import arcana_cli.commands.chat.command as chat_command_mod
 import arcana_cli.commands.mcp as mcp_mod
 import arcana_cli.commands.memory as memory_mod
 import arcana_cli.commands.providers as providers_mod
+import arcana_cli.commands.run as run_mod
+import arcana_cli.commands.soul as soul_mod
 import arcana_cli.commands.tools as tools_mod
+import arcana_cli.commands.world as world_mod
 from arcana.agents.registry import AgentRegistry
 from arcana.memory import build_federation, paths
 from arcana.models import ConnectionStore
@@ -25,7 +30,7 @@ from arcana.tools.registry import MCPRegistry
 from arcana.types import MemoryEntry, MemoryType
 from arcana.types.card import Card
 from arcana.types.model import ModelConnection, ModelProvider
-from arcana.types.tool import MCPServerConfig, MCPServerStatus, ToolDefinition, ToolType
+from arcana.types.tool import MCPServerConfig, MCPServerStatus, ToolDefinition, ToolStatus, ToolType
 
 #: The id of the one memory :func:`seed_memory` writes.
 MEMORY_ID = UUID("11111111-2222-3333-4444-555555555555")
@@ -56,10 +61,14 @@ def install_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> World:
     (root / "agents").mkdir(parents=True, exist_ok=True)
     w = World(root)
     monkeypatch.setenv("HOME", str(tmp_path))
-    for mod in (agent_mod, providers_mod, mcp_mod, memory_mod, tools_mod):
+    for mod in (agent_mod, providers_mod, mcp_mod, memory_mod, tools_mod, world_mod):
         monkeypatch.setattr(mod, "AGENTS_BASE", w.agents)
+    for mod in (run_mod, soul_mod, chat_command_mod, world_mod):
+        monkeypatch.setattr(mod, "ARCANA_HOME", root)
+    monkeypatch.setattr(soul_mod, "_SOUL_PATH", root / "soul.md")
     monkeypatch.setattr(agent_mod, "CONNECTIONS_PATH", w.models)
     monkeypatch.setattr(providers_mod, "CONNECTIONS_PATH", w.models)
+    monkeypatch.setattr(tools_mod, "CONNECTIONS_PATH", w.models)
     monkeypatch.setattr(mcp_mod, "MCPS_PATH", w.mcps)
     monkeypatch.setattr(tools_mod, "MCPS_PATH", w.mcps)
     monkeypatch.setattr(memory_mod, "ARCANA_HOME", root)
@@ -145,3 +154,49 @@ def seed_memory(w: World) -> None:
             await fed.aclose()
 
     asyncio.run(write())
+
+
+def seed_twins(w: World) -> None:
+    """Two agents that share the name ``scout``."""
+    reg = AgentRegistry(w.agents)
+    reg.create(name="scout", card=Card.HERMIT, model="ollama/hermes-3")
+    reg.create(name="scout", card=Card.FOOL, model="ollama/hermes-3")
+
+
+def seed_unset_model(w: World) -> None:
+    AgentRegistry(w.agents).create(name="drifter", card=Card.FOOL, model="")
+
+
+def seed_server_with_tools(w: World) -> None:
+    """``notion-mcp`` with one active and one changed tool."""
+    reg = MCPRegistry(connections_file=w.mcps)
+    reg.load()
+    tools = [
+        ToolDefinition(
+            name=name,
+            description=f"{name.replace('_', ' ').capitalize()} in the workspace",
+            input_schema={"type": "object", "properties": {}},
+            type=ToolType.MCP,
+            mcp_server_name="notion-mcp",
+            status=status,
+        )
+        for name, status in (("search_pages", ToolStatus.ACTIVE), ("create_page", ToolStatus.CHANGED))
+    ]
+    reg.register_server(
+        MCPServerConfig(
+            name="notion-mcp",
+            server_url="https://a/sse",
+            status=MCPServerStatus.CHANGED,
+            description="Notion workspace",
+            discovered_tools=tools,
+        )
+    )
+
+
+def seed_soul(w: World) -> None:
+    (w.root / "soul.md").write_text("# Pri\n\n## About me\nBuilds Arcana.\n", encoding="utf-8")
+
+
+def no_home(w: World) -> None:
+    """Take the temp ``~/.arcana`` away, so ``init`` has something to do and ``status``/``soul`` have nothing."""
+    shutil.rmtree(w.root)

@@ -1,0 +1,2 @@
+exit=0
+No knowledge connectors. Connect one: arcana memory connect obsidian --vault <path>

@@ -1,21 +1,23 @@
 """arcana providers — full CRUD for model provider connections.
 
-``add``, ``edit``, ``remove`` and ``login`` are renderer-agnostic coroutines
-(``add_provider``, ``edit_provider``, ``remove_provider``, ``login_provider``):
-every question (and an OAuth sign-in's instructions) goes
-through the :class:`~arcana_cli.ui.renderer.Renderer` they are handed and names
-the option that answers it without a prompt. An API key is asked as a secret
-question, so it reaches the keyring and nothing else — no output, no log, no
-transcript.
+Every command body is a renderer-agnostic coroutine (``list_providers``,
+``show_provider``, ``add_provider``, ``edit_provider``, ``remove_provider``,
+``login_provider``): its result is a :class:`~arcana_cli.ui.renderer.Presentable`
+(a Rich view and the ``--json`` document of the same data), its errors go
+through :func:`~arcana_cli.ui.renderer.fail`, and every question (and an OAuth
+sign-in's instructions) goes through the :class:`~arcana_cli.ui.renderer.Renderer`
+it is handed and names the option that answers it without a prompt. An API key
+is asked as a secret question, so it reaches the keyring and nothing else — no
+output, no log, no transcript; neither view ever shows one.
 """
 
 import json
 import os
 import uuid
 from pathlib import Path
+from typing import Any
 
 import typer
-from rich.console import Console
 from rich.markup import escape
 
 from arcana.agents.registry import AgentRegistry
@@ -25,11 +27,19 @@ from arcana.types.model import ModelConnection, ModelProvider
 from arcana_cli._async import run_async
 from arcana_cli._oauth import sign_in_or_exit
 from arcana_cli.constants import AGENTS_BASE, CONNECTIONS_PATH
-from arcana_cli.ui.renderer import Question, Renderer, confirm_or_cancel, renderer_for, required
-from arcana_cli.ui.theme import GREEN, ORANGE, TXT3, dim, err, hl, make_table, ok, warn
+from arcana_cli.ui.renderer import (
+    Question,
+    Renderer,
+    View,
+    confirm_or_cancel,
+    fail,
+    lines,
+    renderer_for,
+    required,
+)
+from arcana_cli.ui.theme import GREEN, ORANGE, TXT3, dim, hl, make_table, ok, warn
 
 app = typer.Typer(help="Manage model provider connections (list / add / show / edit / remove).")
-console = Console()
 
 _PROVIDERS = ["ollama", "anthropic", "openai", "openai_compat", "custom"]
 _DEFAULT_ENDPOINTS: dict[str, str] = {
@@ -58,9 +68,7 @@ def _resolve(r: Renderer, name: str) -> tuple[ConnectionStore, ModelConnection]:
     if conn is None:
         conn = store.get_by_provider(name.lower())
     if conn is None:
-        r.emit(err(f"No connection found for {name!r}."))
-        r.emit(dim("  Run: arcana providers list"))
-        raise typer.Exit(1)
+        fail(r, f"No connection found for {name!r}.", dim("  Run: arcana providers list"))
     return store, conn
 
 
@@ -89,8 +97,7 @@ async def _read_new_key(
     if not rotate_key and api_key_env is None:
         return None
     if provider_str not in _CREDENTIAL_PROVIDERS:
-        r.emit(err(f"Provider '{provider_str}' does not use a credential."))
-        raise typer.Exit(1)
+        fail(r, f"Provider '{provider_str}' does not use a credential.")
     if api_key_env is not None:
         return _key_from_env(r, api_key_env)
     return await _ask_new_key(r)
@@ -103,16 +110,14 @@ async def _ask_new_key(r: Renderer) -> str:
 def _key_from_env(r: Renderer, var: str) -> str:
     key = os.environ.get(var)
     if not key:
-        r.emit(err(f"Environment variable {var!r} is not set or empty."))
-        raise typer.Exit(1)
+        fail(r, f"Environment variable {var!r} is not set or empty.")
     return key
 
 
-async def _run_health_check(r: Renderer, conn: ModelConnection, store: ConnectionStore) -> None:
-    """Probe the connection and show healthy / down. Never raises."""
+async def _run_health_check(r: Renderer, conn: ModelConnection, store: ConnectionStore) -> tuple[str | None, str]:
+    """Probe the connection; returns its health (``None`` when unchecked) and the line showing it. Never raises."""
     if not conn.default_model:
-        r.emit(dim("  Skipping health check — no default model configured."))
-        return
+        return None, dim("  Skipping health check — no default model configured.")
 
     model_str = f"{conn.provider}/{conn.default_model}"
     checking = dim(f"  Checking {model_str} ...")
@@ -124,9 +129,8 @@ async def _run_health_check(r: Renderer, conn: ModelConnection, store: Connectio
         status = "down"
 
     if status == "healthy":
-        r.emit(f"{checking} [{GREEN}]healthy ✓[/]")
-    else:
-        r.emit(f"{checking} [{ORANGE}]{status} (warning — config saved)[/]")
+        return status, f"{checking} [{GREEN}]healthy ✓[/]"
+    return status, f"{checking} [{ORANGE}]{status} (warning — config saved)[/]"
 
 
 def _removal_consequence(provider: str) -> str:
@@ -154,7 +158,7 @@ def _warn_default_model(r: Renderer, provider: str) -> None:
         cfg = json.loads(config_path.read_text())
         default_model: str = cfg.get("default_model", "")
         if default_model.startswith(f"{provider}/"):
-            r.emit(
+            r.note(
                 warn(
                     f"config.default_model is '{default_model}', which references the removed "
                     f"provider. Run: arcana config set default_model <new-model>"
@@ -179,12 +183,30 @@ def _agent_targets_connection(model: str, provider_str: str, conn_name: str) -> 
 # ---------------------------------------------------------------------------
 
 
+def _connection_summary(conn: ModelConnection) -> dict[str, Any]:
+    """The ``--json`` shape of one connection in a list. No secret, and no keyring reference either."""
+    return {
+        "id": str(conn.id),
+        "name": conn.name,
+        "provider": str(conn.provider),
+        "default_model": conn.default_model,
+        "endpoint": conn.endpoint or None,
+        "auth_type": conn.auth_type.value,
+    }
+
+
 @app.command("list")
-def list_cmd() -> None:
+def list_cmd(json_: bool = typer.Option(False, "--json", help="Emit JSON")) -> None:
     """List all saved model provider connections."""
+    run_async(list_providers(renderer_for(json_)))
+
+
+async def list_providers(r: Renderer) -> None:
+    """Every saved connection: a table, or an array of connection summaries."""
     connections = ConnectionStore(CONNECTIONS_PATH).all()
+    summaries = [_connection_summary(c) for c in connections]
     if not connections:
-        console.print(dim("No connections yet. Run: arcana providers add"))
+        r.emit(View(dim("No connections yet. Run: arcana providers add"), summaries))
         return
     table = make_table("Model Connections")
     table.add_column("Name", style="bold")
@@ -193,7 +215,7 @@ def list_cmd() -> None:
     table.add_column("Endpoint", style=TXT3)
     for c in connections:
         table.add_row(c.name, str(c.provider), c.default_model or "(none)", c.endpoint or "(default)")
-    console.print(table)
+    r.emit(View(table, summaries))
 
 
 @app.command("add")
@@ -217,6 +239,7 @@ def add_cmd(
     yes: bool = typer.Option(
         False, "--yes", "-y", help="Overwrite an existing connection of the same name without asking"
     ),
+    json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Add or update a model provider connection.
 
@@ -226,7 +249,7 @@ def add_cmd(
     """
     run_async(
         add_provider(
-            renderer_for(json=False),
+            renderer_for(json_),
             provider=provider,
             model_id=model_id,
             name=name,
@@ -259,24 +282,20 @@ async def add_provider(
 ) -> None:
     """Add a connection, asking for whatever the flags left out; confirms before overwriting one (unless ``yes``)."""
     if provider is None:
-        r.emit(dim(f"Providers: {' '.join(_PROVIDERS)}"))
+        r.note(dim(f"Providers: {' '.join(_PROVIDERS)}"))
         provider = await r.ask(Question("Provider", validator=_provider_problem, flag="--provider"))
 
     provider = _normalise_provider(provider)
     if provider not in _PROVIDERS:
-        r.emit(err(f"Unknown provider: {provider!r}. Choose from: {', '.join(_PROVIDERS)}"))
-        raise typer.Exit(1)
+        fail(r, f"Unknown provider: {provider!r}. Choose from: {', '.join(_PROVIDERS)}")
 
     use_oauth = oauth or issuer is not None
     if use_oauth and (api_key is not None or api_key_env is not None):
-        r.emit(err("Pass either OAuth (--oauth/--issuer) or an API key (--api-key/--api-key-env), not both."))
-        raise typer.Exit(1)
+        fail(r, "Pass either OAuth (--oauth/--issuer) or an API key (--api-key/--api-key-env), not both.")
     if use_oauth and provider not in _CREDENTIAL_PROVIDERS:
-        r.emit(err(f"Provider '{provider}' is keyless — OAuth does not apply."))
-        raise typer.Exit(1)
+        fail(r, f"Provider '{provider}' is keyless — OAuth does not apply.")
     if use_oauth and not issuer:
-        r.emit(err("OAuth requires --issuer <metadata-url> for a model provider."))
-        raise typer.Exit(1)
+        fail(r, "OAuth requires --issuer <metadata-url> for a model provider.")
 
     if model_id is None:
         model_id = await r.ask(
@@ -356,7 +375,12 @@ async def add_provider(
         f"  {hl('Model:')}    {model_id}\n"
         f"  {hl('Endpoint:')} {endpoint or '(provider default)'}\n" + cred_note
     )
-    r.emit("\n" + ok(f"{action} connection '{name}'") + details)
+    r.emit(
+        View(
+            "\n" + ok(f"{action} connection '{name}'") + details,
+            {**_connection_summary(conn), "action": action.lower()},
+        )
+    )
 
 
 async def _read_added_key(r: Renderer, api_key: str | None, api_key_env: str | None, provider: str) -> str | None:
@@ -372,6 +396,7 @@ async def _read_added_key(r: Renderer, api_key: str | None, api_key_env: str | N
 def login_cmd(
     name: str = typer.Argument(..., help="Connection name (see: arcana providers list)"),
     device: bool = typer.Option(False, "--device", help="Use the device-code grant (headless / no browser)"),
+    json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Re-run OAuth sign-in for an existing connection.
 
@@ -379,48 +404,74 @@ def login_cmd(
     refreshed — it reuses the connection's stored issuer/client and just refreshes
     the keyring token in place. No need to re-`add` the connection.
     """
-    run_async(login_provider(renderer_for(json=False), name, device=device))
+    run_async(login_provider(renderer_for(json_), name, device=device))
 
 
 async def login_provider(r: Renderer, name: str, *, device: bool) -> None:
     """Sign an OAuth connection in again, replacing its keyring token; nothing changes if the sign-in fails."""
     store, conn = _resolve(r, name)
     if conn.auth_type is not AuthType.OAUTH:
-        r.emit(err(f"Connection '{conn.name}' uses an API key, not OAuth."))
-        r.emit(dim(f"  Rotate its key with: arcana providers edit {conn.name} --rotate-key"))
-        raise typer.Exit(1)
+        fail(
+            r,
+            f"Connection '{conn.name}' uses an API key, not OAuth.",
+            dim(f"  Rotate its key with: arcana providers edit {conn.name} --rotate-key"),
+        )
     if conn.oauth_config is None:
-        r.emit(err(f"Connection '{conn.name}' has no OAuth config to sign in with."))
-        r.emit(dim("  Recreate it with: arcana providers add ... --oauth --issuer <url>"))
-        raise typer.Exit(1)
+        fail(
+            r,
+            f"Connection '{conn.name}' has no OAuth config to sign in with.",
+            dim("  Recreate it with: arcana providers add ... --oauth --issuer <url>"),
+        )
 
     ref = conn.credential_ref or f"{conn.id}_oauth_token"
     token, resolved = await sign_in_or_exit(r, conn.oauth_config, device=device, code=1)
     store.store_token(ref, token)
-    store.upsert(conn.model_copy(update={"oauth_config": resolved, "credential_ref": ref}))
-    r.emit(ok(f"Signed in to '{conn.name}' — token refreshed in the OS keyring."))
+    updated = conn.model_copy(update={"oauth_config": resolved, "credential_ref": ref})
+    store.upsert(updated)
+    r.emit(
+        View(
+            ok(f"Signed in to '{conn.name}' — token refreshed in the OS keyring."),
+            {**_connection_summary(updated), "signed_in": True},
+        )
+    )
 
 
 @app.command("show")
 def show_cmd(
     name: str = typer.Argument(..., help="Connection name (see: arcana providers list)"),
+    json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Show a connection's details. Secrets are never printed."""
-    store, conn = _resolve(renderer_for(json=False), name)
+    run_async(show_provider(renderer_for(json_), name))
+
+
+async def show_provider(r: Renderer, name: str) -> None:
+    """One connection's details; the credential is the same redacted summary in both views."""
+    store, conn = _resolve(r, name)
 
     headers_display = ", ".join(f"{k}: {v}" for k, v in conn.headers.items()) if conn.headers else "(none)"
     cred_display = _credential_display(store, conn)
 
-    console.print(f"\n  {hl('Name:')}          {conn.name}")
-    console.print(f"  {hl('Provider:')}      {conn.provider}")
-    console.print(f"  {hl('Default Model:')} {conn.default_model or '(none)'}")
-    console.print(f"  {hl('Endpoint:')}      {conn.endpoint or '(provider default)'}")
-    console.print(f"  {hl('Headers:')}       {headers_display}")
-    console.print(f"  {hl('Auth type:')}     {conn.auth_type.value}")
-    console.print(f"  {hl('Credential:')}    {cred_display}")
-    console.print(f"  {hl('Created:')}       {conn.created_at.isoformat()}")
-    console.print(f"  {hl('Updated:')}       {conn.updated_at.isoformat()}")
-    console.print()
+    human = lines(
+        f"\n  {hl('Name:')}          {conn.name}",
+        f"  {hl('Provider:')}      {conn.provider}",
+        f"  {hl('Default Model:')} {conn.default_model or '(none)'}",
+        f"  {hl('Endpoint:')}      {conn.endpoint or '(provider default)'}",
+        f"  {hl('Headers:')}       {headers_display}",
+        f"  {hl('Auth type:')}     {conn.auth_type.value}",
+        f"  {hl('Credential:')}    {cred_display}",
+        f"  {hl('Created:')}       {conn.created_at.isoformat()}",
+        f"  {hl('Updated:')}       {conn.updated_at.isoformat()}",
+        "",
+    )
+    detail = {
+        **_connection_summary(conn),
+        "headers": dict(conn.headers),
+        "credential": cred_display,
+        "created_at": conn.created_at.isoformat(),
+        "updated_at": conn.updated_at.isoformat(),
+    }
+    r.emit(View(human, detail))
 
 
 def _credential_display(store: ConnectionStore, conn: ModelConnection) -> str:
@@ -456,6 +507,7 @@ def edit_cmd(
         help="Set a custom header as 'Key: Value' (repeatable; custom adapter only)",
     ),
     no_verify: bool = typer.Option(False, "--no-verify", help="Skip post-edit health check"),
+    json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Edit an existing model connection's mutable fields.
 
@@ -468,7 +520,7 @@ def edit_cmd(
     """
     run_async(
         edit_provider(
-            renderer_for(json=False),
+            renderer_for(json_),
             name,
             base_url=base_url,
             rotate_key=rotate_key,
@@ -500,8 +552,8 @@ async def edit_provider(
     new_key: str | None = None
 
     if not flag_driven:
-        r.emit(f"\n{hl('Editing:')} {conn.name}  {dim(escape(f'[{provider_str}]'))}")
-        r.emit(dim("Press Enter to keep the current value.\n"))
+        r.note(f"\n{hl('Editing:')} {conn.name}  {dim(escape(f'[{provider_str}]'))}")
+        r.note(dim("Press Enter to keep the current value.\n"))
 
         new_endpoint = await r.ask(Question("Endpoint (base URL)", default=conn.endpoint or "", flag="--base-url"))
 
@@ -511,8 +563,8 @@ async def edit_provider(
             new_key = await _ask_new_key(r)
 
         if provider_str == "custom" and conn.headers:
-            r.emit(dim(f"\n  Current headers: {', '.join(f'{k}: {v}' for k, v in conn.headers.items())}"))
-            r.emit(dim("  Use --header to modify headers non-interactively."))
+            r.note(dim(f"\n  Current headers: {', '.join(f'{k}: {v}' for k, v in conn.headers.items())}"))
+            r.note(dim("  Use --header to modify headers non-interactively."))
     else:
         if base_url is not None:
             new_endpoint = base_url
@@ -526,13 +578,11 @@ async def edit_provider(
 
         if header is not None:
             if provider_str != "custom":
-                r.emit(err("Custom headers are only supported for the 'custom' adapter type."))
-                raise typer.Exit(1)
+                fail(r, "Custom headers are only supported for the 'custom' adapter type.")
             new_headers = {}
             for h in header:
                 if ":" not in h:
-                    r.emit(err(f"Invalid header format {h!r}. Expected 'Key: Value'."))
-                    raise typer.Exit(1)
+                    fail(r, f"Invalid header format {h!r}. Expected 'Key: Value'.")
                 k, v = h.split(":", 1)
                 new_headers[k.strip()] = v.strip()
 
@@ -542,20 +592,19 @@ async def edit_provider(
         try:
             store.set_credential(ref, new_key)
         except Exception as exc:
-            r.emit(err(f"Failed to write credential to keyring: {exc}"))
-            r.emit(dim("  models.json was not modified."))
-            raise typer.Exit(1) from exc
+            fail(r, f"Failed to write credential to keyring: {exc}", dim("  models.json was not modified."))
         conn = conn.model_copy(update={"credential_ref": ref})
 
     updated = conn.model_copy(update={"endpoint": new_endpoint, "headers": new_headers})
     store.upsert(updated)
 
-    r.emit("\n" + ok(f"Connection '{conn.name}' updated."))
-
+    human: list[str] = ["\n" + ok(f"Connection '{conn.name}' updated.")]
+    health: str | None = None
     if not no_verify:
-        await _run_health_check(r, updated, store)
-
-    r.emit("")
+        health, health_line = await _run_health_check(r, updated, store)
+        human.append(health_line)
+    human.append("")
+    r.emit(View(lines(*human), {**_connection_summary(updated), "health": health}))
 
 
 @app.command("remove")
@@ -563,12 +612,13 @@ def remove_cmd(
     name: str = typer.Argument(..., help="Connection name (see: arcana providers list)"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
     force: bool = typer.Option(False, "--force", help="Remove even if dependent agents exist"),
+    json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Remove a model provider connection and its stored credential.
 
     Scans for dependent agents and aborts unless --force is given.
     """
-    run_async(remove_provider(renderer_for(json=False), name, yes=yes, force=force))
+    run_async(remove_provider(renderer_for(json_), name, yes=yes, force=force))
 
 
 async def remove_provider(r: Renderer, name: str, *, yes: bool, force: bool) -> None:
@@ -582,20 +632,29 @@ async def remove_provider(r: Renderer, name: str, *, yes: bool, force: bool) -> 
     dependents = [a for a in agents if _agent_targets_connection(a.model, provider_str, conn_name)]
 
     if dependents and not force:
-        r.emit(warn(f"The following agents depend on '{conn.name}':"))
-        for a in dependents:
-            r.emit(f"  {hl(a.name)}  [{TXT3}]{a.model}[/]")
-        r.emit(dim("\nRe-run with --force to remove anyway."))
+        r.emit(
+            View(
+                lines(
+                    warn(f"The following agents depend on '{conn.name}':"),
+                    *(f"  {hl(a.name)}  [{TXT3}]{a.model}[/]" for a in dependents),
+                    dim("\nRe-run with --force to remove anyway."),
+                ),
+                {
+                    "aborted": "dependents",
+                    "dependents": [{"agent": a.name, "id": str(a.id), "model": a.model} for a in dependents],
+                },
+            )
+        )
         raise typer.Exit(1)
 
     if not yes:
         await confirm_or_cancel(r, f"Remove connection '{conn.name}'?")
 
     if dependents:
-        r.emit(warn(_removal_consequence(provider_str)))
+        r.note(warn(_removal_consequence(provider_str)))
 
     store.delete(conn.name)
 
     _warn_default_model(r, provider_str)
 
-    r.emit(ok(f"Connection '{conn.name}' removed."))
+    r.emit(View(ok(f"Connection '{conn.name}' removed."), {"removed": conn.name}))

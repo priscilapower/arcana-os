@@ -1,0 +1,2 @@
+exit=1
+✗ Custom headers are only supported for the 'custom' adapter type.

@@ -1,0 +1,3 @@
+exit=1
+✗ Connection 'ollama/hermes-3' uses an API key, not OAuth.
+  Rotate its key with: arcana providers edit ollama/hermes-3 --rotate-key

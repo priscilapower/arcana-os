@@ -1,0 +1,2 @@
+exit=1
+✗ Pass either --url (HTTP/SSE) or --command (stdio), not both.

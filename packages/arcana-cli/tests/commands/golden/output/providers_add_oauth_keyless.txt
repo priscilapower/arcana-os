@@ -1,0 +1,2 @@
+exit=1
+✗ Provider 'ollama' is keyless — OAuth does not apply.

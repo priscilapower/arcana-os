@@ -1,0 +1,2 @@
+exit=2
+✗ No memory with id '<id>' for agent 'hermit'.

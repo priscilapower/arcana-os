@@ -1,0 +1,4 @@
+exit=1
+✗ Ambiguous agent name 'scout'. Use one of these IDs:
+  <id>
+  <id>

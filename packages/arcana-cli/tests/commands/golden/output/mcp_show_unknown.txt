@@ -1,0 +1,3 @@
+exit=2
+✗ No MCP server named 'ghost'.
+  Run: arcana mcp list

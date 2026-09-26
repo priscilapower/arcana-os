@@ -1,0 +1,3 @@
+exit=2
+✗ Unknown tool 'nope/tool'.
+  See available tools: arcana tools list

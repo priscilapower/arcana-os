@@ -1,3 +1,7 @@
 exit=1
-✗ 'Permanently delete memory 11111111 (the tea is oolong)?' needs an answer, but --json mode never 
-prompts; pass --yes instead
+{
+  "error": {
+    "code": 1,
+    "message": "'Permanently delete memory 11111111 (the tea is oolong)?' needs an answer, but --json mode never prompts; pass --yes instead"
+  }
+}

@@ -61,13 +61,15 @@ async def test_a_wait_called_off_aborts_and_closes_the_listener(monkeypatch):
     assert "Signed in" not in r.notes_text()
 
 
-async def test_a_failed_sign_in_is_a_note_and_an_exit_with_the_given_code(monkeypatch):
+async def test_a_failed_sign_in_is_an_error_and_an_exit_with_the_given_code(monkeypatch):
     install_fake_as(monkeypatch)
     r = RecordingRenderer()
     with pytest.raises(typer.Exit) as exc:
         await sign_in_or_exit(r, OAuthConfig(issuer=ISSUER, metadata_url=f"{ISSUER}/nowhere"), device=True, code=7)
     assert exc.value.exit_code == 7
-    assert "OAuth sign-in failed" in r.notes_text()
+    [failure] = r.errors
+    assert failure.code == 7
+    assert "OAuth sign-in failed" in r.errors_text()
 
 
 async def test_a_called_off_sign_in_is_not_reported_as_a_failure(monkeypatch):
@@ -76,6 +78,7 @@ async def test_a_called_off_sign_in_is_not_reported_as_a_failure(monkeypatch):
     with pytest.raises(typer.Abort):
         await sign_in_or_exit(r, CONFIG, device=True, code=1)
     assert "failed" not in r.notes_text()
+    assert r.errors == []
 
 
 def test_the_wait_is_titled_for_sign_in():

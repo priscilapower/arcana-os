@@ -1,0 +1,2 @@
+exit=1
+✗ Server 'notion-mcp' does not use OAuth — nothing to sign in to.

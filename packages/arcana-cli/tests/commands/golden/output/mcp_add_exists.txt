@@ -1,0 +1,4 @@
+exit=1
+✗ An MCP server named 'notion-mcp' already exists.
+  Re-discover with: arcana mcp refresh notion-mcp
+  Or replace it:    arcana mcp remove notion-mcp

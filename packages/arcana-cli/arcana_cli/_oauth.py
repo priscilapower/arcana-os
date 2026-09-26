@@ -32,8 +32,8 @@ from arcana.auth import (
     ProtectedResourceMetadata,
 )
 from arcana.types.auth import OAuthConfig, OAuthToken
-from arcana_cli.ui.renderer import Renderer, WaitHandle
-from arcana_cli.ui.theme import dim, err, hl, ok
+from arcana_cli.ui.renderer import Renderer, WaitHandle, fail
+from arcana_cli.ui.theme import dim, hl, ok
 
 OAuthClientFactory = Callable[[], OAuthClient]
 
@@ -121,7 +121,7 @@ async def sign_in(
 async def sign_in_or_exit(
     r: Renderer, config: OAuthConfig, *, device: bool, code: int
 ) -> tuple[OAuthToken, OAuthConfig]:
-    """:func:`sign_in`, turning a failed sign-in into an error note and ``typer.Exit(code)``.
+    """:func:`sign_in`, turning a failed sign-in into :func:`~arcana_cli.ui.renderer.fail` with ``code``.
 
     A sign-in the user called off still raises :class:`typer.Abort`.
     """
@@ -130,8 +130,7 @@ async def sign_in_or_exit(
     except typer.Abort:
         raise
     except Exception as exc:
-        r.note(err(escape(f"OAuth sign-in failed: {exc}")))
-        raise typer.Exit(code) from exc
+        fail(r, f"OAuth sign-in failed: {exc}", code=code)
 
 
 async def probe_oauth(server_url: str, *, client_factory: OAuthClientFactory = OAuthClient) -> OAuthConfig | None:

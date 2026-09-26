@@ -18,7 +18,7 @@ import arcana_cli.tui.card_picker as card_picker_app
 from arcana.types.card import Card
 from arcana_cli._async import run_async
 from arcana_cli._render import EXIT_ERROR
-from arcana_cli.ui.renderer import Choice, NonInteractiveError, Question, TtyRenderer
+from arcana_cli.ui.renderer import Choice, Failure, NonInteractiveError, Question, TtyRenderer, Verbatim, View
 from arcana_cli.ui.renderer import tty as tty_mod
 
 if sys.platform != "win32":
@@ -342,6 +342,27 @@ def _split_renderer(*, stderr_terminal: bool) -> tuple[TtyRenderer, io.StringIO,
     out, err_out = io.StringIO(), io.StringIO()
     stderr = Console(file=err_out, width=100, force_terminal=stderr_terminal, color_system=None)
     return TtyRenderer(Console(file=out, width=100, color_system=None), stderr=stderr), out, err_out
+
+
+def test_emit_presentable_shows_its_human_view():
+    r, out, err_out = _split_renderer(stderr_terminal=False)
+    r.emit(View("[bold]hello[/]", {"never": "shown"}))
+    assert out.getvalue() == "hello\n"
+    assert err_out.getvalue() == ""
+
+
+def test_verbatim_is_written_as_is():
+    r, out, _ = _split_renderer(stderr_terminal=False)
+    text = "# t\n\n" + "x" * 150 + " [bold]y[/] :smile:\n\ttab  \n"
+    r.emit(View(Verbatim(text), {}))
+    assert out.getvalue() == text + "\n"
+
+
+def test_error_goes_to_stderr_off_the_output():
+    r, out, err_out = _split_renderer(stderr_terminal=False)
+    r.error(Failure("No agent 'ghost'.", ("  Run: arcana agent list",)))
+    assert out.getvalue() == ""
+    assert err_out.getvalue() == "✗ No agent 'ghost'.\n  Run: arcana agent list\n"
 
 
 def test_note_goes_to_stderr():

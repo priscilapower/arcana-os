@@ -1,9 +1,10 @@
 """Tests for the RecordingRenderer harness itself — command tests rely on its strictness."""
 
 import pytest
+import typer
 from rich.text import Text
 
-from arcana_cli.ui.renderer import Choice, Question, Renderer
+from arcana_cli.ui.renderer import Choice, Question, Renderer, View, fail
 from tests.support.renderer import RecordingRenderer
 
 
@@ -17,6 +18,23 @@ def test_text_renders_what_was_emitted():
     r.emit(Text("one"))
     r.emit("[bold]two[/bold]")
     assert r.text() == "one\ntwo\n"
+
+
+def test_a_presentable_is_text_by_its_human_view_and_a_document_by_its_json_view():
+    r = RecordingRenderer()
+    r.emit(View("[bold]human[/]", {"json": True}))
+    r.emit({"bare": 1})
+    r.emit(Text("human only"))
+    assert r.text() == "human\n{'bare': 1}\nhuman only\n"
+    assert r.documents() == [{"json": True}, {"bare": 1}]
+
+
+def test_a_failure_is_recorded_apart_from_the_output():
+    r = RecordingRenderer()
+    with pytest.raises(typer.Exit):
+        fail(r, "No agent 'ghost'.", "  hint")
+    assert r.emitted == []
+    assert r.errors_text() == "✗ No agent 'ghost'.\n  hint\n"
 
 
 async def test_ask_answers_from_the_script_and_records_the_question():

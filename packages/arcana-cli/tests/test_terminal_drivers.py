@@ -1,5 +1,6 @@
 """Textual is the CLI's only terminal driver: no module reads raw keys or runs a ``rich.live.Live`` display,
-and only the line-prompt adapter behind the renderer port calls ``typer.prompt`` / ``typer.confirm``."""
+only the line-prompt adapter behind the renderer port calls ``typer.prompt`` / ``typer.confirm``, and no
+command writes to the terminal itself — its output goes through the renderer port."""
 
 import ast
 from pathlib import Path
@@ -122,3 +123,76 @@ def test_the_prompt_scan_catches_a_from_import(tmp_path: Path):
     probe = tmp_path / "probe.py"
     probe.write_text("from typer import confirm\n")
     assert _line_prompt_uses(probe) == ["typer.confirm"]
+
+
+# ── output: one door ──────────────────────────────────────────────────────
+
+#: Where command code lives: every command body and what it calls to sign in.
+COMMAND_CODE = [
+    *sorted((SOURCE / "commands").rglob("*.py")),
+    SOURCE / "_oauth.py",
+    SOURCE / "main.py",
+]
+#: Functions that write to the terminal (or the ``--json`` stream) directly, bypassing the renderer.
+DIRECT_WRITERS = frozenset({"print", "emit_json", "emit_error", "echo", "secho"})
+#: The one command module allowed a direct write: after the session app has released the terminal,
+#: ``run_chat`` replays the transcript and prints the resume hint to the replay console (ADR-024 A3).
+EXIT_REPLAY = Path("commands") / "chat" / "app.py"
+
+
+def _direct_output(path: Path) -> list[str]:
+    """Each ``Console(...)`` construction and direct write (``print``, ``x.print``, ``emit_json`` …) in ``path``."""
+    found: list[str] = []
+    for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
+        if name == "Console":
+            found.append(f"line {node.lineno}: Console(...)")
+        elif name in DIRECT_WRITERS:
+            found.append(f"line {node.lineno}: {ast.unparse(func)}(...)")
+    return found
+
+
+def test_the_output_scan_covers_every_command_module():
+    assert len(COMMAND_CODE) > 12
+    assert all(path.exists() for path in COMMAND_CODE)
+
+
+def test_no_command_writes_to_the_terminal_itself():
+    offenders = {
+        str(path.relative_to(SOURCE)): found
+        for path in COMMAND_CODE
+        if path.relative_to(SOURCE) != EXIT_REPLAY and (found := _direct_output(path))
+    }
+    assert offenders == {}, f"emit / note / fail through the Renderer instead: {offenders}"
+
+
+def test_the_exit_replay_is_the_only_direct_write_in_the_chat_app():
+    assert [f.split(": ", 1)[1] for f in _direct_output(SOURCE / EXIT_REPLAY)] == ["out.print(...)"]
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "console = Console()",
+        "Console(stderr=True).print('x')",
+        "rich.console.Console()",
+        "console.print('x')",
+        "print('x')",
+        "emit_json({})",
+        "_render.emit_error(1, 'x')",
+        "typer.echo('x')",
+    ],
+)
+def test_the_output_scan_catches_a_direct_write(tmp_path: Path, spelling: str):
+    probe = tmp_path / "probe.py"
+    probe.write_text(f"def f():\n    {spelling}\n")
+    assert _direct_output(probe)
+
+
+def test_the_output_scan_leaves_the_renderer_alone(tmp_path: Path):
+    probe = tmp_path / "probe.py"
+    probe.write_text("def f(r):\n    r.emit('x')\n    r.note('y')\n    fail(r, 'z')\n")
+    assert _direct_output(probe) == []

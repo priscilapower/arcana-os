@@ -1,0 +1,2 @@
+exit=0
+No agents yet. Run: arcana agent create

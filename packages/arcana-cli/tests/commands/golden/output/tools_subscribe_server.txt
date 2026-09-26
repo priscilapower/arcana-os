@@ -1,0 +1,3 @@
+exit=0
+✓ Agent 'scout' subscribed to all of 'notion-mcp/*' (0 active tool(s)).
+  The server has no active tools yet — they'll resolve once connected/approved.

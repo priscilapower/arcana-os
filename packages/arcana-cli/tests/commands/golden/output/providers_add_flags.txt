@@ -1,0 +1,7 @@
+exit=0
+
+✓ Added connection 'local'
+  Provider: ollama
+  Model:    hermes-3
+  Endpoint: http://localhost:11434
+

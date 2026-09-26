@@ -1,0 +1,2 @@
+exit=1
+✗ Specify --agent <name> (or --connector <name> for an external knowledge source).

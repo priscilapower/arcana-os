@@ -1,0 +1,18 @@
+exit=0
+                                             Tools                                              
+┏━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Tool                ┃ Type    ┃ Description                                                  ┃
+┡━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ builtin/copy        │ builtin │ Copy a file or a whole directory tree inside the agent work… │
+│ builtin/delete_dir  │ builtin │ Delete a directory and everything inside it from the agent … │
+│ builtin/delete_file │ builtin │ Delete a single file from the agent workspace. Directories … │
+│ builtin/fetch_url   │ builtin │ Fetch a URL over HTTP(S) and return its readable text conte… │
+│ builtin/list_dir    │ builtin │ List the contents of one directory in the agent workspace. … │
+│ builtin/make_dir    │ builtin │ Create a directory in the agent workspace. Set 'parents' to… │
+│ builtin/move        │ builtin │ Move or rename a file or directory inside the agent workspa… │
+│ builtin/read_file   │ builtin │ Read a UTF-8 text file from the agent workspace. Relative p… │
+│ builtin/run_code    │ builtin │ Execute a short program in a sandboxed subprocess and retur… │
+│ builtin/run_command │ builtin │ Run a shell command (e.g. 'git status | head', 'grep -r TOD… │
+│ builtin/web_search  │ builtin │ Search the web and return ranked results (title, url, snipp… │
+│ builtin/write_file  │ builtin │ Write text to a file in the agent workspace. 'create' fails… │
+└─────────────────────┴─────────┴──────────────────────────────────────────────────────────────┘

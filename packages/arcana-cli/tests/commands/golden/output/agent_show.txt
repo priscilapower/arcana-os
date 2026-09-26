@@ -1,0 +1,22 @@
+exit=0
+╭───────────────────────────────────────────── scout ──────────────────────────────────────────────╮
+│ ID:          <id>                                                │
+│ Name:        scout                                                                               │
+│ Description: —                                                                                   │
+│ Card:        the-hermit                                                                          │
+│ Modifiers:   none                                                                                │
+│ Model:       ollama:ollama/hermes-3/hermes-3                                                     │
+│ Temperature: 0.35                                                                                │
+│ Status:      ● idle                                                                              │
+│ Tags:        none                                                                                │
+│ Created:     <date>                                                                │
+│                                                                                                  │
+│ System prompt:                                                                                   │
+│ You are Researcher / Deep Analyst.                                                               │
+│                                                                                                  │
+│ Tone: measured, precise, cites everything, comfortable with uncertainty                          │
+│ Approach: depth over speed — explore the edges of a problem before concluding                    │
+│                                                                                                  │
+│ Priorities:                                                                                      │
+│ -…                                                                                               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

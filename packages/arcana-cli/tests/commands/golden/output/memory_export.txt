@@ -1,0 +1,10 @@
+exit=0
+# hermit — Private Memory Export
+
+_1 entries_
+
+## Semantic (1 entries)
+
+### the tea is oolong
+Importance: 0.50 · Confidence: 1.00 · Added: <date>
+

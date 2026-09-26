@@ -48,7 +48,7 @@ from arcana_cli.tui.card_picker import CardPickerScreen
 from arcana_cli.tui.screens import ConfirmScreen, MultiSelectScreen, PromptScreen, SelectScreen, WaitScreen
 from arcana_cli.ui.renderer.port import (
     Choice,
-    JsonAble,
+    Emittable,
     Question,
     StatusHandle,
     StreamRender,
@@ -56,6 +56,7 @@ from arcana_cli.ui.renderer.port import (
     WaitHandle,
     initial_indexes,
 )
+from arcana_cli.ui.renderer.presentable import Failure, Presentable
 from arcana_cli.ui.theme import ACCENT, TXT2
 
 T = TypeVar("T")
@@ -128,12 +129,16 @@ class TextualRenderer:
     def __init__(self, app: ArcanaApp) -> None:
         self._app = app
 
-    def emit(self, renderable: RenderableType | JsonAble) -> None:
+    def emit(self, renderable: Emittable) -> None:
         """Append one block to the transcript.
 
-        A string is Rich markup, as it is for ``console.print`` (so ``ok(...)`` /
-        ``err(...)`` render the same on every surface); JSON data is pretty-printed.
+        A :class:`~arcana_cli.ui.renderer.presentable.Presentable` shows its
+        human view. A string is Rich markup, as it is for ``console.print`` (so
+        ``ok(...)`` / ``err(...)`` render the same on every surface); JSON data
+        is pretty-printed.
         """
+        if isinstance(renderable, Presentable):
+            renderable = renderable.to_rich()
         if isinstance(renderable, str):
             renderable = Text.from_markup(renderable)
         elif isinstance(renderable, BaseModel):
@@ -144,6 +149,9 @@ class TextualRenderer:
 
     def note(self, renderable: RenderableType) -> None:
         self.emit(renderable)
+
+    def error(self, failure: Failure) -> None:
+        self.emit(failure.to_rich())
 
     async def ask(self, q: Question) -> str:
         _require_worker("ask")

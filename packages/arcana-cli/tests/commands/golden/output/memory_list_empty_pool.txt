@@ -1,0 +1,2 @@
+exit=1
+✗ no backend registered for shared pool 'team'

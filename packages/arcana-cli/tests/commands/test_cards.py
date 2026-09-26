@@ -144,11 +144,11 @@ async def test_show_card_unknown_emits_error_and_exits():
     with pytest.raises(typer.Exit) as exc:
         await show_card(r, "not-a-real-card")
     assert exc.value.exit_code == EXIT_ERROR
-    assert "Unknown card: 'not-a-real-card'" in r.text()
+    assert "Unknown card: 'not-a-real-card'" in r.errors_text()
 
 
 async def test_show_card_ambiguous_names_the_matches():
     r = RecordingRenderer()
     with pytest.raises(typer.Exit):
         await show_card(r, "the")
-    assert "Ambiguous: The Fool" in r.text()
+    assert "Ambiguous: The Fool" in r.errors_text()

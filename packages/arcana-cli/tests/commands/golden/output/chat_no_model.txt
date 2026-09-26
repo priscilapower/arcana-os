@@ -1,0 +1,3 @@
+exit=1
+✗ No model configured for agent 'drifter'. Run: arcana agent edit drifter --model 
+<provider/model_id>

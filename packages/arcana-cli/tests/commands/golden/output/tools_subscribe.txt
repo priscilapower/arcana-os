@@ -1,0 +1,2 @@
+exit=0
+✓ Agent 'scout' subscribed to 'builtin/web_search'.

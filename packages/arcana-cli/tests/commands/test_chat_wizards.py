@@ -60,6 +60,11 @@ def _notes(c: _ChatController) -> str:
     return c.renderer.notes_text()
 
 
+def _errors(c: _ChatController) -> str:
+    assert isinstance(c.renderer, RecordingRenderer)
+    return c.renderer.errors_text()
+
+
 def _registry_names(registry: MCPRegistry) -> set[str]:
     return {server.name for server in registry.list_servers()}
 
@@ -87,6 +92,8 @@ def test_arguments_parse_with_the_one_shot_commands_options():
         ("/providers add --help", "No such option: --help"),
         ("/agent create --name 'unbalanced", "No closing quotation"),
         ("/mcp remove notion-mcp --json", "--json isn't available inside the session"),
+        ("/agent delete scout --json", "--json isn't available inside the session"),
+        ("/providers remove ollama --json", "--json isn't available inside the session"),
     ],
 )
 def test_arguments_that_dont_parse_say_why_and_print_nothing(line, message, capsys):
@@ -153,7 +160,7 @@ async def test_a_usage_error_names_the_one_shot_command_to_ask_about(home):
 async def test_a_wizard_that_exits_with_an_error_leaves_the_session_running(home):
     c = _controller(home)
     await c.submit("/agent delete ghost")
-    assert "No agent 'ghost'." in _out(c)
+    assert "No agent 'ghost'." in _errors(c)
     assert not c.exited
     await c.submit("/help")  # still taking commands
     assert "In-session commands" in _out(c)
@@ -209,7 +216,6 @@ async def test_mcp_add_cancelled_during_discovery_leaves_no_credential(home, mon
             scope=[],
             device=False,
             description="",
-            json_=False,
         )
     assert home.keyring == {}
     assert not home.mcps.exists() or "notion-mcp" not in home.mcps.read_text()
@@ -315,7 +321,7 @@ async def test_a_failed_add_of_an_existing_server_doesnt_hold_it_back(home, monk
     seed_server(home)
     c = _controller(home)
     await c.submit("/mcp add --name notion-mcp --url https://a/sse")
-    assert "already exists" in _notes(c)
+    assert "already exists" in _errors(c)
     assert c.unapproved == set()
     assert "notion-mcp" in _registry_names(c.tools)
 

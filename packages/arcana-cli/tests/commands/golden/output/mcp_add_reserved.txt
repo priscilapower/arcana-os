@@ -1,0 +1,2 @@
+exit=1
+✗ 'builtin' is reserved. Choose another server name.

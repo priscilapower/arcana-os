@@ -1,0 +1,8 @@
+exit=0
+No embedding provider — keyword search (FTS5). Install the [embed] extra for semantic.
+                      hermit · search 'oolong'                      
+┏━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━┳━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┓
+┃ ID       ┃ Type     ┃ Imp. ┃ Conf. ┃ Scope   ┃ Content           ┃
+┡━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━╇━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━┩
+│ 11111111 │ semantic │ 0.50 │  1.00 │ private │ the tea is oolong │
+└──────────┴──────────┴──────┴───────┴─────────┴───────────────────┘

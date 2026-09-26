@@ -6,23 +6,22 @@ via :class:`WorldEngine`, prints (or emits as JSON) the resulting
 the routing audit, exactly as a real turn would record it.
 """
 
-import asyncio
-
 import typer
-from rich.console import Console
+from rich.table import Table
 
 from arcana.agents.registry import AgentRegistry
 from arcana.models.connection_store import ConnectionStore
 from arcana.models.gateway import ModelGateway
 from arcana.types import RoutingDecision
 from arcana.world import NoRouteAskUser
-from arcana_cli._render import EXIT_ERROR, emit_json, truncate
+from arcana_cli._async import run_async
+from arcana_cli._render import EXIT_ERROR, truncate
 from arcana_cli.commands.run import build_world_engine, find_agent, resolve_reflex_classifier
 from arcana_cli.constants import AGENTS_BASE, ARCANA_HOME
+from arcana_cli.ui.renderer import Renderer, View, fail, lines, renderer_for
 from arcana_cli.ui.theme import dim, err, make_table
 
 app = typer.Typer(help="Inspect and drive The World's task router (route).")
-console = Console()
 
 
 def _agent_name(reg: AgentRegistry, decision: RoutingDecision) -> str:
@@ -32,7 +31,7 @@ def _agent_name(reg: AgentRegistry, decision: RoutingDecision) -> str:
     return record.name if record is not None else str(decision.resolved_agent_id)
 
 
-def _print_decision(reg: AgentRegistry, decision: RoutingDecision) -> None:
+def _decision_table(reg: AgentRegistry, decision: RoutingDecision) -> Table:
     table = make_table("World — routing decision")
     table.add_column("", style="bold")
     table.add_column("")
@@ -50,7 +49,7 @@ def _print_decision(reg: AgentRegistry, decision: RoutingDecision) -> None:
     if decision.spread_id is not None:
         table.add_row("Spread", str(decision.spread_id))
     table.add_row("Latency", f"{decision.latency_ms} ms")
-    console.print(table)
+    return table
 
 
 def route_cmd(
@@ -61,40 +60,47 @@ def route_cmd(
     json_: bool = typer.Option(False, "--json", help="Emit the decision as JSON"),
 ) -> None:
     """Resolve which agent would run a prompt, without running it (dry run)."""
+    run_async(route_prompt(renderer_for(json_), prompt, agent=agent))
+
+
+async def route_prompt(r: Renderer, prompt: str, *, agent: str | None) -> None:
+    """Route ``prompt`` (to ``agent`` when given) and show the decision; no session is started.
+
+    When The World can't pick an agent the command exits ``EXIT_ERROR``, and
+    the ``--json`` document is the (unresolved) decision itself.
+    """
     if not prompt.strip():
-        console.print(err("Prompt cannot be empty."))
-        raise typer.Exit(EXIT_ERROR)
+        fail(r, "Prompt cannot be empty.")
 
     reg = AgentRegistry(AGENTS_BASE)
     explicit = None
     if agent is not None:
-        explicit = find_agent(agent, reg)
+        explicit = find_agent(r, agent, reg)
         if explicit is None:
-            console.print(err(f"No agent '{agent}'."))
-            raise typer.Exit(EXIT_ERROR)
+            fail(r, f"No agent '{agent}'.")
 
-    async def _route() -> RoutingDecision:
-        # A dry run resolves (and may run the reflex classifier) but starts no
-        # session, so it emits no learning signal — sessions/signals are unwired.
-        store = ConnectionStore(ARCANA_HOME / "connections" / "models.json")
+    # A dry run resolves (and may run the reflex classifier) but starts no
+    # session, so it emits no learning signal — sessions/signals are unwired.
+    store = ConnectionStore(ARCANA_HOME / "connections" / "models.json")
+    try:
         async with ModelGateway(connections=store) as gw:
             engine = build_world_engine(reg, reflex=resolve_reflex_classifier(gw))
-            return await engine.route(prompt, explicit_agent=explicit)
-
-    try:
-        decision = asyncio.run(_route())
+            decision = await engine.route(prompt, explicit_agent=explicit)
     except NoRouteAskUser as exc:
-        if json_:
-            emit_json(exc.decision.model_dump(mode="json"))
-        else:
-            console.print(err("The World couldn't pick an agent — name one with --agent <name>."))
+        r.emit(
+            View(
+                err("The World couldn't pick an agent — name one with --agent <name>."),
+                exc.decision.model_dump(mode="json"),
+            )
+        )
         raise typer.Exit(EXIT_ERROR) from exc
 
-    if json_:
-        emit_json(decision.model_dump(mode="json"))
-    else:
-        _print_decision(reg, decision)
-        console.print(dim("dry run — no session was started."))
+    r.emit(
+        View(
+            lines(_decision_table(reg, decision), dim("dry run — no session was started.")),
+            decision.model_dump(mode="json"),
+        )
+    )
 
 
 app.command(name="route")(route_cmd)

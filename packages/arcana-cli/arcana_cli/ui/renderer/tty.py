@@ -4,8 +4,9 @@ Output is ``console.print``; questions are ``typer.prompt`` / ``typer.confirm``.
 That is exactly what the commands did before they took a renderer, so a
 converted command's output is unchanged byte for byte.
 
-Output and streamed text go to stdout; notes and the status spinner go to
-stderr, so ``arcana run … | cat`` carries the reply alone. The spinner draws
+Output and streamed text go to stdout; notes, errors and the status spinner go
+to stderr, so ``arcana run … | cat`` carries the reply alone. A
+:class:`~arcana_cli.ui.renderer.presentable.Presentable` shows its human view. The spinner draws
 only when stderr is a terminal.
 
 A selection whose choices carry previews (cards, agents) opens the two-pane
@@ -39,7 +40,7 @@ from rich.text import Text
 
 from arcana_cli.ui.renderer.port import (
     Choice,
-    JsonAble,
+    Emittable,
     PrintedWait,
     Question,
     StatusHandle,
@@ -49,6 +50,7 @@ from arcana_cli.ui.renderer.port import (
     initial_indexes,
     refuse,
 )
+from arcana_cli.ui.renderer.presentable import Failure, Presentable, Verbatim
 from arcana_cli.ui.theme import ACCENT, err, eyebrow
 
 if sys.platform != "win32":
@@ -200,11 +202,19 @@ class TtyRenderer:
         self._console = console if console is not None else Console()
         self._stderr = stderr if stderr is not None else Console(stderr=True)
 
-    def emit(self, renderable: RenderableType | JsonAble) -> None:
+    def emit(self, renderable: Emittable) -> None:
+        if isinstance(renderable, Presentable):
+            renderable = renderable.to_rich()
+        if isinstance(renderable, Verbatim):
+            _FileSink(self._console.file).write(renderable.text + "\n")
+            return
         self._console.print(renderable)
 
     def note(self, renderable: RenderableType) -> None:
         self._stderr.print(renderable)
+
+    def error(self, failure: Failure) -> None:
+        self._stderr.print(failure.to_rich())
 
     async def ask(self, q: Question) -> str:
         # A secret's default is never shown in the prompt line (an empty one still

@@ -1,0 +1,5 @@
+exit=0
+✓ Connected markdown 'notes'.
+  <tmp>/notes
+  Read it: arcana memory list --connector notes
+  Inspect connectors: arcana memory adapters

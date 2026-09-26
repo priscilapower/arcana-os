@@ -1,0 +1,2 @@
+exit=0
+No soul.md yet — run 'arcana soul edit'
