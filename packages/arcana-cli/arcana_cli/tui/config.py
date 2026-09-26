@@ -51,8 +51,13 @@ class TuiTunables(BaseSettings):
     # How many transcript blocks are printed to the terminal when the app exits;
     # older ones are summarised in a one-line note.
     replay_blocks: int = Field(default=500, ge=1)
+    # How many times a second a streaming block redraws while text arrives. The
+    # stream itself never waits on a redraw, so a fast model can't queue work.
+    stream_fps: int = Field(default=30, ge=1, le=120)
 
 
 TUNABLES = TuiTunables()
 
 REPLAY_BLOCKS = TUNABLES.replay_blocks
+
+STREAM_FPS = TUNABLES.stream_fps

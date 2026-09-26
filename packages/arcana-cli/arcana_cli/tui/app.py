@@ -13,7 +13,7 @@ defaults every screen inside it inherits:
   false`` in ``config.json`` (or ``mouse=False``) restores native drag-select.
 * **The transcript survives exit.** The inline region is cleared when the app
   exits and every retained transcript block is printed to stdout through a
-  plain Rich console, so the session lands in terminal scrollback. The replay
+  Rich console, so the session lands in terminal scrollback. The replay
   is capped at ``ARCANA_TUI_REPLAY_BLOCKS`` blocks, with a note for the rest.
 
 The app runs on the caller's event loop (``await app.run_inline()`` inside the
@@ -35,7 +35,7 @@ from arcana_cli.tui.chat_input import ChatInput, ChatInputPanel
 from arcana_cli.tui.config import REPLAY_BLOCKS, load_ui_config
 from arcana_cli.tui.theme_tcss import ARCANA_TCSS, ARCANA_THEME
 from arcana_cli.tui.widgets import LiveBlock, StatusBar, Transcript
-from arcana_cli.ui.theme import dim
+from arcana_cli.ui.theme import MARKDOWN_THEME, dim
 
 #: Printed before the first full-screen session on Windows.
 FULLSCREEN_NOTICE = "Arcana runs full-screen on Windows; the session transcript is printed when you exit."
@@ -70,6 +70,7 @@ class ArcanaApp(App[None]):
         super().__init__()
         self.register_theme(ARCANA_THEME)
         self.theme = ARCANA_THEME.name
+        self.console.push_theme(MARKDOWN_THEME)
         self.transcript = Transcript(id="transcript")
         self.live = LiveBlock(id="live")
         self.chat_input = ChatInput(id="chat-input")
@@ -95,14 +96,17 @@ class ArcanaApp(App[None]):
         """Run the app on the current event loop, then replay the transcript to ``console``.
 
         Inline on POSIX, full-screen on Windows. ``mouse=None`` reads ``ui.mouse``
-        from ``config.json`` (default on). ``console`` defaults to a plain stdout
+        from ``config.json`` (default on). ``console`` defaults to a stdout
         console, created at call time.
+
+        The app's console and the default replay console both carry the Markdown
+        theme, so a reply looks the same in the session and in scrollback.
 
         Textual installs its eager task factory on the running loop; the loop's
         previous factory is put back when the app exits, so the rest of the
         invocation runs on the loop it started with.
         """
-        out = console if console is not None else Console()
+        out = console if console is not None else Console(theme=MARKDOWN_THEME)
         inline = sys.platform != "win32"
         if not inline:
             _notice_fullscreen_once(out, ARCANA_HOME)

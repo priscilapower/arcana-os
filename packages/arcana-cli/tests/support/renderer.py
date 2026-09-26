@@ -21,7 +21,7 @@ from typing import Any, Literal, TypeVar, overload
 
 from rich.console import Console, RenderableType
 
-from arcana_cli.ui.renderer import Choice, JsonAble, Question, StreamSink
+from arcana_cli.ui.renderer import Choice, JsonAble, Question, StreamRender, StreamSink
 
 T = TypeVar("T")
 
@@ -149,10 +149,19 @@ class RecordingRenderer:
         yield
 
     @asynccontextmanager
-    async def stream(self, prefix: RenderableType | None = None) -> AsyncGenerator[StreamSink]:
+    async def stream(
+        self, prefix: RenderableType | None = None, *, render: StreamRender | None = None
+    ) -> AsyncGenerator[StreamSink]:
+        """Chunks land in :attr:`streamed`; with ``render``, the finished block is emitted too."""
         if prefix is not None:
             self.emitted.append(prefix)
-        yield _ListSink(self.streamed)
+        start = len(self.streamed)
+        try:
+            yield _ListSink(self.streamed)
+        finally:
+            text = "".join(self.streamed[start:])
+            if render is not None and text:
+                self.emitted.append(render(text))
 
 
 def _offered(choices: Sequence[Choice[T]], value: object) -> T:

@@ -304,19 +304,24 @@ The agent is rebuilt from its stored record and run through a `ModelGateway` usi
 
 ### `arcana chat`
 
-Start an interactive, full-screen REPL with a card-configured agent — a scrolling transcript above a pinned input box. It drives the same agent + session + memory path as `arcana run`. `--agent` is required.
+Start an interactive session with a card-configured agent: a scrolling transcript above the chat input and a status line, rendered inline under your shell prompt (full-screen on Windows). It drives the same agent + session + memory path as `arcana run`. Running `arcana` with no command opens the same session; `arcana --help` still lists the commands.
 
 ```bash
+arcana                                           # The World picks the agent
 arcana chat --agent researcher
 arcana chat --agent researcher --session <uuid>   # resume a session
 arcana chat --agent researcher --no-memory        # stateless session
+arcana chat --no-mouse                            # native click-drag selection
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--agent / -a` | — (required) | Target agent by name or UUID |
+| `--agent / -a` | The World's pick | Target agent by name or UUID; without it The World routes the opening agent, and asks for `--agent` when it can't |
 | `--session` | new session | Resume a specific session by UUID |
 | `--no-memory` | off | Run stateless — don't load or persist memory |
+| `--no-mouse` | off | Turn off mouse capture (also `{"ui": {"mouse": false}}` in `config.json`); bare `arcana --no-mouse` takes it too |
+
+Replies stream into a live block that redraws at most `ARCANA_TUI_STREAM_FPS` times a second (default 30), so partial Markdown re-flows correctly however fast the model is. When the session ends the transcript is printed to your terminal, followed by the `--session <uuid>` resume hint.
 
 Inside the session, slash commands are available (type `/help` to list them):
 
@@ -328,12 +333,12 @@ Inside the session, slash commands are available (type `/help` to list them):
 | `/switch <name>` | Load another agent in a new session |
 | `/retry` | Re-run your last message |
 | `/save` | Force a session snapshot to disk now |
-| `/clear` | Clear the transcript (history is kept) |
+| `/clear` | Clear the screen (the session is kept) |
 | `/fresh` | Start a new session |
 | `/no-memory` | Start a new stateless session (memory off) |
 | `/exit` | Close the session and quit |
 
-`Ctrl+C` cancels the current turn (or quits when idle); `Ctrl+D` quits at an empty prompt.
+`Ctrl+C` cancels the current turn (or quits when idle); `Ctrl+D` quits at an empty prompt. `/clear` clears the screen only: the transcript printed on exit still holds the whole session.
 
 ---
 
@@ -423,6 +428,8 @@ Its stylesheet and Textual theme are generated from the colour tokens in `ui/the
 The chat input (`tui/chat_input.py`) is a `ChatInput` built on Textual's `TextArea`, stacked in a `ChatInputPanel` with its slash-command completion menu and Ctrl+R search bar. It keeps the chat editor's behaviour: Enter submits (posting `ChatInput.Submitted` with collapsed pastes expanded), `\`+Enter and Ctrl+J insert a newline, and so do Alt+Enter and Shift+Enter on terminals with the kitty keyboard protocol (elsewhere the terminal sends Alt+Enter as a plain Enter, which submits); pastes of four lines or more collapse to `[pasted N lines]`; a leading `/` completes commands and `/switch` agent names; Up/Down walk the agent's history, with a ghost suggestion from it and Ctrl+R reverse search. Ctrl+Z undoes, a paste included. History (`tui/history.py`) stays in prompt_toolkit's `FileHistory` format at `~/.arcana/agents/<uuid>/chat_history`, so existing history files carry over; a history file that can't be read or written falls back to in-memory history. Completion (`tui/completion.py`) is a pure function.
 
 `TextualRenderer` (`arcana_cli.ui.renderer.textual_renderer`) is the renderer-port adapter over a running app. Its question methods must be awaited from an app worker (`app.run_worker(...)`); Esc cancels any dialog, and a secret answer never reaches the transcript or the exit replay. It is imported from its module rather than `arcana_cli.ui.renderer`, so the one-shot and `--json` paths never load Textual.
+
+The chat session (`commands/chat/`) runs on it: `ChatApp` adds the session's keys (priority Ctrl+C / Ctrl+D bindings, so they beat the input box's copy and delete-forward), and `_ChatController` holds the session logic and writes only through the renderer port, so its tests hand it a `RecordingRenderer`. A turn runs as an app worker, so anything it awaits, such as a `ToolConfirmer` passed through `build_session_runtime(..., confirmer=...)`, can push a dialog and wait for the answer; cancelling the turn takes the dialog down with it. `Renderer.stream(prefix, render=...)` takes a function from the text so far to the block shown, which is how a reply re-renders as Markdown while it streams. `commands/chat/command.py` settles the agent and session before loading the app module, so `arcana_cli.main` still imports without Textual.
 
 UI tests drive the app headless through Textual's Pilot: `tests/support/tui.py` provides `arcana_pilot()` (exposed as the `tui` fixture under `tests/tui/`), which yields the app, its pilot, and a bound `TextualRenderer`.
 

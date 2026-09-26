@@ -1,266 +1,120 @@
-"""Full-screen layout and the ``arcana chat`` command entry point.
+"""The chat session's app and its run: :class:`ChatApp` and :func:`run_chat`.
 
-A persistent, full-screen, Claude-Code-style session with a card-configured
-agent: a scrolling transcript sits above an input box and a footer that stay
-pinned to the bottom of the terminal, so the prompt never floats up the screen.
-It reuses the same agent+session+memory path as ``run`` (see
-:func:`build_session_runtime`), wrapping it in a prompt_toolkit
-:class:`~prompt_toolkit.application.Application` driven by one persistent session.
+:class:`ChatApp` is the interactive :class:`~arcana_cli.tui.app.ArcanaApp` with
+the chat's keys: a submitted input starts a turn, Ctrl+C cancels a running
+turn (or quits when idle), and Ctrl+D quits at an empty prompt. Everything else
+is the :class:`~.controller._ChatController` it drives.
 
-The layout is assembled around a :class:`_ChatController`, which holds all the
-session state; this module only wires it to the terminal.
+:func:`run_chat` opens the session on the caller's event loop: the model
+gateway, the runtime agent and its memory, the app run inline, then the resume
+hint. Whatever happens inside the app, the session is closed, the memory
+federation is closed and the terminal is restored before it returns.
 """
 
-import asyncio
 import contextlib
-from uuid import UUID
 
 import typer
-from prompt_toolkit.application import Application
-from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-from prompt_toolkit.buffer import Buffer
-from prompt_toolkit.data_structures import Point
-from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.key_binding.key_processor import KeyPressEvent
-from prompt_toolkit.layout import Layout
-from prompt_toolkit.layout.containers import Float, FloatContainer, HSplit, VSplit, Window
-from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
-from prompt_toolkit.layout.dimension import Dimension
-from prompt_toolkit.layout.menus import CompletionsMenu
-from prompt_toolkit.styles import Style
 from rich.console import Console
+from textual.actions import SkipAction
+from textual.binding import Binding
 
 from arcana.agents.registry import AgentRegistry
 from arcana.agents.session_manager import SessionManager
+from arcana.memory.federation import MemoryFederation
 from arcana.models.connection_store import ConnectionStore
 from arcana.models.gateway import ModelGateway
 from arcana.types.agent import Agent as AgentRecord
-from arcana.types.session import SessionTrigger
-from arcana.world import NoRouteAskUser
-from arcana_cli.commands.chat.controller import _H_PAD, _ChatController
-from arcana_cli.commands.chat.editor import _agent_history, _build_key_bindings, _SlashCompleter
-from arcana_cli.commands.chat.render import _replay_blocks
-from arcana_cli.commands.run import build_session_runtime, build_world_engine, find_agent
+from arcana.types.session import Session
+from arcana_cli._render import EXIT_ERROR
+from arcana_cli.commands.chat.controller import _ChatController
+from arcana_cli.commands.run import build_session_runtime
 from arcana_cli.constants import ARCANA_HOME
-from arcana_cli.ui.theme import ACCENT, SEP, SURFACE, SURFACE_HI, TXT2, TXT3, dim, err
-
-# Plain console for messages printed outside the full-screen app: startup
-# validation errors and the resume hint after the app exits.
-console = Console()
-
-_PTK_STYLE = Style.from_dict(
-    {
-        "you": f"bold {ACCENT}",
-        "you-cont": TXT3,
-        "footer": TXT3,
-        "footer.key": ACCENT,
-        "footer.val": TXT2,
-        "sep": TXT3,
-        # Completion menu — kept on the dark palette (prompt_toolkit's default is a
-        # bright grey that jars against the canvas). SURFACE_HI reads as a soft
-        # raised panel; the current row gets the cyan accent.
-        "completion-menu": f"bg:{SURFACE_HI} {TXT2}",
-        "completion-menu.completion": f"bg:{SURFACE_HI} {TXT2}",
-        "completion-menu.completion.current": f"bold bg:{ACCENT} {SURFACE}",
-        "completion-menu.meta.completion": f"bg:{SURFACE_HI} {TXT3}",
-        "completion-menu.meta.completion.current": f"bg:{ACCENT} {SURFACE}",
-        "scrollbar.background": f"bg:{SURFACE_HI}",
-        "scrollbar.button": f"bg:{TXT3}",
-    }
-)
+from arcana_cli.tui.app import ArcanaApp
+from arcana_cli.tui.chat_input import ChatInput
+from arcana_cli.ui.renderer.textual_renderer import TextualRenderer
+from arcana_cli.ui.theme import dim
 
 
-def _input_prefix(line_number: int, wrap_count: int) -> StyleAndTextTuples:
-    """``You › `` on the first line; a dim marker on continued lines."""
-    if line_number == 0 and wrap_count == 0:
-        return [("class:you", "You › ")]
-    return [("class:you-cont", "  … ")]
+class ChatApp(ArcanaApp):
+    """The chat session's app: :class:`ArcanaApp` plus the chat's keys, driving a controller.
 
+    Ctrl+C and Ctrl+D are priority bindings, so they reach the session before
+    the input box (which binds Ctrl+C to copy and Ctrl+D to delete forward). A
+    Ctrl+D with text in the box falls through to the box.
+    """
 
-def _footer_fragments(controller: _ChatController) -> StyleAndTextTuples:
-    """The persistent footer: live session id + always-visible key hints."""
-    sid = str(controller.session.id)[:4]
-    memory = "off" if controller.memory_off else "on"
-    d = "class:footer"
-    gap = f"   {SEP}   "
-    return [
-        (d, "session "),
-        ("class:footer.val", f"#{sid}"),
-        (d, gap),
-        ("class:footer.key", "/help"),
-        (d, " commands"),
-        (d, gap),
-        ("class:footer.key", "/exit"),
-        (d, " quit"),
-        (d, gap),
-        ("class:footer.key", "Ctrl+C"),
-        (d, f" cancel   {SEP}   memory {memory}"),
+    BINDINGS = [
+        Binding("ctrl+c", "interrupt", "Cancel / quit", show=False, priority=True),
+        Binding("ctrl+d", "end_of_input", "Quit", show=False, priority=True),
     ]
 
+    def __init__(self) -> None:
+        super().__init__()
+        self.controller: _ChatController | None = None
 
-def _global_key_bindings(controller: _ChatController) -> KeyBindings:
-    """App-level keys: Ctrl+C (cancel turn / quit), Ctrl+D (quit at an empty prompt)."""
-    kb = KeyBindings()
+    def on_mount(self) -> None:
+        # Textual runs ArcanaApp.on_mount (focusing the input) itself: it calls
+        # every class's handler along the MRO, so this one never calls super().
+        if self.controller is not None:
+            self.controller.bind_app(self)
 
-    @kb.add("c-c")
-    def _(event: KeyPressEvent) -> None:
-        if controller.busy:
-            controller.cancel_turn()
+    def on_chat_input_submitted(self, event: ChatInput.Submitted) -> None:
+        if self.controller is not None:
+            self.controller.start_turn(event.raw, event.text)
+
+    def action_interrupt(self) -> None:
+        """Ctrl+C: cancel the running turn, or quit when there is none."""
+        if self.controller is None:
+            self.exit()
+        elif self.controller.busy:
+            self.controller.cancel_turn()
         else:
-            controller.request_exit()
+            self.controller.request_exit()
 
-    @kb.add("c-d")
-    def _(event: KeyPressEvent) -> None:
-        if not controller.busy and not event.current_buffer.text:
-            controller.request_exit()
-
-    return kb
-
-
-def _build_app(controller: _ChatController) -> Application[None]:
-    """Assemble the full-screen application around *controller*.
-
-    Layout is a single HSplit: a scrolling transcript window (anchored to its
-    last line so the newest content stays visible), a rule, the input box, an
-    on-demand search bar, and the footer. The input + footer never move.
-    """
-    input_buffer = Buffer(
-        multiline=True,
-        completer=_SlashCompleter(controller.reg),
-        # Pop the slash-command menu as you type — the completer only yields for
-        # a leading "/", so ordinary prose never triggers it.
-        complete_while_typing=True,
-        auto_suggest=AutoSuggestFromHistory(),
-        history=_agent_history(controller.record.id),
-        accept_handler=controller.on_accept,
-        name="chat-input",
-    )
-
-    input_control = BufferControl(
-        buffer=input_buffer,
-        key_bindings=_build_key_bindings(controller.pastes),
-    )
-
-    transcript_control = FormattedTextControl(
-        lambda: ANSI(controller.transcript.to_ansi(controller.content_width())),
-        show_cursor=False,
-        focusable=False,
-        # Anchor the view to the last rendered line: short transcripts sit at the
-        # top, long ones scroll so the newest content stays pinned above the input.
-        get_cursor_position=lambda: Point(x=0, y=controller.transcript.last_line),
-    )
-    # The transcript is the one greedy window: ``ignore_content_height`` lets it
-    # shrink to whatever space is left (scrolling internally) so it fills the slack
-    # and keeps the input + footer pinned to the bottom, however tall the reply.
-    transcript_window = Window(transcript_control, wrap_lines=True, ignore_content_height=True)
-    input_window = Window(
-        input_control,
-        # ``dont_extend_height`` sizes the input strictly to what's typed (1 line,
-        # up to 8) so it never absorbs slack and drift up the screen.
-        height=Dimension(min=1, max=8),
-        dont_extend_height=True,
-        wrap_lines=True,
-        get_line_prefix=_input_prefix,
-    )
-    footer_window = Window(
-        FormattedTextControl(lambda: _footer_fragments(controller)),
-        height=1,
-        style="class:footer",
-    )
-    separator = Window(height=1, char="─", style="class:sep")
-    # A matching rule between the input and the footer so they don't crowd each other.
-    footer_rule = Window(height=1, char="─", style="class:sep")
-    # A blank line below the footer so it isn't glued to the terminal's bottom edge.
-    footer_margin = Window(height=1)
-
-    body = HSplit([transcript_window, separator, input_window, footer_rule, footer_window, footer_margin])
-    # Gutter columns on each side so text isn't glued to the terminal edge. The
-    # SURFACE background is applied here so the whole app sits on one known canvas
-    # (every window inherits it) — colours then render predictably regardless of
-    # the user's terminal theme.
-    padded = VSplit([Window(width=_H_PAD), body, Window(width=_H_PAD)], style=f"bg:{SURFACE}")
-    root = FloatContainer(
-        padded,
-        floats=[Float(xcursor=True, ycursor=True, content=CompletionsMenu(max_height=8, scroll_offset=1))],
-    )
-    app: Application[None] = Application(
-        layout=Layout(root, focused_element=input_window),
-        key_bindings=_global_key_bindings(controller),
-        style=_PTK_STYLE,
-        full_screen=True,
-        mouse_support=False,
-    )
-    controller.bind_app(app, input_buffer)
-    return app
+    def action_end_of_input(self) -> None:
+        """Ctrl+D: quit at an empty, idle prompt; otherwise the key goes to the input box."""
+        if self.chat_input.text or (self.controller is not None and self.controller.busy):
+            raise SkipAction()
+        if self.controller is None:
+            self.exit()
+        else:
+            self.controller.request_exit()
 
 
-# ---------------------------------------------------------------------------
-# Command
-# ---------------------------------------------------------------------------
-def chat_cmd(
-    agent: str | None = typer.Option(None, "--agent", "-a", help="Agent name or UUID"),
-    session_id: str | None = typer.Option(None, "--session", help="Resume a specific session by UUID"),
-    no_memory: bool = typer.Option(False, "--no-memory", help="Run stateless — do not load or persist memory"),
+async def run_chat(
+    *,
+    reg: AgentRegistry,
+    sm: SessionManager,
+    record: AgentRecord,
+    session: Session | None,
+    memory_off: bool,
+    mouse: bool | None,
+    notes: tuple[str, ...] = (),
+    console: Console | None = None,
 ) -> None:
-    """Start an interactive REPL with a card-configured agent."""
+    """Run the chat session with ``record`` until the user quits.
 
-    async def _chat() -> None:
-        reg = AgentRegistry(ARCANA_HOME / "agents")
+    ``session`` is a loaded session of ``record``'s to resume; ``None`` starts
+    a new one. ``mouse`` is passed to
+    :meth:`~arcana_cli.tui.app.ArcanaApp.run_inline` (``None`` reads
+    ``ui.mouse``). ``notes`` (Rich markup) open the transcript under the header.
+    The transcript replay and then the resume hint print to ``console``.
 
-        # With --agent, chat opens with that agent. Without one, The World
-        # resolves a default agent to open the session (the opening task carries
-        # no text, so only default resolution applies); if it can't decide, the
-        # user is asked to name one. /switch re-resolves an agent mid-session.
-        record: AgentRecord | None
-        if agent:
-            record = find_agent(agent, reg)
-            if record is None:
-                console.print(err(f"No agent '{agent}'."))
-                raise typer.Exit(1)
-        else:
-            # The user ran `arcana chat`, so the routing (and the session it
-            # opens) is user-triggered even though The World picks the agent.
-            try:
-                decision = await build_world_engine(reg).route("", trigger_origin=SessionTrigger.USER)
-            except NoRouteAskUser as exc:
-                console.print(err("The World couldn't pick an agent. Start the chat with --agent <name>."))
-                raise typer.Exit(1) from exc
-            record = reg.get(decision.resolved_agent_id) if decision.resolved_agent_id else None
-            if record is None:
-                console.print(err("The routed agent could not be loaded."))
-                raise typer.Exit(1)
-            console.print(dim(f"The World opened this chat with {record.name}."))
-
-        if not record.model:
-            console.print(
-                err(
-                    f"No model configured for agent '{record.name}'. "
-                    f"Run: arcana agent edit {record.name} --model <provider/model_id>"
-                )
-            )
-            raise typer.Exit(1)
-
-        sm = SessionManager(ARCANA_HOME / "agents")
-        if session_id:
-            try:
-                sid = UUID(session_id)
-            except ValueError as e:
-                console.print(err(f"Invalid session id: '{session_id}'"))
-                raise typer.Exit(1) from e
-            session = sm.load(record.id, sid)
-            if session is None:
-                console.print(err(f"Session '{session_id}' not found for agent '{record.name}'."))
-                raise typer.Exit(1)
-        else:
-            session = sm.start(record.id)
-
-        store = ConnectionStore(ARCANA_HOME / "connections" / "models.json")
-        memory_off = no_memory
-
+    A crash inside the app still closes the session and the federation; it
+    then exits with :data:`~arcana_cli._render.EXIT_ERROR` after Textual has
+    restored the terminal and printed the traceback.
+    """
+    out = console if console is not None else Console()
+    session = session if session is not None else sm.start(record.id)
+    app = ChatApp()
+    federation: MemoryFederation | None = None
+    controller: _ChatController | None = None
+    store = ConnectionStore(ARCANA_HOME / "connections" / "models.json")
+    try:
         async with ModelGateway(connections=store) as gw:
             runtime_agent, federation = await build_session_runtime(reg, record, gw, sm, no_memory=memory_off)
             controller = _ChatController(
+                renderer=TextualRenderer(app),
                 reg=reg,
                 gw=gw,
                 sm=sm,
@@ -270,21 +124,18 @@ def chat_cmd(
                 federation=federation,
                 memory_off=memory_off,
             )
-            controller.append_header()
-            for block in _replay_blocks(session, record.name, controller.accent):
-                controller.transcript.append(block)
-
-            app = _build_app(controller)
-            try:
-                await app.run_async()
-            finally:
-                with contextlib.suppress(Exception):
-                    sm.close(controller.session)
-                if controller.federation is not None:
-                    await controller.federation.aclose()
-
-        console.print(
-            dim(f"session: {str(controller.session.id)[:8]}  ·  resume with  --session {controller.session.id}")
-        )
-
-    asyncio.run(_chat())
+            controller.open(notes=notes)
+            app.controller = controller
+            await app.run_inline(mouse=mouse, console=out)
+    finally:
+        # The controller swaps its session and federation on /fresh and /switch;
+        # close whichever are current.
+        if controller is not None:
+            session, federation = controller.session, controller.federation
+        with contextlib.suppress(Exception):
+            sm.close(session)
+        if federation is not None:
+            await federation.aclose()
+    out.print(dim(f"session: {str(session.id)[:8]}  ·  resume with  --session {session.id}"))
+    if app.return_code:
+        raise typer.Exit(EXIT_ERROR)

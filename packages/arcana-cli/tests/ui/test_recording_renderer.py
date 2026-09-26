@@ -84,3 +84,11 @@ async def test_status_and_stream_are_recorded():
         sink.write("there")
     assert r.statuses == ["working"]
     assert r.streamed == ["hi ", "there"]
+
+
+async def test_stream_with_render_emits_the_finished_block():
+    r = RecordingRenderer()
+    async with r.stream(prefix=Text("» "), render=lambda t: Text(t.upper())) as sink:
+        sink.write("hi")
+    assert r.streamed == ["hi"]
+    assert "HI" in r.text()

@@ -24,7 +24,7 @@ from rich.text import Text
 
 from arcana.types.card import Card
 from arcana_cli.ui.card_picker import select_card, select_cards
-from arcana_cli.ui.renderer.port import Choice, JsonAble, Question, StreamSink
+from arcana_cli.ui.renderer.port import Choice, JsonAble, Question, StreamRender, StreamSink
 from arcana_cli.ui.theme import err, eyebrow
 
 if sys.platform != "win32":
@@ -265,7 +265,10 @@ class TtyRenderer:
             yield
 
     @asynccontextmanager
-    async def stream(self, prefix: RenderableType | None = None) -> AsyncGenerator[StreamSink]:
+    async def stream(
+        self, prefix: RenderableType | None = None, *, render: StreamRender | None = None
+    ) -> AsyncGenerator[StreamSink]:
+        """Write each chunk as it comes; a line terminal can't redraw what it wrote, so ``render`` is unused."""
         if prefix is not None:
             self._console.print(prefix, end="")
         sink = _FileSink(self._console.file)

@@ -1,4 +1,8 @@
-"""Arcana OS CLI — entry point."""
+"""Arcana OS CLI — entry point.
+
+``arcana`` with no command opens the interactive session, exactly as ``arcana
+chat`` does (The World picks the agent); ``arcana --help`` lists the commands.
+"""
 
 import typer
 from rich.console import Console
@@ -7,8 +11,7 @@ from arcana_cli.commands import agent, cards, chat, mcp, memory, providers, run,
 
 app = typer.Typer(
     name="arcana",
-    help="Arcana OS — The OS that gives your agents a soul.",
-    no_args_is_help=True,
+    help="Arcana OS — The OS that gives your agents a soul. Run with no command to open a chat session.",
     rich_markup_mode="rich",
 )
 console = Console()
@@ -26,6 +29,16 @@ app.command(name="run")(run.run_cmd)
 app.command(name="chat")(chat.chat_cmd)
 app.command(name="init")(run.init_cmd)
 app.command(name="status")(run.status_cmd)
+
+
+@app.callback(invoke_without_command=True)
+def main(
+    ctx: typer.Context,
+    no_mouse: bool = typer.Option(False, "--no-mouse", help=f"With no command: {chat.NO_MOUSE_HELP}"),
+) -> None:
+    if ctx.invoked_subcommand is None:
+        chat.open_chat(no_mouse=no_mouse)
+
 
 if __name__ == "__main__":
     app()

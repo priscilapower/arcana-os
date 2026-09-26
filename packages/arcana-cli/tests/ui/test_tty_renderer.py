@@ -297,6 +297,13 @@ async def test_stream_writes_chunks_then_a_newline():
     assert out.getvalue() == "» hello world\n"
 
 
+async def test_stream_writes_raw_chunks_even_with_a_render():
+    r, out = _renderer()
+    async with r.stream(render=lambda t: Text(t.upper())) as sink:
+        sink.write("hello")
+    assert out.getvalue() == "hello\n"
+
+
 # ── blocking reads off the loop ───────────────────────────────────────────
 
 
