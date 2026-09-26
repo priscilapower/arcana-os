@@ -3,9 +3,15 @@
 The core :mod:`arcana.auth` module is deliberately UI-agnostic — it knows how to
 talk to authorization servers but not how to open a browser or print a code.
 This module supplies that missing half: it drives the loopback / device flows,
-renders the user-facing prompts with Rich, and hands back the resulting
-:class:`OAuthToken` plus the :class:`OAuthConfig` (with the resolved
-``client_id`` filled in) for the caller to persist.
+shows the user what to do through the :class:`~arcana_cli.ui.renderer.Renderer`
+it is handed (a wait dialog in the session, printed lines at a terminal), and
+hands back the resulting :class:`OAuthToken` plus the :class:`OAuthConfig`
+(with the resolved ``client_id`` filled in) for the caller to persist.
+
+The flows run on the caller's event loop: the loopback listener is an asyncio
+server bound to ``127.0.0.1`` and the device grant polls with ``asyncio.sleep``,
+so cancelling the sign-in (Esc on the wait dialog, Ctrl+C) closes the listener
+and stops the polling. Nothing here writes to the terminal directly.
 
 Everything network-facing goes through an injectable ``client_factory`` so tests
 drive a fake authorization server without a real browser, socket, or network.
@@ -15,7 +21,10 @@ import webbrowser
 from collections.abc import Callable
 
 import httpx
-from rich.console import Console
+import typer
+from rich.console import Group, RenderableType
+from rich.markup import escape
+from rich.text import Text
 
 from arcana.auth import (
     DeviceAuthResponse,
@@ -23,7 +32,8 @@ from arcana.auth import (
     ProtectedResourceMetadata,
 )
 from arcana.types.auth import OAuthConfig, OAuthToken
-from arcana_cli.ui.theme import dim, hl, ok
+from arcana_cli.ui.renderer import Renderer, WaitHandle
+from arcana_cli.ui.theme import dim, err, hl, ok
 
 OAuthClientFactory = Callable[[], OAuthClient]
 
@@ -31,61 +41,97 @@ OAuthClientFactory = Callable[[], OAuthClient]
 # server's origin when probing whether a target advertises OAuth.
 _PRM_WELL_KNOWN = "/.well-known/oauth-protected-resource"
 
+#: The title of the wait shown while the user signs in.
+SIGN_IN_TITLE = "Sign in"
+#: The in-progress line of that wait.
+WAITING_FOR_AUTHORIZATION = "Waiting for authorization…"
 
-def _browser_opener(console: Console) -> Callable[[str], None]:
+
+def _browser_instructions(url: str) -> RenderableType:
+    return Group(
+        Text.from_markup(dim("  Opening your browser to complete sign-in…")),
+        Text.from_markup(dim(f"  If it doesn't open, visit:\n  {escape(url)}")),
+    )
+
+
+def _device_instructions(device: DeviceAuthResponse) -> RenderableType:
+    lines = [
+        Text.from_markup(f"\n  {hl('To sign in:')} open [bold]{escape(device.verification_uri)}[/]"),
+        Text.from_markup(f"  {hl('Enter code:')} [bold]{escape(device.user_code)}[/]"),
+    ]
+    if device.verification_uri_complete:
+        lines.append(Text.from_markup(dim(f"  (or open {escape(device.verification_uri_complete)} directly)")))
+    return Group(*lines)
+
+
+def _browser_opener(wait: WaitHandle) -> Callable[[str], None]:
     def _open(url: str) -> None:
-        console.print(dim("  Opening your browser to complete sign-in…"))
-        console.print(dim(f"  If it doesn't open, visit:\n  {url}"))
+        wait.show(_browser_instructions(url))
         try:
             webbrowser.open(url)
         except Exception:
-            # A headless host may have no browser; the printed URL is the fallback.
+            # A headless host may have no browser; the URL shown is the fallback.
             pass
 
     return _open
 
 
-def _device_notifier(console: Console) -> Callable[[DeviceAuthResponse], None]:
+def _device_notifier(wait: WaitHandle) -> Callable[[DeviceAuthResponse], None]:
     def _notify(device: DeviceAuthResponse) -> None:
-        target = device.verification_uri_complete or device.verification_uri
-        console.print(f"\n  {hl('To sign in:')} open [bold]{device.verification_uri}[/]")
-        console.print(f"  {hl('Enter code:')} [bold]{device.user_code}[/]")
-        if device.verification_uri_complete:
-            console.print(dim(f"  (or open {target} directly)"))
-        console.print(dim("  Waiting for authorization…"))
+        wait.show(_device_instructions(device))
 
     return _notify
 
 
 async def sign_in(
+    r: Renderer,
     config: OAuthConfig,
     *,
     device: bool,
-    console: Console,
-    client_factory: OAuthClientFactory = OAuthClient,
+    client_factory: OAuthClientFactory | None = None,
 ) -> tuple[OAuthToken, OAuthConfig]:
     """Run the interactive OAuth flow and return ``(token, resolved_config)``.
 
     Discovers the authorization server, dynamically registers a client when none
     is pre-provisioned, then runs the loopback authorization-code flow (or the
-    device grant when ``device`` is set). The returned config carries the
-    resolved ``client_id`` so a later refresh has what it needs.
+    device grant when ``device`` is set) inside a :meth:`Renderer.waiting` block
+    showing the URL or code. The returned config carries the resolved
+    ``client_id`` so a later refresh has what it needs. The token is returned,
+    never shown. A wait the user calls off raises :class:`typer.Abort`.
+    ``client_factory`` defaults to :class:`OAuthClient`.
     """
-    async with client_factory() as client:
+    async with (client_factory or OAuthClient)() as client:
         metadata = await client.discover_auth_server(config)
         client_id = config.client_id
         if not client_id:
             registration = await client.register_client(metadata, config.scopes)
             client_id = registration.client_id
         scopes = config.scopes or metadata.scopes_supported
-        if device:
-            token = await client.authorize_device(metadata, client_id, scopes, notify=_device_notifier(console))
-        else:
-            token = await client.authorize_code(metadata, client_id, scopes, open_browser=_browser_opener(console))
+        async with r.waiting(WAITING_FOR_AUTHORIZATION, title=SIGN_IN_TITLE) as wait:
+            if device:
+                token = await client.authorize_device(metadata, client_id, scopes, notify=_device_notifier(wait))
+            else:
+                token = await client.authorize_code(metadata, client_id, scopes, open_browser=_browser_opener(wait))
 
-    console.print(ok("Signed in — token stored in the OS keyring."))
+    r.note(ok("Signed in — token stored in the OS keyring."))
     resolved = config.model_copy(update={"client_id": client_id, "scopes": scopes})
     return token, resolved
+
+
+async def sign_in_or_exit(
+    r: Renderer, config: OAuthConfig, *, device: bool, code: int
+) -> tuple[OAuthToken, OAuthConfig]:
+    """:func:`sign_in`, turning a failed sign-in into an error note and ``typer.Exit(code)``.
+
+    A sign-in the user called off still raises :class:`typer.Abort`.
+    """
+    try:
+        return await sign_in(r, config, device=device)
+    except typer.Abort:
+        raise
+    except Exception as exc:
+        r.note(err(escape(f"OAuth sign-in failed: {exc}")))
+        raise typer.Exit(code) from exc
 
 
 async def probe_oauth(server_url: str, *, client_factory: OAuthClientFactory = OAuthClient) -> OAuthConfig | None:

@@ -8,10 +8,15 @@ is the :class:`~.controller._ChatController` it drives.
 :func:`run_chat` opens the session on the caller's event loop: the model
 gateway, the runtime agent and its memory, the app run inline, then the resume
 hint. Whatever happens inside the app, the session is closed, the memory
-federation is closed and the terminal is restored before it returns.
+federation is closed and the terminal is restored before it returns. While the
+app runs, a stdio MCP server's stderr goes to ``logs/mcp-stdio.log`` under
+``ARCANA_HOME`` instead of the terminal the app draws on.
 """
 
 import contextlib
+import os
+from collections.abc import Generator
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -23,6 +28,8 @@ from arcana.agents.session_manager import SessionManager
 from arcana.memory.federation import MemoryFederation
 from arcana.models.connection_store import ConnectionStore
 from arcana.models.gateway import ModelGateway
+from arcana.tools import MCPRegistry
+from arcana.tools.adapters.mcp import stdio_errlog
 from arcana.types.agent import Agent as AgentRecord
 from arcana.types.session import Session
 from arcana_cli._render import EXIT_ERROR
@@ -81,6 +88,30 @@ class ChatApp(ArcanaApp):
             self.controller.request_exit()
 
 
+#: Where a stdio MCP server's stderr goes while the session runs, relative to ``ARCANA_HOME``.
+STDIO_ERRLOG = Path("logs") / "mcp-stdio.log"
+
+
+@contextlib.contextmanager
+def _stdio_errlog_to(path: Path) -> Generator[None]:
+    """Send stdio MCP servers' stderr to ``path`` for the block (appending), off the terminal.
+
+    If the log can't be opened the servers' stderr is dropped rather than
+    written over the screen.
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        sink = path.open("a", encoding="utf-8")
+    except OSError:
+        sink = Path(os.devnull).open("w", encoding="utf-8")
+    with sink:
+        token = stdio_errlog.set(sink)
+        try:
+            yield
+        finally:
+            stdio_errlog.reset(token)
+
+
 async def run_chat(
     *,
     reg: AgentRegistry,
@@ -110,9 +141,13 @@ async def run_chat(
     federation: MemoryFederation | None = None
     controller: _ChatController | None = None
     store = ConnectionStore(ARCANA_HOME / "connections" / "models.json")
+    tools = MCPRegistry(connections_file=ARCANA_HOME / "connections" / "mcps.json")
+    tools.load()
     try:
         async with ModelGateway(connections=store) as gw:
-            runtime_agent, federation = await build_session_runtime(reg, record, gw, sm, no_memory=memory_off)
+            runtime_agent, federation = await build_session_runtime(
+                reg, record, gw, sm, no_memory=memory_off, tool_registry=tools
+            )
             controller = _ChatController(
                 renderer=TextualRenderer(app),
                 reg=reg,
@@ -123,10 +158,13 @@ async def run_chat(
                 runtime_agent=runtime_agent,
                 federation=federation,
                 memory_off=memory_off,
+                connections=store,
+                tools=tools,
             )
             controller.open(notes=notes)
             app.controller = controller
-            await app.run_inline(mouse=mouse, console=out)
+            with _stdio_errlog_to(ARCANA_HOME / STDIO_ERRLOG):
+                await app.run_inline(mouse=mouse, console=out)
     finally:
         # The controller swaps its session and federation on /fresh and /switch;
         # close whichever are current.

@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from arcana.tools.adapters.mcp import MCPToolAdapter
 from arcana.tools.registry import MCPRegistry
 from arcana.types.tool import (
@@ -302,6 +304,34 @@ def test_remove_server_removes_from_disk(tmp_path):
     data = json.loads(reg.connections_file.read_text())
     names = [s["name"] for s in data["servers"]]
     assert "notion-mcp" not in names
+
+
+def test_without_leaves_servers_out_of_a_read_only_view(tmp_path):
+    reg = _make_registry(tmp_path)
+    reg.load()
+    reg.register_server(_connected_server("keep", "tool_a"))
+    reg.register_server(_connected_server("drop", "tool_b"))
+
+    view = reg.without({"drop"})
+
+    assert [s.name for s in view.list_servers()] == ["keep"]
+    subs = [ToolSubscription(qualified_name="drop/tool_b"), ToolSubscription(qualified_name="keep/tool_a")]
+    assert [t.name for t in view.resolve(subs)] == ["tool_a"]
+    assert {s.name for s in reg.list_servers()} == {"keep", "drop"}  # the source is untouched
+
+
+def test_a_read_only_view_refuses_to_save(tmp_path):
+    reg = _make_registry(tmp_path)
+    reg.load()
+    reg.register_server(_connected_server("keep", "tool_a"))
+    reg.register_server(_connected_server("drop", "tool_b"))
+    view = reg.without({"drop"})
+
+    with pytest.raises(RuntimeError, match="read-only"):
+        view.register_server(_connected_server("other", "tool_c"))
+
+    on_disk = [s["name"] for s in json.loads(reg.connections_file.read_text())["servers"]]
+    assert on_disk == ["keep", "drop"]
 
 
 def test_list_servers_returns_registered_servers(tmp_path):

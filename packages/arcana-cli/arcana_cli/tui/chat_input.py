@@ -17,7 +17,8 @@ Keys:
 * A bracketed paste of four lines or more shows as ``[pasted N lines]``; the
   full text is restored on submit. Ctrl+Z undoes a paste in one step.
 * A leading ``/`` pops the completion menu while typing; ``/switch <tail>``
-  completes agent names. Tab / Down step forward through it and Shift+Tab / Up
+  completes agent names and ``/agent`` / ``/providers`` / ``/mcp`` their
+  sub-actions. Tab / Down step forward through it and Shift+Tab / Up
   back, inserting the highlighted item; Esc closes it and restores the text.
 * Up on the first row and Down on the last walk the agent's history, keeping
   the draft. Recalled text never pops the menu. The ghost suggestion comes from
@@ -38,7 +39,7 @@ Implementation notes carried from Textual's internals:
   (history recall, search preview, clearing) or run through :meth:`ChatInput._replace_quietly`.
 """
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from rich.cells import cell_len
@@ -57,7 +58,13 @@ from textual.widgets.text_area import Edit, EditResult, Location
 
 from arcana_cli.tui.completion import slash_completions
 from arcana_cli.tui.history import AgentHistory, HistoryCursor
-from arcana_cli.ui.input_model import _SLASH_NAMES, _PasteRegistry, _should_collapse_paste, _submits_on_enter
+from arcana_cli.ui.input_model import (
+    _SLASH_NAMES,
+    _SLASH_SUBCOMMANDS,
+    _PasteRegistry,
+    _should_collapse_paste,
+    _submits_on_enter,
+)
 
 #: Shown before the first line of the input.
 PROMPT = "You › "
@@ -75,6 +82,10 @@ MENU_ROWS = 8
 
 def _no_agents() -> Iterable[str]:
     return ()
+
+
+def _keep_everything(_raw: str) -> bool:
+    return True
 
 
 def _normalize_newlines(text: str) -> str:
@@ -161,7 +172,9 @@ class ChatInput(TextArea):
     ``history`` is the agent's input history (in-memory if omitted); swap it
     with :meth:`set_history`. ``pastes`` holds the collapsed pastes of the
     message being typed. ``agent_names`` supplies the ``/switch`` completions;
-    ``commands`` the slash-command names.
+    ``commands`` the slash-command names and ``subcommands`` the sub-actions of
+    those that take one. ``keep_in_history`` decides whether a submission is
+    recorded in the history (a line carrying a secret isn't).
     """
 
     COMPONENT_CLASSES = TextArea.COMPONENT_CLASSES | {"chat-input--prompt", "chat-input--continuation"}
@@ -188,6 +201,8 @@ class ChatInput(TextArea):
         pastes: _PasteRegistry | None = None,
         agent_names: Callable[[], Iterable[str]] = _no_agents,
         commands: Sequence[str] = _SLASH_NAMES,
+        subcommands: Mapping[str, Sequence[str]] = _SLASH_SUBCOMMANDS,
+        keep_in_history: Callable[[str], bool] = _keep_everything,
         prompt: str = PROMPT,
         id: str | None = None,
     ) -> None:
@@ -204,6 +219,8 @@ class ChatInput(TextArea):
         self.pastes = pastes if pastes is not None else _PasteRegistry()
         self.agent_names = agent_names
         self.commands = commands
+        self.subcommands = subcommands
+        self.keep_in_history = keep_in_history
         #: While set, Enter keeps the text instead of submitting it.
         self.busy = False
         self.menu = CompletionMenu()
@@ -344,7 +361,8 @@ class ChatInput(TextArea):
             return
         raw = self.text
         text = self.pastes.expand(raw)
-        self.recall.append(raw)
+        if self.keep_in_history(raw):
+            self.recall.append(raw)
         self.pastes.clear()
         self._cursor.reset()
         self.load_text("")
@@ -389,7 +407,7 @@ class ChatInput(TextArea):
     def _refresh_menu(self) -> None:
         """Recompute the menu from the text before the cursor, opening or closing it."""
         before = self._text_before_cursor()
-        found = slash_completions(before, self.commands, self.agent_names)
+        found = slash_completions(before, self.commands, self.agent_names, self.subcommands)
         word = before[found.start :]
         # A lone candidate that adds nothing isn't worth a menu.
         if not found.items or found.items == (word,):

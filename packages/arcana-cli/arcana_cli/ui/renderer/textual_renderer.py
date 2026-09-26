@@ -12,10 +12,15 @@ up front with a clear error instead of hanging.
 
 Every dialog is cancellable with Esc, and cancelling the worker awaiting it
 (Ctrl+C on a turn) takes the dialog down with it. A cancelled :meth:`confirm` answers no and
-a cancelled :meth:`select` picks nothing. A cancelled :meth:`ask` returns the
-question's default when there is one the validator accepts; otherwise there is
-no answer to give, and it raises :class:`typer.Abort`, the same cancellation the
-line-prompt adapter surfaces on Ctrl+C.
+a cancelled :meth:`select` picks nothing. A cancelled :meth:`ask` raises
+:class:`typer.Abort`, the same cancellation the line-prompt adapter surfaces on
+Ctrl+C, so Esc ends a wizard rather than walking it on through its defaults (an
+empty Enter is how a default is taken).
+
+A wait (:meth:`TextualRenderer.waiting`) is a :class:`~arcana_cli.tui.screens.WaitScreen`
+over the session showing what the user has to do; Esc on it raises
+:class:`typer.Abort` out of the waiting block, and nothing it showed reaches
+the transcript.
 
 Each answered question is echoed into the transcript as a one-line record. A
 secret answer never is: its record says ``(hidden)``, so the answer reaches the
@@ -40,7 +45,7 @@ from textual.worker import NoActiveWorker, get_current_worker  # pyright: ignore
 
 from arcana_cli.tui.app import ArcanaApp
 from arcana_cli.tui.card_picker import CardPickerScreen
-from arcana_cli.tui.screens import ConfirmScreen, MultiSelectScreen, PromptScreen, SelectScreen
+from arcana_cli.tui.screens import ConfirmScreen, MultiSelectScreen, PromptScreen, SelectScreen, WaitScreen
 from arcana_cli.ui.renderer.port import (
     Choice,
     JsonAble,
@@ -48,6 +53,7 @@ from arcana_cli.ui.renderer.port import (
     StatusHandle,
     StreamRender,
     StreamSink,
+    WaitHandle,
     initial_indexes,
 )
 from arcana_cli.ui.theme import ACCENT, TXT2
@@ -143,10 +149,7 @@ class TextualRenderer:
         _require_worker("ask")
         answer = await _wait_for_answer(self._app, PromptScreen(q))
         if answer is None:
-            default_ok = q.default is not None and (q.validator is None or q.validator(q.default) is None)
-            if q.default is None or not default_ok:
-                raise typer.Abort()
-            answer = q.default
+            raise typer.Abort()
         self._app.transcript.append(_record(q.prompt, HIDDEN_ANSWER if q.secret else answer))
         return answer
 
@@ -233,3 +236,47 @@ class TextualRenderer:
             yield _LiveSink(self._app)
         finally:
             self._app.transcript.append(self._app.live.close())
+
+    @asynccontextmanager
+    async def waiting(self, msg: str, *, title: str = "") -> AsyncGenerator[WaitHandle]:
+        """Show a :class:`~arcana_cli.tui.screens.WaitScreen` for the block; Esc on it raises :class:`typer.Abort`.
+
+        Esc cancels the task running the block, so whatever it awaits (a
+        loopback listener, a polling loop) unwinds through its own cleanup; the
+        cancellation is then turned into the abort. Any other cancellation (Ctrl+C
+        on the worker) passes through untouched. Either way the dialog comes down.
+        """
+        _require_worker("waiting")
+        task = asyncio.current_task()
+        if task is None:  # a worker always runs as a task; this narrows the type
+            raise RuntimeError("TextualRenderer.waiting needs a running task")
+        # Esc only cancels while the task is suspended inside the block, so the
+        # cancellation always lands there, never on whatever runs after it.
+        inside = False
+        called_off = False
+
+        def call_off() -> None:
+            nonlocal called_off
+            if inside and not called_off:
+                called_off = True
+                task.cancel()
+
+        screen = WaitScreen(msg, title=title, on_cancel=call_off)
+        try:
+            # Inside the try, so a cancellation that lands while the dialog is
+            # still being pushed takes it down too.
+            await self._app.push_screen(screen)
+            inside = True
+            yield screen
+        except asyncio.CancelledError:
+            if not called_off:
+                raise
+            task.uncancel()
+            raise typer.Abort() from None
+        finally:
+            inside = False
+            if self._app.screen is screen:
+                self._app.pop_screen()
+        if called_off:  # the block swallowed the cancellation; the wait was still called off
+            task.uncancel()
+            raise typer.Abort()

@@ -1,14 +1,18 @@
-"""The generic question dialogs: free text, yes/no, and a pick from a list.
+"""The generic dialogs: free text, yes/no, a pick from a list, and a wait on the user.
 
-Each is a :class:`~textual.screen.ModalScreen` whose dismiss value is the answer,
-so a caller awaits it with ``push_screen_wait``. Every dialog is cancellable:
-Esc dismisses it with its cancel value (``None``, or ``False`` for a yes/no), so
-an awaiting caller always gets an answer back.
+The question dialogs are :class:`~textual.screen.ModalScreen` dialogs whose dismiss
+value is the answer, so a caller awaits it with ``push_screen_wait``. Every one
+is cancellable: Esc dismisses it with its cancel value (``None``, or ``False``
+for a yes/no), so an awaiting caller always gets an answer back.
+
+:class:`WaitScreen` asks nothing: it shows what the user has to do outside the
+program while a command waits for it, and Esc calls the wait off.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
+from rich.console import RenderableType
 from rich.markup import escape
 from textual import on
 from textual.app import ComposeResult
@@ -19,7 +23,12 @@ from textual.widgets import Button, Input, OptionList, SelectionList, Static
 from textual.widgets.option_list import Option
 from textual.widgets.selection_list import Selection
 
+from arcana_cli.tui.widgets import StatusBar
 from arcana_cli.ui.renderer.port import Choice, Question
+
+#: How a wait dialog tells the user to copy what it shows: the app captures the
+#: mouse, so a plain drag doesn't select terminal text.
+COPY_HINT = "Shift-drag (Option-drag in iTerm2) to select and copy · Esc to cancel"
 
 
 class PromptScreen(ModalScreen[str | None]):
@@ -187,3 +196,42 @@ class MultiSelectScreen(ModalScreen[list[int] | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+class WaitScreen(ModalScreen[None]):
+    """What the user has to do outside the program (open a URL, enter a code), with a spinner, while a command waits.
+
+    Pushed with ``push_screen`` rather than awaited: the waiting command fills
+    it with :meth:`show` and takes it down when the wait ends. Esc calls
+    ``on_cancel``, which is how the command learns the user called the wait off.
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
+
+    def __init__(self, msg: str, *, title: str = "", on_cancel: Callable[[], None]) -> None:
+        super().__init__()
+        self._msg = msg
+        self._title = title or "Waiting"
+        self._on_cancel = on_cancel
+        #: What the dialog shows the user now (``None`` before the first :meth:`show`).
+        self.shown: RenderableType | None = None
+        self._instructions = Static("", id="instructions")
+        self._spinner = StatusBar(id="waiting")
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="dialog"):
+            yield Static(escape(self._title), classes="dialog-title")
+            yield self._instructions
+            yield self._spinner
+            yield Static(COPY_HINT, classes="dialog-hint")
+
+    def on_mount(self) -> None:
+        self._spinner.push(escape(self._msg))
+
+    def show(self, renderable: RenderableType) -> None:
+        """Replace the instructions with ``renderable``."""
+        self.shown = renderable
+        self._instructions.update(renderable)
+
+    def action_cancel(self) -> None:
+        self._on_cancel()

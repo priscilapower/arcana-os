@@ -16,7 +16,16 @@ from pydantic import BaseModel
 from rich.console import Console, RenderableType
 
 from arcana_cli._render import emit_json
-from arcana_cli.ui.renderer.port import Choice, JsonAble, Question, StatusHandle, StreamRender, refuse
+from arcana_cli.ui.renderer.port import (
+    Choice,
+    JsonAble,
+    PrintedWait,
+    Question,
+    StatusHandle,
+    StreamRender,
+    WaitHandle,
+    refuse,
+)
 
 T = TypeVar("T")
 
@@ -111,3 +120,8 @@ class JsonRenderer:
         usage error before it gets here.
         """
         raise TypeError("JsonRenderer has no stream; collect the output and emit it as one JSON document")
+
+    @asynccontextmanager
+    async def waiting(self, msg: str, *, title: str = "") -> AsyncGenerator[WaitHandle]:
+        """The instructions go to stderr, like a note, so stdout carries only JSON documents."""
+        yield PrintedWait(self._stderr, msg)

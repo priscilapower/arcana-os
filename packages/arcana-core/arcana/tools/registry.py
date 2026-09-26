@@ -16,6 +16,7 @@ into ToolDefinitions, filtered by model capability.
 """
 
 import json
+from collections.abc import Collection
 from functools import lru_cache
 from pathlib import Path
 
@@ -50,6 +51,7 @@ class MCPRegistry:
         self._servers: dict[str, MCPServerConfig] = {}
         self._builtins: dict[str, ToolDefinition] = {}
         self._loaded = False
+        self._read_only = False
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -73,7 +75,12 @@ class MCPRegistry:
         a server last seen ``connected`` reloads resolvable, without paying a
         connect cost just to see its tools. Auth material lives only in the
         keyring (``auth_key_ref`` is a reference, never the token).
+
+        A read-only view (see :meth:`without`) refuses: it leaves servers out,
+        so writing it would delete them from disk.
         """
+        if self._read_only:
+            raise RuntimeError("a read-only registry view can't be saved")
         self.connections_file.parent.mkdir(parents=True, exist_ok=True)
         data = {"servers": [s.model_dump() for s in self._servers.values()]}
         self.connections_file.write_text(json.dumps(data, indent=2))
@@ -90,6 +97,23 @@ class MCPRegistry:
     def remove_server(self, name: str) -> None:
         self._servers.pop(name, None)
         self.save()
+
+    def without(self, names: Collection[str]) -> "MCPRegistry":
+        """A read-only copy of this registry that leaves out the servers ``names``.
+
+        Tools resolve against it as they would against this registry, minus the
+        servers left out; it can't be saved (see :meth:`save`), and changing it
+        never touches this registry.
+        """
+        self._ensure_loaded()
+        view = MCPRegistry(self.connections_file)
+        view._register_builtins()
+        view._servers = {
+            name: server.model_copy(deep=True) for name, server in self._servers.items() if name not in names
+        }
+        view._loaded = True
+        view._read_only = True
+        return view
 
     # ------------------------------------------------------------------
     # Lookup

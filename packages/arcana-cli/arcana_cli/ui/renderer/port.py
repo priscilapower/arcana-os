@@ -3,8 +3,10 @@
 A command body is a coroutine that takes a :class:`Renderer` and never touches
 the terminal directly: output goes through :meth:`Renderer.emit`, side remarks
 about the run through :meth:`Renderer.note`, questions through
-:meth:`Renderer.ask` / :meth:`Renderer.confirm` / :meth:`Renderer.select`, and
-progress through :meth:`Renderer.status` / :meth:`Renderer.stream`. Which
+:meth:`Renderer.ask` / :meth:`Renderer.confirm` / :meth:`Renderer.select`,
+progress through :meth:`Renderer.status` / :meth:`Renderer.stream`, and a wait
+on the user acting outside the program (a browser sign-in) through
+:meth:`Renderer.waiting`. Which
 adapter it receives decides where that lands (a Rich console with line prompts,
 or the ``--json`` stream that never prompts), so one command body serves every
 surface.
@@ -142,6 +144,37 @@ class StatusHandle(Protocol):
         ...
 
 
+class WaitHandle(Protocol):
+    """The value of a :meth:`Renderer.waiting` block."""
+
+    def show(self, renderable: RenderableType) -> None:
+        """Put ``renderable`` (what the user has to do: a URL to open, a code to enter) in front of the user.
+
+        A later call replaces what an earlier one showed on a surface that can
+        redraw, and follows it on one that can't.
+        """
+        ...
+
+
+class PrintedWait:
+    """A :class:`WaitHandle` for a surface that can't redraw: each shown block is printed to ``console``.
+
+    The wait's in-progress line follows the first block, once, so the user
+    reads what to do and then that the command is waiting on it.
+    """
+
+    def __init__(self, console: Console, msg: str) -> None:
+        self._console = console
+        self._msg = msg
+        self._shown = False
+
+    def show(self, renderable: RenderableType) -> None:
+        self._console.print(renderable)
+        if not self._shown:
+            self._shown = True
+            self._console.print(dim(f"  {escape(self._msg)}"))
+
+
 class Renderer(Protocol):
     """Where a command's output and questions go."""
 
@@ -226,6 +259,19 @@ class Renderer(Protocol):
         it can show a placeholder) and shows the result, and the finished block
         is ``render`` of the whole text. A block that received nothing finishes
         as its prefix alone. Without ``render`` the text is shown as it came.
+        """
+        ...
+
+    def waiting(self, msg: str, *, title: str = "") -> AbstractAsyncContextManager[WaitHandle]:
+        """Wait, for the duration of the block, on the user doing something outside the program.
+
+        ``msg`` is the in-progress line (e.g. "Waiting for authorization…") and
+        ``title`` names the wait; the block's value shows (:meth:`~WaitHandle.show`)
+        the instructions. The wait can be called off: a dialog cancelled with
+        Esc raises :class:`typer.Abort` out of the block (a line terminal's
+        Ctrl+C aborts the command as it always has). What is shown is output
+        about the run, not the command's result: it never lands on a ``--json``
+        stdout, and a dialog leaves nothing in the transcript.
         """
         ...
 

@@ -504,3 +504,18 @@ def test_end_of_input_at_a_terminal_is_still_an_abort(monkeypatch: pytest.Monkey
     assert result.exit_code == 1
     assert "needs an answer" not in result.output
     assert "Abort" in result.output
+
+
+# ── waiting ───────────────────────────────────────────────────────────────
+
+
+async def test_waiting_prints_each_instruction_and_the_wait_line_once():
+    r, out = _renderer()
+    async with r.waiting("Waiting for authorization…", title="Sign in") as wait:
+        wait.show(Text("open https://example.test/activate"))
+        wait.show(Text("code ABCD"))
+    assert out.getvalue().splitlines() == [
+        "open https://example.test/activate",
+        "  Waiting for authorization…",
+        "code ABCD",
+    ]

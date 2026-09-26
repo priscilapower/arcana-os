@@ -7,12 +7,16 @@ The editor widget binds keys and completion onto these rules; keeping them here
 means the rules are defined once and testable without a toolkit.
 """
 
+from enum import StrEnum
+
 # Package-internal exports — the input rules the chat editor, controller, and
 # render module build on. Declared so the split doesn't read as dead code under
 # strict unused-symbol checks.
 __all__ = [
     "_SLASH_COMMANDS",
     "_SLASH_NAMES",
+    "_SLASH_SUBCOMMANDS",
+    "WizardGroup",
     "_PasteRegistry",
     "_should_collapse_paste",
     "_submits_on_enter",
@@ -30,9 +34,28 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/clear", "clear the screen (the session is kept)"),
     ("/fresh", "start a new session"),
     ("/no-memory", "start a new stateless session (memory off)"),
+    ("/agent create|edit|delete", "create, edit or delete an agent (same options as arcana agent …)"),
+    ("/providers add|edit|remove|login", "set up a model provider (same options as arcana providers …)"),
+    ("/mcp add|approve|remove", "connect an MCP server; its tools reach this session once approved"),
     ("/exit", "close the session and quit"),
 ]
 _SLASH_NAMES: list[str] = [name.split(" ")[0] for name, _ in _SLASH_COMMANDS]
+
+
+class WizardGroup(StrEnum):
+    """The slash commands that take a sub-action, each running ``arcana <group> <action>``."""
+
+    AGENT = "/agent"
+    PROVIDERS = "/providers"
+    MCP = "/mcp"
+
+
+# The sub-actions of each wizard command, for completion and dispatch.
+_SLASH_SUBCOMMANDS: dict[str, tuple[str, ...]] = {
+    WizardGroup.AGENT: ("create", "edit", "delete"),
+    WizardGroup.PROVIDERS: ("add", "edit", "remove", "login"),
+    WizardGroup.MCP: ("add", "approve", "remove"),
+}
 
 # A pasted chunk spanning at least this many lines is collapsed to a placeholder.
 _PASTE_COLLAPSE_MIN_LINES = 4
