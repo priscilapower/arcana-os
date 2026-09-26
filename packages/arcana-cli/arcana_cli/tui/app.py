@@ -133,7 +133,7 @@ class ArcanaApp(ArcanaBaseApp[None]):
         console and the default replay console both carry the Markdown theme, so
         a reply looks the same in the session and in scrollback.
         """
-        out = console if console is not None else Console(theme=MARKDOWN_THEME)
+        out = console if console is not None else replay_console()
         if sys.platform == "win32":
             _notice_fullscreen_once(out, ARCANA_HOME)
         try:
@@ -141,6 +141,15 @@ class ArcanaApp(ArcanaBaseApp[None]):
         finally:
             for block in replay_tail(self.transcript.retained, replay_limit):
                 out.print(block)
+
+
+def replay_console() -> Console:
+    """The stdout console a session's transcript is replayed to when it ends.
+
+    It carries the Markdown theme, as the app's own console does, so a reply
+    looks the same in the session and in scrollback.
+    """
+    return Console(theme=MARKDOWN_THEME)
 
 
 def _notice_fullscreen_once(console: Console, home: Path) -> None:

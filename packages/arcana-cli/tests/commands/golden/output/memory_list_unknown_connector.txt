@@ -1,0 +1,3 @@
+exit=2
+✗ No connector named 'ghost'.
+  See registered connectors: arcana memory adapters

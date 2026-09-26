@@ -5,9 +5,12 @@ at a line prompt would, and compares the transcript (typed answers included;
 hidden answers are never echoed) with a recording, so a diff here is a change
 in what a terminal shows. The scenarios also pin the fail-closed paths: piped
 input that runs out before a question, and ``--json`` never prompting.
+
+Set ``ARCANA_RECORD_GOLDENS=1`` to (re)record the files instead of comparing.
 """
 
 import logging
+import os
 import re
 from collections.abc import Callable
 from contextlib import ExitStack
@@ -37,6 +40,7 @@ runner = CliRunner()
 GOLDEN = Path(__file__).parent / "golden" / "prompts"
 # Pin the console width and keep colour off so the recorded output is stable.
 GOLDEN_ENV: dict[str, str | None] = {"COLUMNS": "100", "FORCE_COLOR": None, "TTY_COMPATIBLE": None}
+RECORD = os.environ.get("ARCANA_RECORD_GOLDENS") == "1"
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 #: The secrets typed at hidden prompts; a transcript must never contain one.
@@ -187,6 +191,8 @@ def transcript(w: World, scenario: Scenario) -> str:
 @pytest.mark.parametrize("name", sorted(SCENARIOS))
 def test_prompt_transcript_matches_golden(world: World, name: str):
     got = transcript(world, SCENARIOS[name])
+    if RECORD:
+        (GOLDEN / f"{name}.txt").write_text(got)
     assert got == (GOLDEN / f"{name}.txt").read_text()
 
 

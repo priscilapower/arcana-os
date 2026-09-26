@@ -1,0 +1,11 @@
+exit=0
+
+  Content:      the tea is oolong
+  ID:           <id>
+  Type:         semantic
+  Scope:        private
+  Importance:   0.50  (effective 0.50, decay ×1.00)
+  Confidence:   1.00  (agent)
+  Created:      <date>
+  Last read:    <date>  (0×)
+

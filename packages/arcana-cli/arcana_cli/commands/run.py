@@ -1,8 +1,8 @@
 """Top-level CLI commands: init, status, run.
 
 The command bodies (``init_home``, ``show_status``, ``run_turn``) are
-renderer-agnostic coroutines; the Typer callbacks pick the renderer and run
-them. ``arcana run`` keeps stdout for the reply alone — notes and the spinner go
+renderer-agnostic coroutines; the Typer callbacks pick the renderer (``--json``
+or not) and run them. ``arcana run`` keeps stdout for the reply alone — notes and the spinner go
 to stderr — so ``arcana run --stream … | cat`` is the tokens and nothing else,
 and ``--json`` prints exactly one JSON document.
 """
@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 import typer
-from rich.console import Console
+from rich.console import RenderableType
 
 from arcana.agents.agent import Agent as RuntimeAgent
 from arcana.agents.registry import AgentRegistry
@@ -40,7 +40,7 @@ from arcana.world import (
 from arcana_cli._async import run_async
 from arcana_cli._render import EXIT_ERROR
 from arcana_cli.constants import ARCANA_HOME
-from arcana_cli.ui.renderer import Renderer, renderer_for
+from arcana_cli.ui.renderer import Renderer, View, fail, renderer_for
 from arcana_cli.ui.theme import (
     ACCENT,
     GREEN,
@@ -48,14 +48,11 @@ from arcana_cli.ui.theme import (
     card_color,
     cmd,
     dim,
-    err,
     make_panel,
     make_panel_fit,
     make_table,
     warn,
 )
-
-console = Console()
 
 
 class AmbiguousAgentError(ValueError):
@@ -86,15 +83,12 @@ def resolve_agent(name_or_id: str, reg: AgentRegistry) -> AgentRecord | None:
     return matches[0] if matches else None
 
 
-def find_agent(name_or_id: str, reg: AgentRegistry) -> AgentRecord | None:
-    """:func:`resolve_agent`, printing an ambiguous name's IDs and exiting 1 instead of raising."""
+def find_agent(r: Renderer, name_or_id: str, reg: AgentRegistry) -> AgentRecord | None:
+    """:func:`resolve_agent`, failing through ``r`` with an ambiguous name's IDs instead of raising."""
     try:
         return resolve_agent(name_or_id, reg)
     except AmbiguousAgentError as exc:
-        console.print(err(exc.headline))
-        for i in exc.ids:
-            console.print(f"  {i}")
-        raise typer.Exit(EXIT_ERROR) from exc
+        fail(r, exc.headline, *(f"  {i}" for i in exc.ids))
 
 
 def build_world_engine(
@@ -236,27 +230,25 @@ def _write_home() -> None:
 async def init_home(r: Renderer) -> None:
     """Create ``~/.arcana`` and its defaults; a no-op when it already exists."""
     if ARCANA_HOME.exists():
-        r.emit(warn("~/.arcana already exists. Nothing to do."))
-        raise typer.Exit()
+        r.emit(View(warn("~/.arcana already exists. Nothing to do."), {"home": str(ARCANA_HOME), "created": False}))
+        return
 
     async with r.status(f"[bold {GREEN}]Initialising Arcana OS...[/]"):
         _write_home()
 
-    r.emit(
-        make_panel_fit(
-            f"[bold {GREEN}]Arcana OS initialised.[/]\n\n"
-            f"Home: [{ACCENT}]{ARCANA_HOME}[/]\n\n"
-            f"Next step: {cmd('arcana connect model')}",
-            title="Arcana OS",
-        )
+    panel = make_panel_fit(
+        f"[bold {GREEN}]Arcana OS initialised.[/]\n\n"
+        f"Home: [{ACCENT}]{ARCANA_HOME}[/]\n\n"
+        f"Next step: {cmd('arcana connect model')}",
+        title="Arcana OS",
     )
+    r.emit(View(panel, {"home": str(ARCANA_HOME), "created": True}))
 
 
 async def show_status(r: Renderer) -> None:
     """Show the home directory and how many agents and model connections it holds."""
     if not ARCANA_HOME.exists():
-        r.emit(err("Arcana not initialised. Run: arcana init"))
-        raise typer.Exit(EXIT_ERROR)
+        fail(r, "Arcana not initialised. Run: arcana init")
 
     agent_count = len(AgentRegistry(ARCANA_HOME / "agents").list())
     conn_count = len(ConnectionStore(ARCANA_HOME / "connections" / "models.json").all())
@@ -268,17 +260,17 @@ async def show_status(r: Renderer) -> None:
     table.add_row("Agents", str(agent_count))
     table.add_row("Connections", str(conn_count))
 
-    r.emit(table)
+    r.emit(View(table, {"home": str(ARCANA_HOME), "agents": agent_count, "connections": conn_count}))
 
 
-def init_cmd() -> None:
+def init_cmd(json_: bool = typer.Option(False, "--json", help="Emit JSON")) -> None:
     """Initialise Arcana OS — creates ~/.arcana/ and sets up The World."""
-    run_async(init_home(renderer_for(json=False)))
+    run_async(init_home(renderer_for(json_)))
 
 
-def status_cmd() -> None:
+def status_cmd(json_: bool = typer.Option(False, "--json", help="Emit JSON")) -> None:
     """Show full system status — agents, connections, The World."""
-    run_async(show_status(renderer_for(json=False)))
+    run_async(show_status(renderer_for(json_)))
 
 
 class RunError(Exception):
@@ -296,7 +288,7 @@ class RunError(Exception):
 
 @dataclass(frozen=True)
 class TurnResult:
-    """What one ``arcana run`` turn produced."""
+    """What one ``arcana run`` turn produced: the reply panel, or the ``--json`` document."""
 
     agent: str
     card: Card
@@ -304,6 +296,9 @@ class TurnResult:
     response: str
     input_tokens: int = 0
     output_tokens: int = 0
+
+    def to_rich(self) -> RenderableType:
+        return make_panel(self.response, card=self.card)
 
     def to_json(self) -> dict[str, object]:
         """The ``--json`` document; ``usage`` appears only when the model reported token counts."""
@@ -423,14 +418,10 @@ def run_cmd(
             )
         )
     except RunError as exc:
-        r.emit({"error": {"code": exc.code, "message": exc.message}} if json_ else err(exc.message))
-        raise typer.Exit(exc.code) from exc
+        fail(r, exc.message, code=exc.code)
 
-    if json_:
-        r.emit(result.to_json())
-        return
     if not stream:
-        r.emit(make_panel(result.response, card=result.card))
+        r.emit(result)
     short_id = str(result.session_id)[:8]
     r.note(dim(f"session: {short_id}  ·  continue with  --session {result.session_id}  (or --continue)"))
 

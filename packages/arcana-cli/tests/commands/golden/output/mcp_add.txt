@@ -1,0 +1,15 @@
+exit=0
+✓ Connected 'notion-mcp' — 1 tool(s) discovered.
+
+  Name:      notion-mcp
+  Transport: sse
+  Endpoint:  https://a/sse
+  Status:    connected
+  Auth:      (none)
+
+           notion-mcp · tools           
+┏━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━┓
+┃ Tool         ┃ Status ┃ Description  ┃
+┡━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━┩
+│ search_pages │ active │ Search pages │
+└──────────────┴────────┴──────────────┘

@@ -1,0 +1,2 @@
+exit=1
+✗ The World couldn't pick an agent — name one with --agent <name>.

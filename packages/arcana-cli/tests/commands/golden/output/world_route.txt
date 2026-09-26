@@ -1,0 +1,12 @@
+exit=0
+  World — routing decision  
+┏━━━━━━━━━━━━━━━━┳━━━━━━━━━┓
+┃                ┃         ┃
+┡━━━━━━━━━━━━━━━━╇━━━━━━━━━┩
+│ Task           │ hello   │
+│ Resolved agent │ scout   │
+│ Layer          │ default │
+│ Candidates     │ 1       │
+│ Latency        │ <n> ms │
+└────────────────┴─────────┘
+dry run — no session was started.

@@ -1,4 +1,4 @@
-"""Output contract for the scriptable tool / MCP command groups.
+"""Output contract for the scriptable (``--json``) surface of every command.
 
 Human output is Rich tables (see :mod:`arcana_cli.ui.theme`); this module owns
 the two machine-facing halves of the contract that scripts — and, later, the
@@ -8,6 +8,7 @@ same way and fail with the same codes.
 """
 
 import json
+from collections.abc import Sequence
 from typing import Any
 
 # Uniform exit codes. A read command or a successful action returns OK; every
@@ -27,6 +28,19 @@ def emit_json(data: Any) -> None:
     from the core models without a bespoke encoder.
     """
     print(json.dumps(data, indent=2, default=str))
+
+
+def emit_error(code: int, message: str, details: Sequence[str] = ()) -> None:
+    """Print the JSON document a failed command leaves on stdout, instead of a result.
+
+    ``{"error": {"code": <exit code>, "message": "..."}}``, plus ``"details"``
+    (plain-text lines: the hints and candidates a terminal shows under the
+    error) when there are any. ``code`` is the exit status the command ends with.
+    """
+    error: dict[str, Any] = {"code": code, "message": message}
+    if details:
+        error["details"] = list(details)
+    emit_json({"error": error})
 
 
 def truncate(text: str, width: int = 60) -> str:

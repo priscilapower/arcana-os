@@ -36,7 +36,7 @@ from arcana_cli._render import EXIT_ERROR
 from arcana_cli.commands.chat.controller import _ChatController
 from arcana_cli.commands.run import build_session_runtime
 from arcana_cli.constants import ARCANA_HOME
-from arcana_cli.tui.app import ArcanaApp
+from arcana_cli.tui.app import ArcanaApp, replay_console
 from arcana_cli.tui.chat_input import ChatInput
 from arcana_cli.ui.renderer.textual_renderer import TextualRenderer
 from arcana_cli.ui.theme import dim
@@ -129,13 +129,14 @@ async def run_chat(
     a new one. ``mouse`` is passed to
     :meth:`~arcana_cli.tui.app.ArcanaApp.run_inline` (``None`` reads
     ``ui.mouse``). ``notes`` (Rich markup) open the transcript under the header.
-    The transcript replay and then the resume hint print to ``console``.
+    The transcript replay and then the resume hint print to ``console``
+    (default: :func:`~arcana_cli.tui.app.replay_console`, stdout).
 
     A crash inside the app still closes the session and the federation; it
     then exits with :data:`~arcana_cli._render.EXIT_ERROR` after Textual has
     restored the terminal and printed the traceback.
     """
-    out = console if console is not None else Console()
+    out = console if console is not None else replay_console()
     session = session if session is not None else sm.start(record.id)
     app = ChatApp()
     federation: MemoryFederation | None = None

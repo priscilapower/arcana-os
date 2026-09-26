@@ -20,7 +20,7 @@ from arcana_cli.tui.app import ArcanaApp
 from arcana_cli.tui.card_picker import CardPickerScreen
 from arcana_cli.tui.screens import ConfirmScreen, MultiSelectScreen, PromptScreen, SelectScreen, WaitScreen
 from arcana_cli.ui.card_picker import card_choices
-from arcana_cli.ui.renderer import JsonRenderer, Question, Renderer, TtyRenderer, renderer_for
+from arcana_cli.ui.renderer import Failure, JsonRenderer, Question, Renderer, TtyRenderer, Verbatim, View, renderer_for
 from arcana_cli.ui.renderer.port import Choice
 from arcana_cli.ui.renderer.textual_renderer import HIDDEN_ANSWER, TextualRenderer
 from arcana_cli.ui.theme import ok
@@ -68,6 +68,25 @@ async def test_emit_pretty_prints_json_data(tui):
         text = h.retained_text()
         assert "'k': 1" in text
         assert "'name': 'hermit'" in text
+
+
+async def test_emit_presentable_shows_its_human_view(tui):
+    async with tui() as h:
+        h.renderer.emit(View(ok("Saved"), {"secret_json_only": True}))
+        h.renderer.emit(View(Verbatim("# [bold]doc[/]"), {}))
+        await h.pilot.pause()
+        text = h.retained_text()
+        assert "✓ Saved" in text
+        assert "secret_json_only" not in text
+        assert "# [bold]doc[/]" in text
+
+
+async def test_error_is_a_transcript_block(tui):
+    async with tui() as h:
+        h.renderer.error(Failure("No agent 'ghost'.", ("  Run: arcana agent list",)))
+        await h.pilot.pause()
+        assert "✗ No agent 'ghost'." in h.retained_text()
+        assert "Run: arcana agent list" in h.retained_text()
 
 
 # ── confirm ───────────────────────────────────────────────────────────────

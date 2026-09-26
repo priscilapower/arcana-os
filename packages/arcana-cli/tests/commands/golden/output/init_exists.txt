@@ -1,0 +1,2 @@
+exit=0
+~/.arcana already exists. Nothing to do.

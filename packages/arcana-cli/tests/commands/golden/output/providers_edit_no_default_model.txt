@@ -1,0 +1,5 @@
+exit=0
+
+✓ Connection 'bare' updated.
+  Skipping health check — no default model configured.
+

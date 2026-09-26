@@ -1,0 +1,2 @@
+exit=1
+✗ --connector reads an external source; don't combine it with --agent/--pool/--scope.

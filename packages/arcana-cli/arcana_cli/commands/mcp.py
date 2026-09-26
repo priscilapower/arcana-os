@@ -4,22 +4,24 @@ Every command is a thin wrapper over :class:`MCPRegistry`: parse, call one core
 service, render. Secrets live only in the OS keyring — an ``mcps.json`` entry
 keeps a reference, never a token, and no command echoes one.
 
-``add``, ``approve``, ``remove`` and ``login`` are renderer-agnostic coroutines
-(``add_server``, ``approve_server``, ``remove_server``, ``login_server``): their
-output, their errors (as notes, off a ``--json`` stdout) and their questions (a
-bearer token, a removal confirmation, an OAuth sign-in's instructions) go
-through the :class:`~arcana_cli.ui.renderer.Renderer` they are handed, so under
-``--json`` a question fails closed naming the flag that answers it instead of
-blocking on stdin.
+Every command body is a renderer-agnostic coroutine (``list_servers``,
+``show_server``, ``refresh_server``, ``add_server``, ``login_server``,
+``approve_server``, ``remove_server``): its result is a
+:class:`~arcana_cli.ui.renderer.Presentable` (a Rich view and the ``--json``
+document of the same data), its errors go through
+:func:`~arcana_cli.ui.renderer.fail` and its questions (a bearer token, a
+removal confirmation, an OAuth sign-in's instructions) through the
+:class:`~arcana_cli.ui.renderer.Renderer` it is handed, so under ``--json`` a
+question fails closed naming the flag that answers it instead of blocking on stdin.
 """
 
 import re
 from dataclasses import dataclass
-from typing import Any, NoReturn
+from typing import Any
 
 import keyring
 import typer
-from rich.console import Console
+from rich.console import RenderableType
 from rich.table import Table
 
 from arcana.agents.registry import AgentRegistry
@@ -35,15 +37,14 @@ from arcana.types.tool import (
 )
 from arcana_cli._async import run_async
 from arcana_cli._oauth import probe_oauth, sign_in_or_exit
-from arcana_cli._render import EXIT_ERROR, EXIT_NOT_FOUND, emit_json, truncate
+from arcana_cli._render import EXIT_ERROR, EXIT_NOT_FOUND, truncate
 from arcana_cli.constants import AGENTS_BASE, MCPS_PATH
-from arcana_cli.ui.renderer import Question, Renderer, confirm_or_cancel, renderer_for
-from arcana_cli.ui.theme import GREEN, ORANGE, RED, TXT3, dim, err, hl, make_table, ok, warn
+from arcana_cli.ui.renderer import Question, Renderer, View, confirm_or_cancel, fail, lines, renderer_for
+from arcana_cli.ui.theme import GREEN, ORANGE, RED, TXT3, dim, hl, make_table, ok, warn
 
 app = typer.Typer(
     help="Manage MCP server connections and their tools (add / list / show / refresh / approve / remove)."
 )
-console = Console()
 
 
 # ---------------------------------------------------------------------------
@@ -57,24 +58,11 @@ def _load_registry() -> MCPRegistry:
     return reg
 
 
-def _fail(r: Renderer, *lines: str, code: int = EXIT_ERROR) -> NoReturn:
-    """Note an error (its first line) and any hints (the rest), then exit ``code``.
-
-    Notes, not output: under ``--json`` they go to stderr and stdout stays a
-    clean JSON stream.
-    """
-    first, *hints = lines
-    r.note(err(first))
-    for hint in hints:
-        r.note(dim(hint))
-    raise typer.Exit(code)
-
-
 def _resolve_server(r: Renderer, reg: MCPRegistry, name: str) -> MCPServerConfig:
     """Return the named server, or exit ``2`` (not found)."""
     server = reg.get_server(name)
     if server is None:
-        _fail(r, f"No MCP server named {name!r}.", "  Run: arcana mcp list", code=EXIT_NOT_FOUND)
+        fail(r, f"No MCP server named {name!r}.", dim("  Run: arcana mcp list"), code=EXIT_NOT_FOUND)
     return server
 
 
@@ -133,22 +121,28 @@ def _auth_display(server: MCPServerConfig) -> str:
     return "(none)"
 
 
-def _print_server(r: Renderer, server: MCPServerConfig) -> None:
+def _server_lines(server: MCPServerConfig) -> list[RenderableType]:
     """Human detail for one server. Only the keyring reference is shown — the
     token itself never leaves the keychain."""
     endpoint = server.server_url if server.transport in _URL_TRANSPORTS else _stdio_repr(server)
-    r.emit(f"\n  {hl('Name:')}      {server.name}")
-    r.emit(f"  {hl('Transport:')} {server.transport.value}")
-    r.emit(f"  {hl('Endpoint:')}  {endpoint}")
-    r.emit(f"  {hl('Status:')}    {_status_markup(server.status)}")
-    r.emit(f"  {hl('Auth:')}      {_auth_display(server)}")
+    out: list[RenderableType] = [
+        f"\n  {hl('Name:')}      {server.name}",
+        f"  {hl('Transport:')} {server.transport.value}",
+        f"  {hl('Endpoint:')}  {endpoint}",
+        f"  {hl('Status:')}    {_status_markup(server.status)}",
+        f"  {hl('Auth:')}      {_auth_display(server)}",
+    ]
     if server.description:
-        r.emit(f"  {hl('About:')}     {server.description}")
-    r.emit("")
-    if server.discovered_tools:
-        r.emit(_tools_table(server))
-    else:
-        r.emit(dim("  No tools discovered."))
+        out.append(f"  {hl('About:')}     {server.description}")
+    out.append("")
+    out.append(_tools_table(server) if server.discovered_tools else dim("  No tools discovered."))
+    return out
+
+
+def _server_view(server: MCPServerConfig, *, headline: str | None = None) -> View:
+    """One server: its detail lines (under ``headline``, if any) and its ``--json`` detail."""
+    human = _server_lines(server)
+    return View(lines(*([headline] if headline else []), *human), _server_detail(server))
 
 
 def _server_summary(server: MCPServerConfig) -> dict[str, Any]:
@@ -225,9 +219,9 @@ _NAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 
 def _validate_server_name(r: Renderer, name: str) -> None:
     if name.lower() in _RESERVED_NAMES:
-        _fail(r, f"{name!r} is reserved. Choose another server name.")
+        fail(r, f"{name!r} is reserved. Choose another server name.")
     if not _NAME_PATTERN.match(name):
-        _fail(r, f"Invalid server name {name!r}. Use letters, digits, '.', '_', or '-' (no '/' or spaces).")
+        fail(r, f"Invalid server name {name!r}. Use letters, digits, '.', '_', or '-' (no '/' or spaces).")
 
 
 # The transports a URL server may use (stdio is command-driven, never a URL).
@@ -236,20 +230,20 @@ _URL_TRANSPORTS = frozenset({MCPTransport.SSE, MCPTransport.HTTP})
 
 def _infer_transport(r: Renderer, url: str | None, command: str | None, transport: str | None) -> MCPTransport:
     if url and command:
-        _fail(r, "Pass either --url (HTTP/SSE) or --command (stdio), not both.")
+        fail(r, "Pass either --url (HTTP/SSE) or --command (stdio), not both.")
     if not url and not command:
-        _fail(r, "Provide --url for an HTTP/SSE server or --command for a stdio server.")
+        fail(r, "Provide --url for an HTTP/SSE server or --command for a stdio server.")
     inferred = MCPTransport.SSE if url else MCPTransport.STDIO
     if transport is None:
         return inferred
     try:
         requested = MCPTransport(transport.lower())
     except ValueError:
-        _fail(r, f"Unknown transport {transport!r}. Use 'http', 'sse', or 'stdio'.")
+        fail(r, f"Unknown transport {transport!r}. Use 'http', 'sse', or 'stdio'.")
     if url and requested not in _URL_TRANSPORTS:
-        _fail(r, f"--transport {requested.value} conflicts with --url (use 'http' or 'sse').")
+        fail(r, f"--transport {requested.value} conflicts with --url (use 'http' or 'sse').")
     if command and requested is not MCPTransport.STDIO:
-        _fail(r, f"--transport {requested.value} conflicts with --command (stdio).")
+        fail(r, f"--transport {requested.value} conflicts with --command (stdio).")
     return requested
 
 
@@ -269,13 +263,13 @@ async def _bearer_from_header(r: Renderer, headers: list[str]) -> str:
     no others. An empty value is asked as a secret question. The token is never echoed.
     """
     if len(headers) > 1:
-        _fail(r, "Only a single 'Authorization' header is supported for SSE MCP auth.")
+        fail(r, "Only a single 'Authorization' header is supported for SSE MCP auth.")
     raw = headers[0]
     if "=" not in raw:
-        _fail(r, "Invalid --header. Expected 'Authorization=Bearer <token>'.")
+        fail(r, "Invalid --header. Expected 'Authorization=Bearer <token>'.")
     key, value = raw.split("=", 1)
     if key.strip().lower() != "authorization":
-        _fail(r, f"Unsupported header {key.strip()!r}. SSE MCP auth accepts only 'Authorization'.")
+        fail(r, f"Unsupported header {key.strip()!r}. SSE MCP auth accepts only 'Authorization'.")
     token = value.strip()
     if token.lower().startswith("bearer "):
         token = token[len("bearer ") :].strip()
@@ -284,7 +278,7 @@ async def _bearer_from_header(r: Renderer, headers: list[str]) -> str:
             await r.ask(Question("Bearer token", secret=True, validator=_token_problem, flag=AUTH_KEY_FLAG))
         ).strip()
     if not token:
-        _fail(r, "No bearer token provided.")
+        fail(r, "No bearer token provided.")
     return token
 
 
@@ -325,11 +319,11 @@ async def _resolve_add_auth(
 
     if transport is MCPTransport.STDIO:
         if static_requested or oauth_requested:
-            _fail(r, "stdio servers authenticate via scoped env vars, not --header/--auth-key/--oauth.")
+            fail(r, "stdio servers authenticate via scoped env vars, not --header/--auth-key/--oauth.")
         return _AddAuth(MCPTransport.STDIO, AuthType.API_KEY, None, None)
 
     if static_requested and oauth_requested:
-        _fail(r, "Pass either a static bearer (--header/--auth-key) or OAuth (--oauth/--issuer), not both.")
+        fail(r, "Pass either a static bearer (--header/--auth-key) or OAuth (--oauth/--issuer), not both.")
 
     if static_requested:
         return _AddAuth(transport, AuthType.API_KEY, None, await _store_auth(r, name, header, auth_key))
@@ -344,7 +338,7 @@ async def _resolve_add_auth(
         probed = await probe_oauth(url) if url else None
         if probed is None:
             if oauth:
-                _fail(r, "--oauth was requested but the server does not advertise OAuth. Pass --issuer.")
+                fail(r, "--oauth was requested but the server does not advertise OAuth. Pass --issuer.")
             return _AddAuth(transport, AuthType.API_KEY, None, None)  # keyless
         config = probed.model_copy(update={"scopes": scope}) if scope else probed
 
@@ -360,7 +354,7 @@ async def _resolve_add_auth(
 async def _store_auth(r: Renderer, name: str, headers: list[str], auth_key: str | None) -> str | None:
     """Resolve the server's ``auth_key_ref``, writing any inline token to keyring."""
     if auth_key and headers:
-        _fail(r, "Pass either --auth-key or --header, not both.")
+        fail(r, "Pass either --auth-key or --header, not both.")
     if auth_key:
         return auth_key
     if not headers:
@@ -372,8 +366,7 @@ async def _store_auth(r: Renderer, name: str, headers: list[str], auth_key: str 
     except Exception as exc:
         # No OS keyring backend (headless / CI / container). Fail cleanly before
         # anything is persisted — mcps.json is untouched at this point.
-        r.note(err(f"Could not write the auth token to the OS keyring: {exc}"))
-        raise typer.Exit(EXIT_ERROR) from exc
+        fail(r, f"Could not write the auth token to the OS keyring: {exc}")
     return ref
 
 
@@ -381,8 +374,7 @@ def _save_oauth_token(r: Renderer, ref: str, token: OAuthToken) -> None:
     try:
         save_token(ref, token)
     except Exception as exc:
-        r.note(err(f"Could not write the OAuth token to the OS keyring: {exc}"))
-        raise typer.Exit(EXIT_ERROR) from exc
+        fail(r, f"Could not write the OAuth token to the OS keyring: {exc}")
 
 
 @app.command("add")
@@ -434,7 +426,6 @@ def add_cmd(
             scope=list(scope or []),
             device=device,
             description=description,
-            json_=json_,
         )
     )
 
@@ -454,7 +445,6 @@ async def add_server(
     scope: list[str],
     device: bool,
     description: str,
-    json_: bool,
 ) -> None:
     """Register, authenticate and discover one server; asks for a bearer token only when ``--header`` left it blank.
 
@@ -466,11 +456,11 @@ async def add_server(
     resolved_transport = _infer_transport(r, url, command, transport)
     reg = _load_registry()
     if reg.get_server(name) is not None:
-        _fail(
+        fail(
             r,
             f"An MCP server named {name!r} already exists.",
-            f"  Re-discover with: arcana mcp refresh {name}",
-            f"  Or replace it:    arcana mcp remove {name}",
+            dim(f"  Re-discover with: arcana mcp refresh {name}"),
+            dim(f"  Or replace it:    arcana mcp remove {name}"),
         )
 
     auth = await _resolve_add_auth(
@@ -505,11 +495,9 @@ async def add_server(
         _delete_owned_credential(cfg)
         raise
 
-    if json_:
-        r.emit(_server_detail(server))
-    else:
-        r.emit(ok(f"Connected '{name}' — {len(server.discovered_tools)} tool(s) discovered."))
-        _print_server(r, server)
+    r.emit(
+        _server_view(server, headline=ok(f"Connected '{name}' — {len(server.discovered_tools)} tool(s) discovered."))
+    )
 
     if server.status is MCPServerStatus.UNREACHABLE:
         r.note(warn(f"Server '{name}' was registered but could not be reached."))
@@ -525,13 +513,15 @@ async def add_server(
 @app.command("list")
 def list_cmd(json_: bool = typer.Option(False, "--json", help="Emit JSON")) -> None:
     """List registered MCP servers."""
-    reg = _load_registry()
-    servers = reg.list_servers()
-    if json_:
-        emit_json([_server_summary(s) for s in servers])
-        return
+    run_async(list_servers(renderer_for(json_)))
+
+
+async def list_servers(r: Renderer) -> None:
+    """Every registered server: a table, or an array of server summaries."""
+    servers = _load_registry().list_servers()
+    summaries = [_server_summary(s) for s in servers]
     if not servers:
-        console.print(dim("No MCP servers connected. Run: arcana mcp add --name <n> --url <url>"))
+        r.emit(View(dim("No MCP servers connected. Run: arcana mcp add --name <n> --url <url>"), summaries))
         return
     table = make_table("MCP Servers")
     table.add_column("Name", style="bold")
@@ -540,7 +530,7 @@ def list_cmd(json_: bool = typer.Option(False, "--json", help="Emit JSON")) -> N
     table.add_column("Status")
     for s in servers:
         table.add_row(s.name, s.transport.value, _tool_count(s), _status_markup(s.status))
-    console.print(table)
+    r.emit(View(table, summaries))
 
 
 @app.command("show")
@@ -549,12 +539,12 @@ def show_cmd(
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Show a server's detail and discovered tools. Secrets are never printed."""
-    r = renderer_for(json_)
-    server = _resolve_server(r, _load_registry(), name)
-    if json_:
-        emit_json(_server_detail(server))
-        return
-    _print_server(r, server)
+    run_async(show_server(renderer_for(json_), name))
+
+
+async def show_server(r: Renderer, name: str) -> None:
+    """One server's detail and discovered tools."""
+    r.emit(_server_view(_resolve_server(r, _load_registry(), name)))
 
 
 @app.command("refresh")
@@ -563,28 +553,30 @@ def refresh_cmd(
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Re-discover a server's tools and re-run the changed-tool diff."""
-    r = renderer_for(json_)
+    run_async(refresh_server(renderer_for(json_), name))
+
+
+async def refresh_server(r: Renderer, name: str) -> None:
+    """Re-discover one server; the result names the tools that changed since the last discovery."""
     reg = _load_registry()
     server = _resolve_server(r, reg, name)
     before = {t.name: t.status for t in server.discovered_tools}
-    refreshed = run_async(reg.discover(server))
+    refreshed = await reg.discover(server)
     newly_changed = [
         t.name
         for t in refreshed.discovered_tools
         if t.status is ToolStatus.CHANGED and before.get(t.name) is not ToolStatus.CHANGED
     ]
 
-    if json_:
-        emit_json({**_server_detail(refreshed), "newly_changed": newly_changed})
-    else:
-        _print_server(r, refreshed)
-        changed_total = sum(1 for t in refreshed.discovered_tools if t.status is ToolStatus.CHANGED)
-        if changed_total:
-            console.print(warn(f"\n  {changed_total} tool(s) changed and are withheld until approved."))
-            console.print(dim(f"  Approve with: arcana mcp approve {name} --all"))
+    human = _server_lines(refreshed)
+    changed_total = sum(1 for t in refreshed.discovered_tools if t.status is ToolStatus.CHANGED)
+    if changed_total:
+        human.append(warn(f"\n  {changed_total} tool(s) changed and are withheld until approved."))
+        human.append(dim(f"  Approve with: arcana mcp approve {name} --all"))
+    r.emit(View(lines(*human), {**_server_detail(refreshed), "newly_changed": newly_changed}))
 
     if refreshed.status is MCPServerStatus.UNREACHABLE:
-        console.print(warn(f"Server '{name}' is unreachable — showing last-known tools."))
+        r.note(warn(f"Server '{name}' is unreachable — showing last-known tools."))
         raise typer.Exit(EXIT_ERROR)
 
 
@@ -600,20 +592,20 @@ def login_cmd(
     refreshed — it reuses the server's stored issuer/client, refreshes the keyring
     token, and re-discovers tools. No need to re-`add` the server.
     """
-    run_async(login_server(renderer_for(json_), name, device=device, json_=json_))
+    run_async(login_server(renderer_for(json_), name, device=device))
 
 
-async def login_server(r: Renderer, name: str, *, device: bool, json_: bool) -> None:
+async def login_server(r: Renderer, name: str, *, device: bool) -> None:
     """Sign an OAuth server in again, store the new token and re-discover its tools."""
     reg = _load_registry()
     server = _resolve_server(r, reg, name)
     if server.auth_type is not AuthType.OAUTH:
-        _fail(r, f"Server '{name}' does not use OAuth — nothing to sign in to.")
+        fail(r, f"Server '{name}' does not use OAuth — nothing to sign in to.")
     if server.oauth_config is None:
-        _fail(
+        fail(
             r,
             f"Server '{name}' has no OAuth config to sign in with.",
-            f"  Recreate it with: arcana mcp add --name {name} --url <url> --oauth --issuer <url>",
+            dim(f"  Recreate it with: arcana mcp add --name {name} --url <url> --oauth --issuer <url>"),
         )
 
     ref = server.auth_key_ref or _auth_ref(name)
@@ -626,11 +618,11 @@ async def login_server(r: Renderer, name: str, *, device: bool, json_: bool) -> 
     server.auth_key_ref = ref
     refreshed = await reg.discover(server)
 
-    if json_:
-        r.emit(_server_detail(refreshed))
-    else:
-        r.emit(ok(f"Signed in to '{name}' — {len(refreshed.discovered_tools)} tool(s) discovered."))
-        _print_server(r, refreshed)
+    r.emit(
+        _server_view(
+            refreshed, headline=ok(f"Signed in to '{name}' — {len(refreshed.discovered_tools)} tool(s) discovered.")
+        )
+    )
 
     if refreshed.status is MCPServerStatus.UNREACHABLE:
         r.note(warn(f"Server '{name}' was authenticated but could not be reached."))
@@ -647,18 +639,18 @@ def approve_cmd(
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Re-approve changed tools, admitting their new metadata (the trust gate)."""
-    run_async(approve_server(renderer_for(json_), name, tool=list(tool or []), all_=all_, json_=json_))
+    run_async(approve_server(renderer_for(json_), name, tool=list(tool or []), all_=all_))
 
 
-async def approve_server(r: Renderer, name: str, *, tool: list[str], all_: bool, json_: bool) -> None:
+async def approve_server(r: Renderer, name: str, *, tool: list[str], all_: bool) -> None:
     """Approve the named changed tools (or every one with ``all_``), making them resolvable again."""
     reg = _load_registry()
     server = _resolve_server(r, reg, name)
 
     if all_ and tool:
-        _fail(r, "Pass either --tool or --all, not both.")
+        fail(r, "Pass either --tool or --all, not both.")
     if not all_ and not tool:
-        _fail(r, "Specify --tool <name> (repeatable) or --all.")
+        fail(r, "Specify --tool <name> (repeatable) or --all.")
 
     targets: list[str] | None
     if all_:
@@ -669,26 +661,30 @@ async def approve_server(r: Renderer, name: str, *, tool: list[str], all_: bool,
             local = qn.split("/", 1)[1] if "/" in qn else qn
             td = server.get_tool(local)
             if td is None:
-                _fail(r, f"No tool {local!r} on server {name!r}.", code=EXIT_NOT_FOUND)
+                fail(r, f"No tool {local!r} on server {name!r}.", code=EXIT_NOT_FOUND)
             if td.status is not ToolStatus.CHANGED:
                 r.note(dim(f"  '{local}' is already active — skipping."))
                 continue
             targets.append(local)
         if not targets:
-            r.note(dim(f"Nothing to approve on '{name}'."))
-            raise typer.Exit()
+            r.emit(View(dim(f"Nothing to approve on '{name}'."), {"approved": [], "status": server.status.value}))
+            return
 
     approved = reg.approve(name, targets)
     refreshed = _resolve_server(r, reg, name)
-
-    if json_:
-        r.emit({"approved": approved, "status": refreshed.status.value})
-        return
+    result = {"approved": approved, "status": refreshed.status.value}
     if not approved:
-        r.emit(dim(f"Nothing to approve on '{name}' — no changed tools matched."))
+        r.emit(View(dim(f"Nothing to approve on '{name}' — no changed tools matched."), result))
         return
-    r.emit(ok(f"Approved {len(approved)} tool(s) on '{name}': {', '.join(approved)}"))
-    r.emit(f"  {hl('Status:')} {_status_markup(refreshed.status)}")
+    r.emit(
+        View(
+            lines(
+                ok(f"Approved {len(approved)} tool(s) on '{name}': {', '.join(approved)}"),
+                f"  {hl('Status:')} {_status_markup(refreshed.status)}",
+            ),
+            result,
+        )
+    )
 
 
 @app.command("remove")
@@ -703,36 +699,35 @@ def remove_cmd(
     Scans for agents subscribed to this server's tools and prints the blast
     radius; aborts unless --force is given.
     """
-    run_async(remove_server(renderer_for(json_), name, yes=yes, force=force, json_=json_))
+    run_async(remove_server(renderer_for(json_), name, yes=yes, force=force))
 
 
-async def remove_server(r: Renderer, name: str, *, yes: bool, force: bool, json_: bool) -> None:
+async def remove_server(r: Renderer, name: str, *, yes: bool, force: bool) -> None:
     """Remove one server once confirmed (or with ``yes``); refuses while agents subscribe to it unless ``force``."""
     reg = _load_registry()
     server = _resolve_server(r, reg, name)
     dependents = _dependent_agents(name)
 
     if dependents and not force:
-        if json_:
-            # A list (not a dict) so two agents sharing a name both survive.
-            r.emit({"aborted": "dependents", "dependents": [{"agent": n, "tools": subs} for n, subs in dependents]})
-        else:
-            r.emit(warn(f"Agents subscribe to tools from '{name}':"))
-            for agent_name, subs in dependents:
-                r.emit(f"  {hl(agent_name)}  [{TXT3}]{', '.join(subs)}[/]")
-            r.emit(dim("\nRe-run with --force to remove anyway."))
+        r.emit(
+            View(
+                lines(
+                    warn(f"Agents subscribe to tools from '{name}':"),
+                    *(f"  {hl(agent_name)}  [{TXT3}]{', '.join(subs)}[/]" for agent_name, subs in dependents),
+                    dim("\nRe-run with --force to remove anyway."),
+                ),
+                # A list (not a dict) so two agents sharing a name both survive.
+                {"aborted": "dependents", "dependents": [{"agent": n, "tools": subs} for n, subs in dependents]},
+            )
+        )
         raise typer.Exit(EXIT_ERROR)
 
     if not yes:
         await confirm_or_cancel(r, f"Remove MCP server '{name}'?")
 
-    if dependents and not json_:
-        r.emit(warn(f"{len(dependents)} agent(s) will lose these tools until re-subscribed elsewhere."))
+    if dependents:
+        r.note(warn(f"{len(dependents)} agent(s) will lose these tools until re-subscribed elsewhere."))
 
     reg.remove_server(name)
     _delete_owned_credential(server)
-
-    if json_:
-        r.emit({"removed": name})
-        return
-    r.emit(ok(f"MCP server '{name}' removed."))
+    r.emit(View(ok(f"MCP server '{name}' removed."), {"removed": name}))

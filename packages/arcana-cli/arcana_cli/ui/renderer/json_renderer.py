@@ -1,11 +1,14 @@
 """``JsonRenderer`` — the renderer port over the ``--json`` scripting contract.
 
-Every emitted block is one :func:`arcana_cli._render.emit_json` document, so the
-JSON shapes and exit codes a script relies on are exactly the ones the commands
-produced before they took a renderer. The surface never prompts: a question
-raises :class:`~arcana_cli.ui.renderer.port.NonInteractiveError` (exit
-``EXIT_ERROR``, message on stderr) instead of blocking a pipeline on stdin.
-Notes go to stderr too, so stdout carries nothing but the documents.
+Every emitted block is one :func:`arcana_cli._render.emit_json` document (a
+:class:`~arcana_cli.ui.renderer.presentable.Presentable` emits its JSON view), so
+the JSON shapes and exit codes a script relies on are exactly the ones the
+commands produced before they took a renderer. A failure is the
+:func:`arcana_cli._render.emit_error` document on stdout, in place of a result.
+The surface never prompts: a question fails like any other error, raising
+:class:`~arcana_cli.ui.renderer.port.NonInteractiveError` (exit ``EXIT_ERROR``)
+instead of blocking a pipeline on stdin. Notes go to stderr, so stdout carries
+nothing but the documents.
 """
 
 from collections.abc import AsyncGenerator, Sequence
@@ -15,17 +18,18 @@ from typing import Literal, NoReturn, TypeVar, overload
 from pydantic import BaseModel
 from rich.console import Console, RenderableType
 
-from arcana_cli._render import emit_json
+from arcana_cli._render import EXIT_ERROR, emit_error, emit_json
 from arcana_cli.ui.renderer.port import (
     Choice,
-    JsonAble,
+    Emittable,
+    NonInteractiveError,
     PrintedWait,
     Question,
     StatusHandle,
     StreamRender,
     WaitHandle,
-    refuse,
 )
+from arcana_cli.ui.renderer.presentable import Failure, Presentable
 
 T = TypeVar("T")
 
@@ -39,20 +43,25 @@ class _NoStatus:
 
 
 class JsonRenderer:
-    """Emits JSON documents; refuses Rich renderables and every question."""
+    """Emits JSON documents (a result or an error); refuses Rich renderables and every question."""
 
     def __init__(self, stderr: Console | None = None) -> None:
         self._stderr = stderr if stderr is not None else Console(stderr=True)
 
     def _refuse(self, prompt: str, flag: str | None) -> NoReturn:
-        refuse(self._stderr, prompt, flag=flag, surface=JSON_SURFACE)
+        """Fail closed on a question: the refusal is the stream's error document."""
+        error = NonInteractiveError(prompt, flag=flag, surface=JSON_SURFACE)
+        emit_error(EXIT_ERROR, error.message)
+        raise error
 
-    def emit(self, renderable: RenderableType | JsonAble) -> None:
+    def emit(self, renderable: Emittable) -> None:
         """Print one JSON document; a Rich renderable is a programming error here.
 
         Rejecting it (rather than printing its ANSI form) keeps a stray human
         renderable from corrupting the stream a script is parsing.
         """
+        if isinstance(renderable, Presentable):
+            renderable = renderable.to_json()
         if isinstance(renderable, BaseModel):
             emit_json(renderable.model_dump(mode="json"))
         elif isinstance(renderable, dict | list):
@@ -65,6 +74,9 @@ class JsonRenderer:
 
     def note(self, renderable: RenderableType) -> None:
         self._stderr.print(renderable)
+
+    def error(self, failure: Failure) -> None:
+        emit_error(failure.code, failure.message, failure.plain_details())
 
     async def ask(self, q: Question) -> NoReturn:
         self._refuse(q.prompt, q.flag)

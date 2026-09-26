@@ -1,0 +1,2 @@
+exit=0
+✓ Connection 'ollama/hermes-3' removed.

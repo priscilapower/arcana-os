@@ -5,7 +5,6 @@ chat`` does (The World picks the agent); ``arcana --help`` lists the commands.
 """
 
 import typer
-from rich.console import Console
 
 from arcana_cli.commands import agent, cards, chat, mcp, memory, providers, run, soul, tools, world
 
@@ -14,7 +13,6 @@ app = typer.Typer(
     help="Arcana OS — The OS that gives your agents a soul. Run with no command to open a chat session.",
     rich_markup_mode="rich",
 )
-console = Console()
 
 app.add_typer(agent.app, name="agent")
 app.add_typer(cards.app, name="cards")

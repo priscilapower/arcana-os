@@ -63,7 +63,6 @@ def _add_server_args(**overrides: object) -> dict[str, object]:
         "scope": [],
         "device": False,
         "description": "",
-        "json_": False,
     }
     return args | overrides
 
@@ -231,8 +230,8 @@ async def test_remove_server_and_unsubscribe_confirm_through_the_renderer(world:
     seed_server(world)
     seed_agent(world, subs=["builtin/web_search"])
     r = RecordingRenderer(confirms=[True, True])
-    await remove_server(r, "notion-mcp", yes=False, force=False, json_=False)
-    await unsubscribe(r, "scout", "builtin/web_search", yes=False, json_=False)
+    await remove_server(r, "notion-mcp", yes=False, force=False)
+    await unsubscribe(r, "scout", "builtin/web_search", yes=False)
     assert r.confirmations == ["Remove MCP server 'notion-mcp'?", "Unsubscribe 'scout' from 'builtin/web_search'?"]
 
 
@@ -247,6 +246,7 @@ async def test_a_secret_answer_never_reaches_output_notes_or_the_log(world: Worl
     assert world.keyring  # stored …
     assert SECRET in world.keyring.values()
     assert SECRET not in r.text() and SECRET not in r.notes_text()  # … and nowhere else
+    assert SECRET not in str(r.documents())
     assert all(SECRET not in repr(q) for q in r.questions)
     assert SECRET not in caplog.text
 
@@ -254,7 +254,7 @@ async def test_a_secret_answer_never_reaches_output_notes_or_the_log(world: Worl
 async def test_json_never_asks_for_a_secret(world: World):
     """Json adapter: the question fails closed, so there is no answer to leak."""
     with pytest.raises(NonInteractiveError) as refused:
-        await add_server(JsonRenderer(), **_add_server_args(json_=True))
+        await add_server(JsonRenderer(), **_add_server_args())
     assert refused.value.flag == "--auth-key"
     assert world.keyring == {}
 

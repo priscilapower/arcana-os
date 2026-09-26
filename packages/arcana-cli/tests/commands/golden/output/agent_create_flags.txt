@@ -1,0 +1,9 @@
+exit=0
+╭───────────────────── New Agent ──────────────────────╮
+│ Agent 'scout' created.                               │
+│                                                      │
+│   ID:    <id>        │
+│   Card:  IX · The Hermit — Researcher / Deep Analyst │
+│   Model: ollama/hermes-3                             │
+│   Temp:  0.35                                        │
+╰──────────────────────────────────────────────────────╯

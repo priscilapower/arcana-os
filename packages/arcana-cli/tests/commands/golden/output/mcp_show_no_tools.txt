@@ -1,0 +1,9 @@
+exit=0
+
+  Name:      notion-mcp
+  Transport: sse
+  Endpoint:  https://a/sse
+  Status:    connected
+  Auth:      (none)
+
+  No tools discovered.

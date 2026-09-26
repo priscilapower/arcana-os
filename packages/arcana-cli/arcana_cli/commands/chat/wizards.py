@@ -227,7 +227,6 @@ def _wizards() -> dict[tuple[WizardGroup, str], Wizard]:
                 scope=_texts(p, "scope"),
                 device=_flag(p, "device"),
                 description=_text(p, "description") or "",
-                json_=False,
             ),
             secrets={"--header": _bearer_value},
         ),
@@ -235,18 +234,14 @@ def _wizards() -> dict[tuple[WizardGroup, str], Wizard]:
             WizardGroup.MCP,
             "approve",
             mcp.approve_cmd,
-            lambda r, p: mcp.approve_server(
-                r, _required(p, "name"), tool=_texts(p, "tool"), all_=_flag(p, "all_"), json_=False
-            ),
+            lambda r, p: mcp.approve_server(r, _required(p, "name"), tool=_texts(p, "tool"), all_=_flag(p, "all_")),
             admits_server=True,
         ),
         Wizard(
             WizardGroup.MCP,
             "remove",
             mcp.remove_cmd,
-            lambda r, p: mcp.remove_server(
-                r, _required(p, "name"), yes=_flag(p, "yes"), force=_flag(p, "force"), json_=False
-            ),
+            lambda r, p: mcp.remove_server(r, _required(p, "name"), yes=_flag(p, "yes"), force=_flag(p, "force")),
         ),
     ]
     return {(w.command, w.action): w for w in table}

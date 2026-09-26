@@ -12,18 +12,24 @@ the filesystem guardrails (:mod:`arcana.memory.paths`) before any I/O. Reads are
 offline-first: ``list`` / ``inspect`` / ``adapters`` / ``export`` and
 ``search --mode keyword`` work with no embedding provider.
 
-Each command runs its build → use → close in a single ``run_async`` call: the
-private SQLite handle is bound to the event loop that opened it, so splitting the
-work across loops would break it — and the federation is always closed in a
-``finally`` so no connection leaks.
+Every command body is a renderer-agnostic coroutine that takes a
+:class:`~arcana_cli.ui.renderer.Renderer`: its result is a
+:class:`~arcana_cli.ui.renderer.Presentable` (a Rich view and the ``--json``
+document of the same data), and a failure — a core memory error included (see
+:func:`_memory_errors`) — goes through :func:`~arcana_cli.ui.renderer.fail`.
+Each body runs its build → use → close in the single ``run_async`` call of its
+Typer callback: the private SQLite handle is bound to the event loop that opened
+it, so splitting the work across loops would break it — and the federation is
+always closed in a ``finally`` so no connection leaks.
 """
 
-from collections.abc import Coroutine
-from typing import Any, NoReturn, TypeVar
+from collections.abc import Generator
+from contextlib import contextmanager
+from typing import Any, NoReturn
 from uuid import UUID, uuid4
 
 import typer
-from rich.console import Console
+from rich.markup import escape
 
 from arcana.agents.registry import AgentRegistry
 from arcana.cards.engine import CardEngine
@@ -41,7 +47,7 @@ from arcana.memory import (
     resolve_out_path,
 )
 from arcana.memory.decay import effective_importance, resolve_decay_profiles
-from arcana.memory.errors import GlobalDeleteRefused, MemoryError, PathSafetyError, ReadOnlyTierDelete
+from arcana.memory.errors import GlobalDeleteRefused, MemoryError, ReadOnlyTierDelete
 from arcana.types import (
     Card,
     DecayProfile,
@@ -56,20 +62,17 @@ from arcana.types import (
 from arcana.types._utils import now_utc
 from arcana.types.agent import Agent as AgentRecord
 from arcana_cli._async import run_async
-from arcana_cli._render import EXIT_DENIED, EXIT_ERROR, EXIT_NOT_FOUND, emit_json, truncate
+from arcana_cli._render import EXIT_DENIED, EXIT_NOT_FOUND, truncate
 from arcana_cli.commands.run import resolve_embedding_gateway
 from arcana_cli.commands.tools import resolve_agent
 from arcana_cli.constants import AGENTS_BASE, ARCANA_HOME, MEMORY_ADAPTERS_PATH
-from arcana_cli.ui.renderer import Renderer, confirm_or_cancel, renderer_for
-from arcana_cli.ui.theme import GREEN, ORANGE, RED, TXT2, TXT3, dim, err, hl, make_table, ok, warn
+from arcana_cli.ui.renderer import Renderer, Verbatim, View, confirm_or_cancel, fail, lines, renderer_for
+from arcana_cli.ui.theme import GREEN, ORANGE, RED, TXT2, TXT3, dim, hl, make_table, ok, warn
 
 app = typer.Typer(
     help="Inspect, audit, forget, connect, and export agent memory "
     "(list / search / inspect / forget / connect / adapters / export)."
 )
-console = Console()
-
-_T = TypeVar("_T")
 
 _SCOPE_COLORS: dict[MemoryScope, str] = {
     MemoryScope.PRIVATE: TXT2,
@@ -114,19 +117,21 @@ async def _open_federation(record: AgentRecord, *, embedding: EmbeddingGateway |
     )
 
 
-def _resolve_connector(name: str) -> KnowledgeConnector:
+def _resolve_connector(r: Renderer, name: str) -> KnowledgeConnector:
     """Resolve a registered connector by name, or exit (``1`` corrupt / ``2`` unknown)."""
     store = KnowledgeConnectorStore(MEMORY_ADAPTERS_PATH)
     try:
         store.load()
     except MemoryError as exc:
-        console.print(err(str(exc)))
-        raise typer.Exit(EXIT_ERROR) from None
+        fail(r, str(exc))
     connector = store.get(name)
     if connector is None:
-        console.print(err(f"No connector named {name!r}."))
-        console.print(dim("  See registered connectors: arcana memory adapters"))
-        raise typer.Exit(EXIT_NOT_FOUND)
+        fail(
+            r,
+            f"No connector named {name!r}.",
+            dim("  See registered connectors: arcana memory adapters"),
+            code=EXIT_NOT_FOUND,
+        )
     return connector
 
 
@@ -142,30 +147,32 @@ def _resolve_scope(scope: MemoryScope | None, pool: str | None) -> MemoryScope:
     return scope or MemoryScope.PRIVATE
 
 
-def _execute(coro: Coroutine[object, object, _T]) -> _T:
-    """Run a command coroutine, mapping core errors to the exit-code vocabulary.
+@contextmanager
+def _memory_errors(r: Renderer) -> Generator[None]:
+    """Map the expected core memory failures to a clean :func:`fail` with the right exit code.
 
-    Keeps every command body free of error plumbing: expected memory failures
-    print a clean message and exit with the right code (no traceback), while a
-    ``typer.Exit`` raised inside (e.g. by ``resolve_agent``) passes straight
-    through.
+    Keeps every command body free of error plumbing: an expected memory failure
+    is an error message and an exit code (no traceback), while a ``typer.Exit``
+    raised inside (e.g. by ``resolve_agent``) passes straight through.
     """
     try:
-        return run_async(coro)
+        yield
     except GlobalDeleteRefused as exc:
-        console.print(err(f"Entry {exc.memory_id} lives in the GLOBAL tier — the World owns GLOBAL."))
-        console.print(dim("  GLOBAL entries are pruned by The World, not deleted from the CLI."))
-        raise typer.Exit(EXIT_DENIED) from None
+        fail(
+            r,
+            f"Entry {exc.memory_id} lives in the GLOBAL tier — the World owns GLOBAL.",
+            dim("  GLOBAL entries are pruned by The World, not deleted from the CLI."),
+            code=EXIT_DENIED,
+        )
     except ReadOnlyTierDelete as exc:
-        console.print(err(f"Entry {exc.memory_id} is owned by a read-only source ({exc.tier})."))
-        console.print(dim("  Edit the connected folder to remove it; a connector is a reference, not a store."))
-        raise typer.Exit(EXIT_DENIED) from None
-    except PathSafetyError as exc:
-        console.print(err(str(exc)))
-        raise typer.Exit(EXIT_ERROR) from None
-    except MemoryError as exc:
-        console.print(err(str(exc)))
-        raise typer.Exit(EXIT_ERROR) from None
+        fail(
+            r,
+            f"Entry {exc.memory_id} is owned by a read-only source ({exc.tier}).",
+            dim("  Edit the connected folder to remove it; a connector is a reference, not a store."),
+            code=EXIT_DENIED,
+        )
+    except MemoryError as exc:  # PathSafetyError included
+        fail(r, str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +205,7 @@ def _entry_row(entry: MemoryEntry) -> dict[str, Any]:
 
 
 def _validate_read_target(
-    agent: str | None, connector: str | None, pool: str | None, scope: MemoryScope | None
+    r: Renderer, agent: str | None, connector: str | None, pool: str | None, scope: MemoryScope | None
 ) -> None:
     """Require exactly one read source. ``--connector`` is its own thing, never a pool.
 
@@ -208,22 +215,17 @@ def _validate_read_target(
     """
     if connector is not None:
         if agent is not None or pool is not None or scope is not None:
-            console.print(err("--connector reads an external source; don't combine it with --agent/--pool/--scope."))
-            raise typer.Exit(EXIT_ERROR)
+            fail(r, "--connector reads an external source; don't combine it with --agent/--pool/--scope.")
         return
     if agent is None:
-        console.print(err("Specify --agent <name> (or --connector <name> for an external knowledge source)."))
-        raise typer.Exit(EXIT_ERROR)
+        fail(r, "Specify --agent <name> (or --connector <name> for an external knowledge source).")
 
 
-def _render_entries(entries: list[MemoryEntry], json_: bool, *, title: str, scope_col: bool) -> None:
-    """Render an entry list as a Rich table or ``--json``; shared by list/search paths."""
-    if json_:
-        emit_json([_entry_row(e) for e in entries])
-        return
+def _entries_view(entries: list[MemoryEntry], *, title: str, scope_col: bool) -> View:
+    """An entry list: a Rich table, or an array of entry rows; shared by the list/search paths."""
+    rows = [_entry_row(e) for e in entries]
     if not entries:
-        console.print(dim(f"No entries — {title}."))
-        return
+        return View(dim(f"No entries — {title}."), rows)
     table = make_table(title)
     table.add_column("ID", style=TXT3)
     table.add_column("Type")
@@ -238,7 +240,7 @@ def _render_entries(entries: list[MemoryEntry], json_: bool, *, title: str, scop
             row.append(_scope_label(e.scope, e.pool_name))
         row.append(truncate(e.content))
         table.add_row(*row)
-    console.print(table)
+    return View(table, rows)
 
 
 # ---------------------------------------------------------------------------
@@ -258,38 +260,64 @@ def list_cmd(
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """List entries by importance — from an agent's memory or a connector (offline)."""
-    _validate_read_target(agent, connector, pool, scope)
+    run_async(
+        list_memory(
+            renderer_for(json_),
+            agent=agent,
+            connector=connector,
+            pool=pool,
+            scope=scope,
+            type_=type_,
+            limit=limit,
+            min_importance=min_importance,
+        )
+    )
+
+
+async def list_memory(
+    r: Renderer,
+    *,
+    agent: str | None,
+    connector: str | None,
+    pool: str | None,
+    scope: MemoryScope | None,
+    type_: MemoryType | None,
+    limit: int,
+    min_importance: float,
+) -> None:
+    """Entries by importance, from an agent's memory (``agent``) or a connector."""
+    _validate_read_target(r, agent, connector, pool, scope)
 
     if connector is not None:
-        conn = _resolve_connector(connector)
+        conn = _resolve_connector(r, connector)
         query = MemoryQuery(
             type=type_, limit=limit, min_importance=min_importance, retrieval_mode=RetrievalMode.keyword
         )
-        entries = _execute(_connector_entries(conn, query))
-        _render_entries(entries, json_, title=f"{conn.name} · connector", scope_col=False)
+        with _memory_errors(r):
+            entries = await _connector_entries(conn, query)
+        r.emit(_entries_view(entries, title=f"{conn.name} · connector", scope_col=False))
         return
 
     assert agent is not None  # noqa: S101 — _validate_read_target guarantees agent set when connector is None
-    record = resolve_agent(agent)
+    record = resolve_agent(r, agent)
     target_scope = _resolve_scope(scope, pool)
 
-    async def _run() -> list[MemoryEntry]:
+    with _memory_errors(r):
         fed = await _open_federation(record, embedding=_load_embedding_gateway())
         try:
-            query = MemoryQuery(
-                scope=target_scope,
-                pool_name=pool,
-                type=type_,
-                limit=limit,
-                min_importance=min_importance,
-                retrieval_mode=RetrievalMode.keyword,
+            entries = await fed.browse(
+                MemoryQuery(
+                    scope=target_scope,
+                    pool_name=pool,
+                    type=type_,
+                    limit=limit,
+                    min_importance=min_importance,
+                    retrieval_mode=RetrievalMode.keyword,
+                )
             )
-            return await fed.browse(query)
         finally:
             await fed.aclose()
-
-    entries = _execute(_run())
-    _render_entries(entries, json_, title=f"{record.name} · {target_scope.value} memory", scope_col=True)
+    r.emit(_entries_view(entries, title=f"{record.name} · {target_scope.value} memory", scope_col=True))
 
 
 # ---------------------------------------------------------------------------
@@ -309,36 +337,61 @@ def search_cmd(
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Search an agent's memory or a connector. semantic/hybrid degrade to keyword with no embedder."""
-    _validate_read_target(agent, connector, pool, scope)
+    run_async(
+        search_memory(
+            renderer_for(json_),
+            query,
+            agent=agent,
+            connector=connector,
+            pool=pool,
+            scope=scope,
+            mode=mode,
+            limit=limit,
+        )
+    )
+
+
+async def search_memory(
+    r: Renderer,
+    query: str,
+    *,
+    agent: str | None,
+    connector: str | None,
+    pool: str | None,
+    scope: MemoryScope | None,
+    mode: RetrievalMode,
+    limit: int,
+) -> None:
+    """Search an agent's memory (``agent``) or a connector for ``query``."""
+    _validate_read_target(r, agent, connector, pool, scope)
 
     if connector is not None:
-        conn = _resolve_connector(connector)
+        conn = _resolve_connector(r, connector)
         # A connector folder is keyword-only, so the mode is moot — always FTS-scan.
-        entries = _execute(
-            _connector_entries(conn, MemoryQuery(text=query, retrieval_mode=RetrievalMode.keyword, limit=limit))
-        )
-        _render_entries(entries, json_, title=f"{conn.name} · search '{truncate(query, 30)}'", scope_col=False)
+        with _memory_errors(r):
+            entries = await _connector_entries(
+                conn, MemoryQuery(text=query, retrieval_mode=RetrievalMode.keyword, limit=limit)
+            )
+        r.emit(_entries_view(entries, title=f"{conn.name} · search '{truncate(query, 30)}'", scope_col=False))
         return
 
     assert agent is not None  # noqa: S101 — _validate_read_target guarantees agent set when connector is None
-    record = resolve_agent(agent)
+    record = resolve_agent(r, agent)
     target_scope = _resolve_scope(scope, pool)
     embedding = _load_embedding_gateway()
     if mode is not RetrievalMode.keyword and embedding is None:
-        console.print(dim("No embedding provider — keyword search (FTS5). Install the [embed] extra for semantic."))
+        r.note(dim(escape("No embedding provider — keyword search (FTS5). Install the [embed] extra for semantic.")))
         mode = RetrievalMode.keyword
 
-    async def _run() -> list[MemoryEntry]:
+    with _memory_errors(r):
         fed = await _open_federation(record, embedding=embedding)
         try:
-            return await fed.search(
+            results = await fed.search(
                 MemoryQuery(text=query, retrieval_mode=mode, scope=target_scope, pool_name=pool, limit=limit)
             )
         finally:
             await fed.aclose()
-
-    results = _execute(_run())
-    _render_entries(results, json_, title=f"{record.name} · search '{truncate(query, 30)}'", scope_col=True)
+    r.emit(_entries_view(results, title=f"{record.name} · search '{truncate(query, 30)}'", scope_col=True))
 
 
 # ---------------------------------------------------------------------------
@@ -353,59 +406,57 @@ def inspect_cmd(
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Show one entry in full, with its decay factor and effective importance."""
-    record = resolve_agent(agent)
-    mid = _parse_uuid(memory_id)
+    run_async(inspect_memory(renderer_for(json_), memory_id, agent=agent))
+
+
+async def inspect_memory(r: Renderer, memory_id: str, *, agent: str) -> None:
+    """One entry in full, with its decay factor and effective importance."""
+    record = resolve_agent(r, agent)
+    mid = _parse_uuid(r, memory_id)
     profiles = _decay_profiles_for(record)
 
-    async def _run() -> MemoryEntry | None:
+    with _memory_errors(r):
         fed = await _open_federation(record, embedding=_load_embedding_gateway())
         try:
-            return await fed.get(mid)
+            entry = await fed.get(mid)
         finally:
             await fed.aclose()
-
-    entry = _execute(_run())
     if entry is None:
-        console.print(err(f"No memory with id {memory_id!r} for agent '{record.name}'."))
-        raise typer.Exit(EXIT_NOT_FOUND)
+        _no_such_memory(r, memory_id, record)
 
     profile = profiles[entry.type]
     effective = effective_importance(entry, profile, now_utc())
     factor = (effective / entry.importance) if entry.importance > 0 else 1.0
 
-    if json_:
-        emit_json(
-            {
-                **_entry_row(entry),
-                "confidence_source": entry.confidence_source.value,
-                "last_accessed": entry.last_accessed_at.isoformat(),
-                "access_count": entry.access_count,
-                "decay_factor": round(factor, 4),
-                "effective_importance": round(effective, 4),
-                "source_session_id": str(entry.source_session_id) if entry.source_session_id else None,
-                "has_conflict": entry.has_conflict,
-                "archived": entry.archived,
-            }
-        )
-        return
-
-    console.print(f"\n  {hl('Content:')}      {entry.content}")
-    console.print(f"  {hl('ID:')}           {entry.id}")
-    console.print(f"  {hl('Type:')}         {entry.type.value}")
-    console.print(f"  {hl('Scope:')}        {_scope_label(entry.scope, entry.pool_name)}")
-    console.print(
-        f"  {hl('Importance:')}   {entry.importance:.2f}  ({hl('effective')} {effective:.2f}, decay ×{factor:.2f})"
-    )
-    console.print(f"  {hl('Confidence:')}   {entry.confidence:.2f}  ({entry.confidence_source.value})")
-    console.print(f"  {hl('Created:')}      {entry.created_at.date().isoformat()}")
-    console.print(f"  {hl('Last read:')}    {entry.last_accessed_at.date().isoformat()}  ({entry.access_count}×)")
+    human: list[str] = [
+        f"\n  {hl('Content:')}      {entry.content}",
+        f"  {hl('ID:')}           {entry.id}",
+        f"  {hl('Type:')}         {entry.type.value}",
+        f"  {hl('Scope:')}        {_scope_label(entry.scope, entry.pool_name)}",
+        f"  {hl('Importance:')}   {entry.importance:.2f}  ({hl('effective')} {effective:.2f}, decay ×{factor:.2f})",
+        f"  {hl('Confidence:')}   {entry.confidence:.2f}  ({entry.confidence_source.value})",
+        f"  {hl('Created:')}      {entry.created_at.date().isoformat()}",
+        f"  {hl('Last read:')}    {entry.last_accessed_at.date().isoformat()}  ({entry.access_count}×)",
+    ]
     if entry.source_session_id:
-        console.print(f"  {hl('Session:')}      {entry.source_session_id}")
+        human.append(f"  {hl('Session:')}      {entry.source_session_id}")
     if entry.has_conflict:
-        console.print(warn("  ⚠ conflict flagged — awaiting resolution"))
+        human.append(warn("  ⚠ conflict flagged — awaiting resolution"))
     if entry.archived:
-        console.print(dim("  (archived)"))
-    console.print()
+        human.append(dim("  (archived)"))
+    human.append("")
+    detail = {
+        **_entry_row(entry),
+        "confidence_source": entry.confidence_source.value,
+        "last_accessed": entry.last_accessed_at.isoformat(),
+        "access_count": entry.access_count,
+        "decay_factor": round(factor, 4),
+        "effective_importance": round(effective, 4),
+        "source_session_id": str(entry.source_session_id) if entry.source_session_id else None,
+        "has_conflict": entry.has_conflict,
+        "archived": entry.archived,
+    }
+    r.emit(View(lines(*human), detail))
 
 
 # ---------------------------------------------------------------------------
@@ -426,52 +477,52 @@ def forget_cmd(
     Asks before deleting unless ``--yes``; under ``--json`` there is no one to
     ask, so the question fails closed naming ``--yes``.
     """
-    _execute(forget_memory(renderer_for(json_), memory_id, agent=agent, archive=archive, yes=yes, json_=json_))
+    run_async(forget_memory(renderer_for(json_), memory_id, agent=agent, archive=archive, yes=yes))
 
 
-def _no_such_memory(memory_id: str, record: AgentRecord) -> NoReturn:
-    console.print(err(f"No memory with id {memory_id!r} for agent '{record.name}'."))
-    raise typer.Exit(EXIT_NOT_FOUND)
+def _no_such_memory(r: Renderer, memory_id: str, record: AgentRecord) -> NoReturn:
+    fail(r, f"No memory with id {memory_id!r} for agent '{record.name}'.", code=EXIT_NOT_FOUND)
 
 
-async def forget_memory(r: Renderer, memory_id: str, *, agent: str, archive: bool, yes: bool, json_: bool) -> None:
+async def forget_memory(r: Renderer, memory_id: str, *, agent: str, archive: bool, yes: bool) -> None:
     """Forget one entry once confirmed (or with ``yes``); GLOBAL is refused before anything is asked."""
-    record = resolve_agent(agent)
-    mid = _parse_uuid(memory_id)
+    record = resolve_agent(r, agent)
+    mid = _parse_uuid(r, memory_id)
     hard = not archive
 
-    fed = await _open_federation(record, embedding=_load_embedding_gateway())
-    try:
-        entry = await fed.get(mid)
-        if entry is None:
-            _no_such_memory(memory_id, record)
-        # Refuse GLOBAL before prompting — the World owns it.
-        if entry.scope is MemoryScope.GLOBAL:
-            raise GlobalDeleteRefused(mid)
-        if not yes:
-            verb = "Archive" if archive else "Permanently delete"
-            await confirm_or_cancel(r, f"{verb} memory {_short_id(mid)} ({truncate(entry.content, 40)})?")
-        result = await fed.forget(mid, hard=hard)
-    finally:
-        await fed.aclose()
+    with _memory_errors(r):
+        fed = await _open_federation(record, embedding=_load_embedding_gateway())
+        try:
+            entry = await fed.get(mid)
+            if entry is None:
+                _no_such_memory(r, memory_id, record)
+            # Refuse GLOBAL before prompting — the World owns it.
+            if entry.scope is MemoryScope.GLOBAL:
+                raise GlobalDeleteRefused(mid)
+            if not yes:
+                verb = "Archive" if archive else "Permanently delete"
+                await confirm_or_cancel(r, f"{verb} memory {_short_id(mid)} ({truncate(entry.content, 40)})?")
+            result = await fed.forget(mid, hard=hard)
+        finally:
+            await fed.aclose()
 
     if not result.found:  # gone between the lookup and the delete
-        _no_such_memory(memory_id, record)
+        _no_such_memory(r, memory_id, record)
 
     scope = result.scope
-    if json_:
-        emit_json(
+    action = "Archived" if archive else "Deleted"
+    r.emit(
+        View(
+            ok(f"{action} memory {_short_id(mid)} from {scope.value if scope else '?'} memory."),
             {
                 "id": str(mid),
                 "forgotten": True,
                 "hard": hard,
                 "scope": scope.value if scope else None,
                 "pool": result.pool_name,
-            }
+            },
         )
-        return
-    action = "Archived" if archive else "Deleted"
-    console.print(ok(f"{action} memory {_short_id(mid)} from {scope.value if scope else '?'} memory."))
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -490,7 +541,7 @@ def connect_obsidian(
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Register an Obsidian vault as an external read-only knowledge connector."""
-    _connect(KnowledgeConnectorKind.OBSIDIAN, vault, name, json_)
+    run_async(connect_folder(renderer_for(json_), KnowledgeConnectorKind.OBSIDIAN, vault, name))
 
 
 @connect_app.command("markdown")
@@ -500,34 +551,34 @@ def connect_markdown(
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Register a plain folder of Markdown notes as an external read-only knowledge connector."""
-    _connect(KnowledgeConnectorKind.MARKDOWN, path, name, json_)
+    run_async(connect_folder(renderer_for(json_), KnowledgeConnectorKind.MARKDOWN, path, name))
 
 
-def _connect(kind: KnowledgeConnectorKind, raw_path: str, name: str | None, json_: bool) -> None:
+async def connect_folder(r: Renderer, kind: KnowledgeConnectorKind, raw_path: str, name: str | None) -> None:
     """Validate the path, build the connector reference, and persist it.
 
     Path validation (``PathSafetyError``) and registry I/O (``MemoryStorageError``
     on a corrupt or unwritable file) share one ``MemoryError`` guard, so both fail
-    with a clean message and ``EXIT_ERROR`` rather than a traceback — the same
-    contract the ``_execute``-wrapped commands uphold.
+    with a clean message and ``EXIT_ERROR`` rather than a traceback.
     """
-    try:
+    with _memory_errors(r):
         resolved = resolve_existing_dir(raw_path)
         connector = KnowledgeConnector(name=name or resolved.name, kind=kind, path=str(resolved))
         store = KnowledgeConnectorStore(MEMORY_ADAPTERS_PATH)
         store.load()
         store.add(connector)
-    except MemoryError as exc:
-        console.print(err(str(exc)))
-        raise typer.Exit(EXIT_ERROR) from None
 
-    if json_:
-        emit_json({"name": connector.name, "kind": connector.kind.value, "path": connector.path})
-        return
-    console.print(ok(f"Connected {kind.value} '{connector.name}'."))
-    console.print(dim(f"  {connector.path}"))
-    console.print(dim(f"  Read it: arcana memory list --connector {connector.name}"))
-    console.print(dim("  Inspect connectors: arcana memory adapters"))
+    r.emit(
+        View(
+            lines(
+                ok(f"Connected {kind.value} '{connector.name}'."),
+                dim(f"  {connector.path}"),
+                dim(f"  Read it: arcana memory list --connector {connector.name}"),
+                dim("  Inspect connectors: arcana memory adapters"),
+            ),
+            {"name": connector.name, "kind": connector.kind.value, "path": connector.path},
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -540,41 +591,39 @@ def adapters_cmd(
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """List registered knowledge connectors and probe each one's health."""
+    run_async(list_adapters(renderer_for(json_)))
 
-    async def _health(connector: KnowledgeConnector) -> tuple[bool, int]:
-        adapter = connector_adapter(connector, uuid4())
-        health = await adapter.health_check()
-        if not health.healthy:
-            return (False, 0)
-        try:
-            notes = await adapter.scan()
-        except Exception:  # noqa: BLE001 — health listing must never crash on a bad vault
-            return (False, 0)
-        return (True, len(notes))
 
-    async def _run() -> list[tuple[KnowledgeConnector, bool, int]]:
-        # Registry load runs inside the guarded coroutine so a corrupt file exits
-        # cleanly (MemoryStorageError → EXIT_ERROR) rather than as a raw traceback.
+async def _connector_health(connector: KnowledgeConnector) -> tuple[bool, int]:
+    adapter = connector_adapter(connector, uuid4())
+    health = await adapter.health_check()
+    if not health.healthy:
+        return (False, 0)
+    try:
+        notes = await adapter.scan()
+    except Exception:  # noqa: BLE001 — health listing must never crash on a bad vault
+        return (False, 0)
+    return (True, len(notes))
+
+
+async def list_adapters(r: Renderer) -> None:
+    """Every registered knowledge connector with its health and note count."""
+    # The registry load is guarded so a corrupt file exits cleanly
+    # (MemoryStorageError → EXIT_ERROR) rather than as a raw traceback.
+    with _memory_errors(r):
         store = KnowledgeConnectorStore(MEMORY_ADAPTERS_PATH)
         store.load()
-        out: list[tuple[KnowledgeConnector, bool, int]] = []
+        found: list[tuple[KnowledgeConnector, bool, int]] = []
         for connector in store.list():
-            healthy, count = await _health(connector)
-            out.append((connector, healthy, count))
-        return out
+            healthy, count = await _connector_health(connector)
+            found.append((connector, healthy, count))
 
-    rows = _execute(_run())
-
-    if json_:
-        emit_json(
-            [
-                {"name": c.name, "kind": c.kind.value, "path": c.path, "healthy": healthy, "notes": count}
-                for c, healthy, count in rows
-            ]
-        )
-        return
-    if not rows:
-        console.print(dim("No knowledge connectors. Connect one: arcana memory connect obsidian --vault <path>"))
+    rows = [
+        {"name": c.name, "kind": c.kind.value, "path": c.path, "healthy": healthy, "notes": count}
+        for c, healthy, count in found
+    ]
+    if not found:
+        r.emit(View(dim("No knowledge connectors. Connect one: arcana memory connect obsidian --vault <path>"), rows))
         return
     table = make_table("Knowledge connectors")
     table.add_column("Name", style="bold")
@@ -582,10 +631,10 @@ def adapters_cmd(
     table.add_column("Health")
     table.add_column("Notes", justify="right")
     table.add_column("Path", style=TXT3)
-    for c, healthy, count in rows:
+    for c, healthy, count in found:
         health_cell = f"[{GREEN}]healthy[/]" if healthy else f"[{RED}]unhealthy[/]"
         table.add_row(c.name, c.kind.value, health_cell, str(count) if healthy else dim("—"), c.path)
-    console.print(table)
+    r.emit(View(table, rows))
 
 
 # ---------------------------------------------------------------------------
@@ -604,19 +653,29 @@ def export_cmd(
     json_: bool = typer.Option(False, "--json", help="Emit a JSON summary instead of markdown"),
 ) -> None:
     """Export memory to a git-diffable Markdown document (read-only)."""
+    run_async(export_memory(renderer_for(json_), agent=agent, pool=pool, all_=all_, out=out, type_=type_, yes=yes))
+
+
+async def export_memory(
+    r: Renderer,
+    *,
+    agent: str | None,
+    pool: str | None,
+    all_: bool,
+    out: str | None,
+    type_: MemoryType | None,
+    yes: bool,
+) -> None:
+    """Render the chosen memory as Markdown: to ``out``, or as the document itself (a summary under ``--json``)."""
     chosen = [flag for flag in (agent is not None, pool is not None, all_) if flag]
     if len(chosen) != 1:
-        console.print(err("Choose exactly one of --agent, --pool, or --all."))
-        raise typer.Exit(EXIT_ERROR)
+        fail(r, "Choose exactly one of --agent, --pool, or --all.")
 
     # Resolve the output path up front (path-guarded) so a bad target fails before work.
     out_path = None
     if out is not None:
-        try:
+        with _memory_errors(r):
             out_path = resolve_out_path(out)
-        except PathSafetyError as exc:
-            console.print(err(str(exc)))
-            raise typer.Exit(EXIT_ERROR) from None
 
     embedding = _load_embedding_gateway()
     exporter = MemoryExporter()
@@ -638,37 +697,28 @@ def export_cmd(
         owner = pool_name or record.name
         return exporter.render(entries, owner=owner, scope=scope)
 
-    async def _run() -> str:
+    with _memory_errors(r):
         if all_:
             agents = AgentRegistry(AGENTS_BASE).list()
             sections = [await _dump_store(a, MemoryScope.PRIVATE, None) for a in agents]
-            return "\n\n".join(sections) if sections else "# (no agents)\n"
-        record = resolve_agent(agent) if agent is not None else _any_agent()
-        scope = MemoryScope.SHARED if pool else MemoryScope.PRIVATE
-        return await _dump_store(record, scope, pool)
-
-    markdown = _execute(_run())
-
-    if out_path is not None:
-        try:
-            atomic_write_text(out_path, markdown, overwrite=yes)
-        except PathSafetyError as exc:
-            console.print(err(str(exc)))
-            raise typer.Exit(EXIT_ERROR) from None
-        if json_:
-            emit_json({"exported": True, "out": str(out_path), "bytes": len(markdown.encode("utf-8"))})
+            markdown = "\n\n".join(sections) if sections else "# (no agents)\n"
         else:
-            console.print(ok(f"Exported memory to {out_path.name}."))
+            record = resolve_agent(r, agent) if agent is not None else _any_agent(r)
+            scope = MemoryScope.SHARED if pool else MemoryScope.PRIVATE
+            markdown = await _dump_store(record, scope, pool)
+
+    size = len(markdown.encode("utf-8"))
+    if out_path is not None:
+        with _memory_errors(r):
+            atomic_write_text(out_path, markdown, overwrite=yes)
+        summary = {"exported": True, "out": str(out_path), "bytes": size}
+        r.emit(View(ok(f"Exported memory to {out_path.name}."), summary))
         return
-
-    if json_:
-        emit_json({"exported": True, "bytes": len(markdown.encode("utf-8"))})
-        return
-    # Markdown to stdout, so `arcana memory export ... > file` and `| less` work.
-    print(markdown)
+    # The document itself, verbatim, so `arcana memory export ... > file` and `| less` work.
+    r.emit(View(Verbatim(markdown), {"exported": True, "bytes": size}))
 
 
-def _any_agent() -> AgentRecord:
+def _any_agent(r: Renderer) -> AgentRecord:
     """The sole agent when a pool export omits ``--agent`` (a pool needs an owner id).
 
     A shared pool is agent-independent, but building the tier stack needs *an*
@@ -678,8 +728,7 @@ def _any_agent() -> AgentRecord:
     agents = AgentRegistry(AGENTS_BASE).list()
     if len(agents) == 1:
         return agents[0]
-    console.print(err("Specify --agent: more than one agent exists (a pool export still needs an agent context)."))
-    raise typer.Exit(EXIT_ERROR)
+    fail(r, "Specify --agent: more than one agent exists (a pool export still needs an agent context).")
 
 
 # ---------------------------------------------------------------------------
@@ -687,9 +736,8 @@ def _any_agent() -> AgentRecord:
 # ---------------------------------------------------------------------------
 
 
-def _parse_uuid(raw: str) -> UUID:
+def _parse_uuid(r: Renderer, raw: str) -> UUID:
     try:
         return UUID(raw)
     except ValueError:
-        console.print(err(f"Invalid memory id {raw!r} — expected a UUID."))
-        raise typer.Exit(EXIT_ERROR) from None
+        fail(r, f"Invalid memory id {raw!r} — expected a UUID.")

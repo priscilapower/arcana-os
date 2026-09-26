@@ -1,0 +1,16 @@
+exit=0
+
+  Name:      notion-mcp
+  Transport: sse
+  Endpoint:  https://a/sse
+  Status:    changed
+  Auth:      (none)
+  About:     Notion workspace
+
+                    notion-mcp · tools                    
+┏━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Tool         ┃ Status  ┃ Description                   ┃
+┡━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ search_pages │ active  │ Search pages in the workspace │
+│ create_page  │ changed │ Create page in the workspace  │
+└──────────────┴─────────┴───────────────────────────────┘

@@ -1,0 +1,3 @@
+exit=1
+✗ No connection found for 'ghost'.
+  Run: arcana providers list

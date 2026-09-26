@@ -1,0 +1,3 @@
+exit=2
+✗ Unknown MCP server 'ghost'.
+  See servers: arcana mcp list

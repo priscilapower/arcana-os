@@ -425,8 +425,10 @@ def test_remove_confirms_without_yes(home):
         ["mcp", "add", "--name", "builtin", "--url", "https://a/sse", "--json"],
     ],
 )
-def test_a_json_command_that_fails_keeps_stdout_clean(home, argv):
+def test_a_json_command_that_fails_prints_one_error_document(home, argv):
     result = runner.invoke(app, argv)
     assert result.exit_code != 0
-    assert result.stdout == ""
-    assert result.stderr.strip()
+    error = json.loads(result.stdout)["error"]
+    assert error["code"] == result.exit_code
+    assert error["message"]
+    assert result.stderr == ""

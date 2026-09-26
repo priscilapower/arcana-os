@@ -1,8 +1,8 @@
 """``RecordingRenderer`` — the renderer-port fake for command tests.
 
 A command coroutine takes a :class:`~arcana_cli.ui.renderer.Renderer`; tests hand
-it one of these instead of a terminal. It records everything the command emits
-and notes (and every question, status and stream it opens) and answers questions from
+it one of these instead of a terminal. It records everything the command emits,
+notes and fails with (and every question, status and stream it opens) and answers questions from
 scripts given up front. A question the script didn't anticipate fails the test
 loudly instead of blocking.
 
@@ -22,7 +22,18 @@ from typing import Any, Literal, TypeVar, overload
 import typer
 from rich.console import Console, RenderableType
 
-from arcana_cli.ui.renderer import Choice, JsonAble, Question, StatusHandle, StreamRender, StreamSink, WaitHandle
+from arcana_cli.ui.renderer import (
+    Choice,
+    Emittable,
+    Failure,
+    JsonAble,
+    Presentable,
+    Question,
+    StatusHandle,
+    StreamRender,
+    StreamSink,
+    WaitHandle,
+)
 
 T = TypeVar("T")
 
@@ -63,6 +74,10 @@ class RecordingRenderer:
     list of values for a multi-select. A scripted selection must be one of the
     offered, enabled choices.
 
+    A :class:`Presentable` is kept as emitted: :meth:`text` renders its human
+    view and :meth:`documents` returns its JSON view. :func:`~arcana_cli.ui.renderer.fail`
+    lands in :attr:`errors` (see :meth:`errors_text`), not in :attr:`emitted`.
+
     :attr:`events` orders statuses, their stops and streamed chunks, so a test
     can check that a status ended before the first chunk arrived.
 
@@ -79,8 +94,9 @@ class RecordingRenderer:
         selections: Iterable[object] = (),
         call_off_waits: bool = False,
     ) -> None:
-        self.emitted: list[RenderableType | JsonAble] = []
+        self.emitted: list[Emittable] = []
         self.notes: list[RenderableType] = []
+        self.errors: list[Failure] = []
         self.questions: list[Question] = []
         self.rejections: list[str] = []
         self.confirmations: list[str] = []
@@ -98,11 +114,14 @@ class RecordingRenderer:
 
     # ── output ────────────────────────────────────────────────────────────
 
-    def emit(self, renderable: RenderableType | JsonAble) -> None:
+    def emit(self, renderable: Emittable) -> None:
         self.emitted.append(renderable)
 
     def note(self, renderable: RenderableType) -> None:
         self.notes.append(renderable)
+
+    def error(self, failure: Failure) -> None:
+        self.errors.append(failure)
 
     def text(self, width: int = 100) -> str:
         """Everything emitted, rendered as plain text (no ANSI) at ``width`` columns."""
@@ -115,6 +134,18 @@ class RecordingRenderer:
     def notes_text(self, width: int = 100) -> str:
         """Every note, rendered as plain text (no ANSI) at ``width`` columns."""
         return _plain(self.notes, width)
+
+    def errors_text(self, width: int = 100) -> str:
+        """Every failure as a terminal shows it (error line and details), as plain text."""
+        return _plain([f.to_rich() for f in self.errors], width)
+
+    def documents(self) -> list[JsonAble]:
+        """What a ``--json`` stream would carry: each emitted :class:`Presentable`'s JSON view, and bare JSON data."""
+        return [
+            e.to_json() if isinstance(e, Presentable) else e
+            for e in self.emitted
+            if isinstance(e, Presentable | dict | list)
+        ]
 
     # ── questions ─────────────────────────────────────────────────────────
 
@@ -232,10 +263,10 @@ class _RecordedWait:
             raise typer.Abort()
 
 
-def _plain(renderables: Iterable[RenderableType | JsonAble], width: int) -> str:
+def _plain(renderables: Iterable[Emittable], width: int) -> str:
     console = Console(width=width, record=True, file=io.StringIO(), color_system=None)
     for renderable in renderables:
-        console.print(renderable)
+        console.print(renderable.to_rich() if isinstance(renderable, Presentable) else renderable)
     return console.export_text()
 
 

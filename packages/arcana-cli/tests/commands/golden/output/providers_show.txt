@@ -1,0 +1,12 @@
+exit=0
+
+  Name:          ollama/hermes-3
+  Provider:      ollama
+  Default Model: hermes-3
+  Endpoint:      http://localhost:11434
+  Headers:       (none)
+  Auth type:     api_key
+  Credential:    (none)
+  Created:       <date>
+  Updated:       <date>
+

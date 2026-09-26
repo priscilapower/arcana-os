@@ -1,8 +1,10 @@
 """The renderer port — the one seam between a command and the surface it runs on.
 
 A command body is a coroutine that takes a :class:`Renderer` and never touches
-the terminal directly: output goes through :meth:`Renderer.emit`, side remarks
-about the run through :meth:`Renderer.note`, questions through
+the terminal directly: output goes through :meth:`Renderer.emit` (a
+:class:`~arcana_cli.ui.renderer.presentable.Presentable` when the command has a
+``--json`` view), side remarks about the run through :meth:`Renderer.note`,
+failures through :func:`fail` (:meth:`Renderer.error`), questions through
 :meth:`Renderer.ask` / :meth:`Renderer.confirm` / :meth:`Renderer.select`,
 progress through :meth:`Renderer.status` / :meth:`Renderer.stream`, and a wait
 on the user acting outside the program (a browser sign-in) through
@@ -18,21 +20,21 @@ the test harness) share no state, only this shape.
 from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
-from typing import Any, Generic, Literal, NoReturn, Protocol, TypeAlias, TypeVar, overload
+from typing import Generic, Literal, NoReturn, Protocol, TypeAlias, TypeVar, overload
 
 import typer
-from pydantic import BaseModel
 from rich.console import Console, RenderableType
 from rich.markup import escape
 
 from arcana_cli._render import EXIT_ERROR
+from arcana_cli.ui.renderer.presentable import Failure, Headline, JsonAble, Presentable
 from arcana_cli.ui.theme import dim, err
 
 T = TypeVar("T")
 
-#: Data the ``--json`` surface can serialise. :func:`arcana_cli._render.emit_json`
-#: is the encoder; a pydantic model is dumped in ``json`` mode first.
-JsonAble: TypeAlias = dict[str, Any] | list[Any] | BaseModel
+#: Anything :meth:`Renderer.emit` takes: a Rich renderable (human-only output),
+#: JSON data (``--json``-only output), or a :class:`Presentable` carrying both views.
+Emittable: TypeAlias = RenderableType | JsonAble | Presentable
 
 #: Turns everything streamed so far into the block shown for it; see :meth:`Renderer.stream`.
 StreamRender: TypeAlias = Callable[[str], RenderableType]
@@ -98,8 +100,8 @@ class NonInteractiveError(typer.Exit):
 
     A :class:`typer.Exit` carrying :data:`~arcana_cli._render.EXIT_ERROR`, so a
     Typer command that lets it escape exits with that code. The adapter that
-    raises it has already written :attr:`message` to stderr, keeping a ``--json``
-    stream on stdout clean.
+    raises it has already shown :attr:`message`: on stderr at a line terminal,
+    as the ``--json`` stream's error document under ``--json``.
     """
 
     def __init__(
@@ -178,8 +180,20 @@ class PrintedWait:
 class Renderer(Protocol):
     """Where a command's output and questions go."""
 
-    def emit(self, renderable: RenderableType | JsonAble) -> None:
-        """Show one block of output."""
+    def emit(self, renderable: Emittable) -> None:
+        """Show one block of output.
+
+        A :class:`Presentable` shows the view the surface needs; a bare Rich
+        renderable is human-only output and bare JSON data ``--json``-only output.
+        """
+        ...
+
+    def error(self, failure: Failure) -> None:
+        """Show why the command is stopping; :func:`fail` shows it and exits.
+
+        A console surface writes it to stderr, like a note; the ``--json``
+        surface writes the error document to stdout, in place of a result.
+        """
         ...
 
     def note(self, renderable: RenderableType) -> None:
@@ -281,6 +295,17 @@ YES_FLAG = "--yes"
 
 #: What a declined destructive confirmation says before the command exits.
 CANCELLED = "Cancelled."
+
+
+def fail(r: Renderer, message: str, *details: str, code: int = EXIT_ERROR, headline: Headline = err) -> NoReturn:
+    """Stop the command: show ``message`` (plain text) and its ``details`` (markup lines) through ``r``, exit ``code``.
+
+    The one way a command fails, so every surface reports it the same way: an
+    error line on a terminal, ``{"error": {"code", "message"}}`` under ``--json``,
+    a transcript block in the session. See :class:`Failure`.
+    """
+    r.error(Failure(message, details, code, headline))
+    raise typer.Exit(code)
 
 
 async def confirm_or_cancel(r: Renderer, text: str, *, flag: str = YES_FLAG) -> None:

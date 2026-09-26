@@ -1,2 +1,7 @@
 exit=1
-✗ 'Bearer token' needs an answer, but --json mode never prompts; pass --auth-key instead
+{
+  "error": {
+    "code": 1,
+    "message": "'Bearer token' needs an answer, but --json mode never prompts; pass --auth-key instead"
+  }
+}

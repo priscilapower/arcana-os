@@ -1,0 +1,18 @@
+exit=0
+
+  Name:      notion-mcp
+  Transport: sse
+  Endpoint:  https://a/sse
+  Status:    changed
+  Auth:      (none)
+  About:     Notion workspace
+
+           notion-mcp · tools            
+┏━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━┓
+┃ Tool         ┃ Status  ┃ Description  ┃
+┡━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━┩
+│ search_pages │ changed │ Search pages │
+└──────────────┴─────────┴──────────────┘
+
+  1 tool(s) changed and are withheld until approved.
+  Approve with: arcana mcp approve notion-mcp --all

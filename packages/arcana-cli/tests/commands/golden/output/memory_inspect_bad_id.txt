@@ -1,0 +1,2 @@
+exit=1
+✗ Invalid memory id 'nope' — expected a UUID.
