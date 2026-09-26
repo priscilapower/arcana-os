@@ -8,6 +8,7 @@ Falls back to a plain typed prompt when stdin is not a TTY.
 """
 
 import sys
+from collections.abc import Collection
 
 import readchar
 from rich.console import Console, Group
@@ -244,13 +245,15 @@ def select_card(
     prompt: str = "Select a card",
     *,
     initial: Card | None = None,
+    exclude: Collection[Card] = (Card.WORLD,),
 ) -> Card | None:
     """Single-card picker. Returns the chosen Card, or None if cancelled.
 
     Pass `initial` to pre-position the cursor on a specific card.
-    Removes THE WORLD card since it's exclusive for the meta-agent.
+    Pass `exclude` to hide cards from the picker; by default only THE WORLD is
+    hidden, since it's exclusive to the meta-agent.
     """
-    result = _run_picker(prompt, multi=False, initial_card=initial, exclude={Card.WORLD})
+    result = _run_picker(prompt, multi=False, initial_card=initial, exclude=set(exclude))
     return result[0] if result else None
 
 

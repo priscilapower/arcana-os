@@ -33,17 +33,15 @@ from arcana.types.model import ModelConnection, ModelProvider
 from arcana.types.session import MessageRole
 from arcana_cli.commands.chat.app import _footer_fragments
 from arcana_cli.commands.chat.controller import _ChatController
-from arcana_cli.commands.chat.editor import (
-    _agent_history,
-    _build_key_bindings,
+from arcana_cli.commands.chat.editor import _agent_history, _build_key_bindings, _SlashCompleter
+from arcana_cli.commands.chat.render import _replay_blocks, _Transcript
+from arcana_cli.main import app
+from arcana_cli.ui.input_model import (
     _PasteRegistry,
     _should_collapse_paste,
-    _SlashCompleter,
     _submits_on_enter,
     _trailing_backslashes,
 )
-from arcana_cli.commands.chat.render import _replay_blocks, _Transcript
-from arcana_cli.main import app
 
 runner = CliRunner()
 

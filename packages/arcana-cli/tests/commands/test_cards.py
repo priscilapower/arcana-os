@@ -1,10 +1,22 @@
 """Tests for arcana cards commands."""
 
+from pathlib import Path
+
+import pytest
+import typer
 from typer.testing import CliRunner
 
+from arcana.types.card import Card
+from arcana_cli._render import EXIT_ERROR
+from arcana_cli.commands.cards import list_cards, show_card
 from arcana_cli.main import app
+from tests.support.renderer import RecordingRenderer
 
 runner = CliRunner()
+
+GOLDEN = Path(__file__).parent / "golden" / "cards"
+# Pin the console width and keep colour off so the recorded output is stable.
+GOLDEN_ENV: dict[str, str | None] = {"COLUMNS": "100", "FORCE_COLOR": None, "TTY_COMPATIBLE": None}
 
 
 def test_cards_browse_lists_all_21_in_non_tty():
@@ -77,3 +89,69 @@ def test_cards_show_includes_synergies():
 def test_cards_show_unknown_card_exits_nonzero():
     result = runner.invoke(app, ["cards", "show", "not-a-real-card"])
     assert result.exit_code != 0
+
+
+# ── golden output: byte-identical to the pre-renderer command ─────────────
+
+
+@pytest.mark.parametrize(
+    ("golden", "args", "stdin"),
+    [
+        ("show_the_hermit", ["cards", "show", "the-hermit"], None),
+        ("show_hermit", ["cards", "show", "hermit"], None),
+        ("show_unknown", ["cards", "show", "not-a-real-card"], None),
+        ("show_ambiguous", ["cards", "show", "the"], None),
+        ("browse_pick_fool", ["cards"], "the-fool\n"),
+        ("browse_cancel", ["cards"], "\n"),
+    ],
+)
+def test_cards_output_matches_golden(golden: str, args: list[str], stdin: str | None):
+    result = runner.invoke(app, args, input=stdin, env=GOLDEN_ENV)
+    expected = (GOLDEN / f"{golden}.txt").read_text()
+    assert f"exit={result.exit_code}\n{result.output}" == expected
+
+
+# ── the renderer-agnostic command bodies ──────────────────────────────────
+
+
+async def test_list_cards_offers_every_card_but_the_world():
+    r = RecordingRenderer(selections=[None])
+    await list_cards(r)
+    (offered,) = r.offered
+    values = [c.value for c in offered]
+    assert Card.WORLD not in values
+    assert len(values) == len(Card) - 1
+    assert all(c.preview is not None for c in offered)
+
+
+async def test_list_cards_shows_the_picked_card():
+    r = RecordingRenderer(selections=[Card.HERMIT])
+    await list_cards(r)
+    assert "IX · The Hermit" in r.text()
+
+
+async def test_list_cards_cancel_emits_nothing():
+    r = RecordingRenderer(selections=[None])
+    await list_cards(r)
+    assert r.emitted == []
+
+
+async def test_show_card_emits_the_panel():
+    r = RecordingRenderer()
+    await show_card(r, "hermit")
+    assert "Researcher / Deep Analyst" in r.text()
+
+
+async def test_show_card_unknown_emits_error_and_exits():
+    r = RecordingRenderer()
+    with pytest.raises(typer.Exit) as exc:
+        await show_card(r, "not-a-real-card")
+    assert exc.value.exit_code == EXIT_ERROR
+    assert "Unknown card: 'not-a-real-card'" in r.text()
+
+
+async def test_show_card_ambiguous_names_the_matches():
+    r = RecordingRenderer()
+    with pytest.raises(typer.Exit):
+        await show_card(r, "the")
+    assert "Ambiguous: The Fool" in r.text()

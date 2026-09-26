@@ -1,0 +1,2 @@
+exit=1
+✗ Unknown card: 'not-a-real-card'

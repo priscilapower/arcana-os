@@ -24,7 +24,7 @@ from arcana.types.agent import Agent as AgentRecord
 from arcana.types.card import Card
 from arcana.types.memory import MemoryQuery, RetrievalMode
 from arcana.types.session import MessageRole, Session
-from arcana_cli.commands.chat.editor import _SLASH_COMMANDS
+from arcana_cli.ui.input_model import _SLASH_COMMANDS
 from arcana_cli.ui.mathtext import normalize_math
 from arcana_cli.ui.theme import (
     ACCENT,
