@@ -414,6 +414,16 @@ def show_cmd(name: str) -> None:
 
 `renderer_for(json=...)` returns a `TtyRenderer` (Rich console, line prompts, the card picker) or a `JsonRenderer` (`emit_json` documents only; any question fails closed with `NonInteractiveError`, exit code `1`, message on stderr). `arcana_cli/commands/cards.py` is the reference conversion. In tests, hand the coroutine a `RecordingRenderer` (`tests/support/renderer.py`), which records emitted output and answers questions from a script.
 
+### The interactive app shell
+
+`arcana_cli/tui/` holds `ArcanaApp`, the Textual app the interactive session runs in: a transcript (a `RichLog` that retains every block), a live block for streamed output, a status bar, and modal dialogs for questions. `await app.run_inline()` runs it on the caller's event loop — inline under the prompt on macOS/Linux, full-screen on Windows — and, when it exits, prints the retained transcript to stdout so the session lands in terminal scrollback (capped at `ARCANA_TUI_REPLAY_BLOCKS`, default 500). Mouse capture is on unless `config.json` sets `{"ui": {"mouse": false}}`.
+
+Its stylesheet and Textual theme are generated from the colour tokens in `ui/theme.py` (`ACCENT` → `$accent`, `SURFACE_HI` → `$surface-hi`), so `theme.py` stays the only place a colour is defined; a drift test fails if the two disagree.
+
+`TextualRenderer` (`arcana_cli.ui.renderer.textual_renderer`) is the renderer-port adapter over a running app. Its question methods must be awaited from an app worker (`app.run_worker(...)`); Esc cancels any dialog, and a secret answer never reaches the transcript or the exit replay. It is imported from its module rather than `arcana_cli.ui.renderer`, so the one-shot and `--json` paths never load Textual.
+
+UI tests drive the app headless through Textual's Pilot: `tests/support/tui.py` provides `arcana_pilot()` (exposed as the `tui` fixture under `tests/tui/`), which yields the app, its pilot, and a bound `TextualRenderer`.
+
 ---
 
 ## Roadmap
