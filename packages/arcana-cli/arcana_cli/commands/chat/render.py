@@ -1,18 +1,16 @@
-"""Transcript rendering for the chat REPL.
+"""Transcript blocks for the chat session.
 
-rich owns every visual (Markdown replies, panels, tables); this module turns
-model output and session state into rich renderables, then flattens them to ANSI
-strings the full-screen layout can display. It covers three things: splitting a
-reply into dimmed reasoning + answer, the block builders (header, user bubble,
-tables, resume replay), and :class:`_Transcript`, the per-block-cached list of
-rendered blocks shown in the scrolling region.
+Rich owns every visual (Markdown replies, panels, tables); this module turns
+model output and session state into Rich renderables the session writes to its
+transcript. It covers splitting a reply into dimmed reasoning + answer, the block
+builders (header, user bubble, tables, resume replay) and the status-bar line.
 """
 
 import re
-from io import StringIO
+from uuid import UUID
 
 from rich import box
-from rich.console import Console, Group, RenderableType
+from rich.console import Group, RenderableType
 from rich.markdown import Markdown
 from rich.markup import escape
 from rich.panel import Panel
@@ -30,8 +28,8 @@ from arcana_cli.ui.theme import (
     ACCENT,
     AMBER,
     GREEN,
-    MARKDOWN_THEME,
     PROMPT,
+    SEP,
     SURFACE,
     SURFACE_ACCENT,
     TXT,
@@ -44,15 +42,16 @@ from arcana_cli.ui.theme import (
     make_table,
 )
 
-# Package-internal exports — consumed by the controller, the app layout, and the
-# tests. Declared so the split (these helpers now live one import away from their
-# callers) doesn't read as dead code under strict unused-symbol checks.
+# Package-internal exports — consumed by the controller and the tests. Declared
+# so the split (these helpers live one import away from their callers) doesn't
+# read as dead code under strict unused-symbol checks.
 __all__ = [
-    "_Transcript",
     "_agent_eyebrow_block",
     "_card_table",
+    "_footer_line",
     "_header_block",
     "_help_table",
+    "_live_reply",
     "_memory_renderable",
     "_note_block",
     "_render_reply",
@@ -105,85 +104,13 @@ def _render_reply(text: str) -> RenderableType:
     return Group(*renderables) if renderables else Text("")
 
 
-# ---------------------------------------------------------------------------
-# Transcript — rich renderables rendered to ANSI for the full-screen layout.
-# ---------------------------------------------------------------------------
-# OSC-8 hyperlink sequences (emitted by Markdown links) confuse prompt_toolkit's
-# ANSI parser, so they're stripped from rendered output.
-_OSC8_RE = re.compile(r"\x1b\]8;[^\x1b\a]*(?:\x07|\x1b\\)")
+#: What a reply shows until its first token arrives.
+_THINKING = Text("…thinking", style=f"italic {TXT3}")
 
 
-def _render_ansi(renderable: RenderableType, width: int) -> str:
-    """Render one rich renderable to an ANSI string at *width* columns."""
-    buf = StringIO()
-    Console(
-        file=buf,
-        force_terminal=True,
-        color_system="truecolor",
-        width=max(20, width),
-        theme=MARKDOWN_THEME,
-        highlight=False,
-    ).print(renderable)
-    return _OSC8_RE.sub("", buf.getvalue())
-
-
-class _Transcript:
-    """The ordered list of rendered blocks shown in the scrolling region.
-
-    Blocks are rich renderables; :meth:`to_ansi` renders them to a single ANSI
-    string at the current width, caching per block so streaming only re-renders
-    the one in-progress reply. :meth:`update_last` swaps the last block in place —
-    that's how a reply grows token by token.
-    """
-
-    def __init__(self) -> None:
-        self._blocks: list[RenderableType] = []
-        self._cache: list[str | None] = []
-        self._width = 0
-        self._lines = 0
-
-    def append(self, block: RenderableType) -> None:
-        self._blocks.append(block)
-        self._cache.append(None)
-
-    def update_last(self, block: RenderableType) -> None:
-        if not self._blocks:
-            self.append(block)
-            return
-        self._blocks[-1] = block
-        self._cache[-1] = None
-
-    def clear(self) -> None:
-        self._blocks.clear()
-        self._cache.clear()
-
-    def to_ansi(self, width: int) -> str:
-        if width != self._width:  # a resize invalidates every cached render
-            self._width = width
-            self._cache = [None] * len(self._blocks)
-        out: list[str] = []
-        for i, block in enumerate(self._blocks):
-            cached = self._cache[i]
-            if cached is None:
-                cached = _render_ansi(block, width)
-                self._cache[i] = cached
-            out.append(cached)
-        text = "".join(out)
-        self._lines = text.count("\n")
-        return text
-
-    @property
-    def last_line(self) -> int:
-        """Row index of the final line — the transcript anchors its cursor here."""
-        return max(0, self._lines - 1)
-
-    def plain_text(self) -> str:
-        """Uncoloured concatenation of every block — for tests and assertions."""
-        buf = StringIO()
-        out = Console(file=buf, width=100, theme=MARKDOWN_THEME, no_color=True)
-        for block in self._blocks:
-            out.print(block)
-        return buf.getvalue()
+def _live_reply(text: str) -> RenderableType:
+    """A reply as it streams: the ``…thinking`` placeholder until text arrives, then :func:`_render_reply`."""
+    return _render_reply(text) if text else _THINKING
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +125,7 @@ def _header_block(record: AgentRecord, *, memory_off: bool) -> RenderableType:
     """The session header: agent + card, model, memory state, and a newline tip."""
     accent = card_color(record.card)
     backslash_enter = hl("\\+Enter")
-    newline_keys = f"{hl('Shift+Enter')} or {backslash_enter}"
+    newline_keys = f"{backslash_enter} or {hl('Ctrl+J')}"
     memory_bit = f"[{TXT3}]off[/]" if memory_off else f"[{GREEN}]on[/]"
     body = Group(
         # Wordmark — cyan glyph + amber wordmark (the canonical brand pairing).
@@ -327,3 +254,22 @@ def _replay_blocks(session: Session, name: str, accent: str) -> list[RenderableT
             blocks.append(_agent_eyebrow_block(name, accent))
             blocks.append(_render_reply(m.content))
     return blocks
+
+
+def _footer_line(session_id: UUID, *, memory_off: bool) -> Text:
+    """The status-bar line between turns: the session, key hints and memory state."""
+    gap = f"   {SEP}   "
+    memory = "off" if memory_off else "on"
+    return Text.assemble(
+        ("session ", TXT3),
+        (f"#{str(session_id)[:4]}", TXT2),
+        (gap, TXT3),
+        ("/help", ACCENT),
+        (" commands", TXT3),
+        (gap, TXT3),
+        ("/exit", ACCENT),
+        (" quit", TXT3),
+        (gap, TXT3),
+        ("Ctrl+C", ACCENT),
+        (f" cancel{gap}memory {memory}", TXT3),
+    )

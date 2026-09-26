@@ -3,9 +3,12 @@
 from rich.console import Group, RenderableType
 from rich.spinner import Spinner
 from rich.text import Text
+from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import RichLog, Static
 
+from arcana_cli.tui.config import STREAM_FPS
+from arcana_cli.ui.renderer.port import StreamRender
 from arcana_cli.ui.theme import ACCENT
 
 #: Spinner frames per second while a status is showing.
@@ -34,50 +37,99 @@ class Transcript(RichLog):
 
 
 class LiveBlock(Static):
-    """The block a stream grows into, shown only while a stream is open."""
+    """The block a stream grows into, shown only while a stream is open.
 
-    def __init__(self, *, id: str | None = None) -> None:
+    Chunks are buffered as they arrive and the block redraws on a timer, at most
+    ``fps`` times a second and only when something new came in, so a stream that
+    outpaces the terminal costs one redraw per frame rather than one per chunk.
+    With a ``render`` function each redraw re-renders the whole text (so partial
+    Markdown re-flows correctly); without one the text is shown as it came.
+    """
+
+    def __init__(self, *, fps: int = STREAM_FPS, id: str | None = None) -> None:
         super().__init__(id=id)
+        self._fps = fps
         self._prefix: RenderableType | None = None
-        self._text = Text()
+        self._format: StreamRender | None = None
+        self._chunks: list[str] = []
+        self._dirty = False
+        self._timer: Timer | None = None
 
-    def open(self, prefix: RenderableType | None) -> None:
-        """Start a new block led by ``prefix``, and show it."""
+    def on_mount(self) -> None:
+        self._timer = self.set_interval(1 / self._fps, self._redraw_if_dirty, pause=True)
+
+    def open(self, prefix: RenderableType | None, render: StreamRender | None = None) -> None:
+        """Start a new block led by ``prefix`` and formatted by ``render``, and show it."""
         self._prefix = prefix
-        self._text = Text()
+        self._format = render
+        self._chunks = []
+        self._dirty = False
         self.add_class("-active")
-        self._refresh_content()
+        self.update(self.content_renderable)
+        if self._timer is not None:
+            self._timer.resume()
 
     def feed(self, chunk: str) -> None:
-        """Append ``chunk`` to the open block."""
-        self._text.append(chunk)
-        self._refresh_content()
+        """Append ``chunk`` to the open block; it shows at the next redraw."""
+        self._chunks.append(chunk)
+        self._dirty = True
 
     def close(self) -> RenderableType:
-        """Hide the block and return its finished content."""
-        finished = self.content_renderable
+        """Hide the block and return its finished content.
+
+        With a ``render`` function, a block that received no text finishes as
+        its prefix alone.
+        """
+        if self._timer is not None:
+            self._timer.pause()
+        if self._format is not None and not self.text:
+            finished: RenderableType = self._lead() or Text()
+        else:
+            finished = self.content_renderable
         self.remove_class("-active")
         self._prefix = None
-        self._text = Text()
+        self._format = None
+        self._chunks = []
+        self._dirty = False
         self.update("")
         return finished
 
     @property
+    def text(self) -> str:
+        """Everything streamed into the open block so far."""
+        return "".join(self._chunks)
+
+    @property
     def content_renderable(self) -> RenderableType:
         """The prefix and the streamed text so far, as one renderable."""
-        if self._prefix is None:
-            return self._text.copy()
-        if isinstance(self._prefix, str | Text):
-            prefix = Text.from_markup(self._prefix) if isinstance(self._prefix, str) else self._prefix
-            return Text.assemble(prefix, self._text)
-        return Group(self._prefix, self._text.copy())
+        lead = self._lead()
+        if self._format is not None:
+            body = self._format(self.text)
+            return body if lead is None else Group(lead, body)
+        text = Text(self.text)
+        if lead is None:
+            return text
+        if isinstance(lead, Text):
+            return Text.assemble(lead, text)
+        return Group(lead, text)
 
-    def _refresh_content(self) -> None:
-        self.update(self.content_renderable)
+    def _lead(self) -> RenderableType | None:
+        """The prefix as a renderable: a string prefix is Rich markup."""
+        if isinstance(self._prefix, str):
+            return Text.from_markup(self._prefix)
+        return self._prefix
+
+    def _redraw_if_dirty(self) -> None:
+        if self._dirty:
+            self._dirty = False
+            self.update(self.content_renderable)
 
 
 class StatusBar(Widget):
-    """One line under the transcript: a spinner and the innermost open status, or blank.
+    """One line under the transcript: a spinner and the innermost open status, or the idle line.
+
+    The idle line (blank until :meth:`set_idle`) shows whenever no status is
+    open; a session puts its standing facts and key hints there.
 
     Statuses nest: :meth:`push` shows a message and returns a handle, :meth:`pop`
     removes that message again and the newest one still open (if any) shows once
@@ -90,6 +142,7 @@ class StatusBar(Widget):
         self._open: dict[int, str] = {}
         self._next_handle = 0
         self._spinner = Spinner("dots", style=ACCENT)
+        self._idle: RenderableType = Text()
 
     @property
     def messages(self) -> tuple[str, ...]:
@@ -112,8 +165,13 @@ class StatusBar(Widget):
             self.auto_refresh = None
         self.refresh()
 
+    def set_idle(self, renderable: RenderableType) -> None:
+        """Show ``renderable`` whenever no status is open."""
+        self._idle = renderable
+        self.refresh()
+
     def render(self) -> RenderableType:
         if not self._open:
-            return Text()
+            return self._idle
         self._spinner.update(text=Text.from_markup(self.messages[-1]))
         return self._spinner

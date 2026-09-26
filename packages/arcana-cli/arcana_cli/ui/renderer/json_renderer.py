@@ -16,7 +16,7 @@ from rich.console import Console, RenderableType
 from rich.markup import escape
 
 from arcana_cli._render import emit_json
-from arcana_cli.ui.renderer.port import Choice, JsonAble, NonInteractiveError, Question
+from arcana_cli.ui.renderer.port import Choice, JsonAble, NonInteractiveError, Question, StreamRender
 from arcana_cli.ui.theme import err
 
 T = TypeVar("T")
@@ -97,6 +97,6 @@ class JsonRenderer:
         """No indicator: stdout carries only JSON documents."""
         yield
 
-    def stream(self, prefix: RenderableType | None = None) -> NoReturn:
+    def stream(self, prefix: RenderableType | None = None, *, render: StreamRender | None = None) -> NoReturn:
         """Incremental output has no JSON form; a command emits the finished result instead."""
         raise TypeError("JsonRenderer has no stream; collect the output and emit it as one JSON document")

@@ -58,13 +58,15 @@ arcana run "summarize recent advances in RAG" --agent researcher --stream
 
 ## Chat interactively
 
-For a back-and-forth session instead of one-shot `run`, open the chat:
+For a back-and-forth session instead of one-shot `run`, open the chat. Plain
+`arcana` opens it with the agent The World picks; `arcana chat --agent` names one:
 
 ```bash
+arcana
 arcana chat --agent researcher
 ```
 
-You get a full-screen transcript with streaming replies, slash commands
+You get a scrolling transcript with streaming replies, slash commands
 (`/help`, `/switch`, `/memory`, …), newline and paste editing, and per-agent
 history. See [Interactive chat](chat.md) for the full command and key reference.
 

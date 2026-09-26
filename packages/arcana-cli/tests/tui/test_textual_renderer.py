@@ -362,6 +362,62 @@ async def test_stream_with_a_renderable_prefix(tui):
         assert "▍tokens" in h.retained_text()
 
 
+async def test_stream_with_render_redraws_the_whole_text_and_keeps_the_final_render(tui):
+    def shout(text: str) -> Text:
+        return Text(text.upper() if text else "(waiting)")
+
+    async with tui() as h:
+        async with h.renderer.stream(prefix=Text("» "), render=shout) as sink:
+            await h.pilot.pause()
+            assert "(waiting)" in h.app.live.render_line(1).text  # render("") is the placeholder
+            sink.write("partial ")
+            sink.write("markdown")
+            await h.pilot.pause(0.1)
+            assert "PARTIAL MARKDOWN" in h.app.live.render_line(1).text
+        await h.pilot.pause()
+        text = h.retained_text()
+        assert "»" in text and "PARTIAL MARKDOWN" in text
+
+
+async def test_stream_with_render_and_no_text_lands_as_its_prefix(tui):
+    async with tui() as h:
+        async with h.renderer.stream(prefix=Text("» label"), render=lambda t: Text(t or "(waiting)")):
+            pass
+        text = h.retained_text()
+        assert "» label" in text
+        assert "(waiting)" not in text
+
+
+async def test_the_live_block_redraws_at_most_once_per_frame(tui):
+    renders: list[str] = []
+
+    def counting(text: str) -> Text:
+        renders.append(text)
+        return Text(text)
+
+    async with tui() as h:
+        async with h.renderer.stream(render=counting) as sink:
+            for i in range(2000):
+                sink.write(f"{i} ")
+            await h.pilot.pause(0.2)
+            drawn = len(renders)
+        assert drawn < 50, f"{drawn} redraws for 2000 chunks"
+        assert renders[-1].startswith("0 1 2") and renders[-1].endswith("1999 ")
+
+
+async def test_cancelling_a_worker_takes_its_dialog_down(tui):
+    async with tui() as h:
+        worker = h.start(h.renderer.confirm("Allow?"))
+        await h.wait_for_screen(ConfirmScreen)
+        worker.cancel()
+        for _ in range(20):
+            await h.pilot.pause()
+            if not isinstance(h.app.screen, ConfirmScreen):
+                break
+        assert not isinstance(h.app.screen, ConfirmScreen)
+        assert "Allow?" not in h.retained_text()  # an unanswered question leaves no record
+
+
 # ── JSON contract ─────────────────────────────────────────────────────────
 
 

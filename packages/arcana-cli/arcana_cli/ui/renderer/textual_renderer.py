@@ -8,7 +8,8 @@ A question can only be awaited from inside an app worker (``app.run_worker``):
 Textual's ``push_screen_wait`` needs one, and each prompt method checks for it
 up front with a clear error instead of hanging.
 
-Every dialog is cancellable with Esc. A cancelled :meth:`confirm` answers no and
+Every dialog is cancellable with Esc, and cancelling the worker awaiting it
+(Ctrl+C on a turn) takes the dialog down with it. A cancelled :meth:`confirm` answers no and
 a cancelled :meth:`select` picks nothing. A cancelled :meth:`ask` returns the
 question's default when there is one the validator accepts; otherwise there is
 no answer to give, and it raises :class:`typer.Abort`, the same cancellation the
@@ -22,6 +23,7 @@ Not re-exported from :mod:`arcana_cli.ui.renderer`: importing it loads Textual,
 which the one-shot commands (and every ``--json`` path) never need.
 """
 
+import asyncio
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 from typing import Literal, TypeVar, overload
@@ -31,14 +33,16 @@ from pydantic import BaseModel
 from rich.console import RenderableType
 from rich.pretty import Pretty
 from rich.text import Text
+from textual.screen import Screen
 from textual.worker import NoActiveWorker, get_current_worker  # pyright: ignore[reportUnknownVariableType]
 
 from arcana_cli.tui.app import ArcanaApp
 from arcana_cli.tui.screens import ConfirmScreen, MultiSelectScreen, PromptScreen, SelectScreen
-from arcana_cli.ui.renderer.port import Choice, JsonAble, Question, StreamSink
+from arcana_cli.ui.renderer.port import Choice, JsonAble, Question, StreamRender, StreamSink
 from arcana_cli.ui.theme import ACCENT, TXT2
 
 T = TypeVar("T")
+_A = TypeVar("_A")
 
 #: What the transcript record shows in place of a secret answer.
 HIDDEN_ANSWER = "(hidden)"
@@ -59,6 +63,20 @@ def _require_worker(method: str) -> None:
             f"TextualRenderer.{method} must be awaited inside an app worker (app.run_worker): "
             "its dialog is awaited with push_screen_wait"
         ) from None
+
+
+async def _wait_for_answer(app: ArcanaApp, screen: Screen[_A]) -> _A:
+    """Push ``screen`` and await its dismiss value; a cancelled wait takes the dialog down with it.
+
+    Cancelling the awaiting worker (Ctrl+C on a turn) would otherwise leave an
+    unanswerable dialog on screen.
+    """
+    try:
+        return await app.push_screen_wait(screen)
+    except asyncio.CancelledError:
+        if app.screen is screen:
+            app.pop_screen()
+        raise
 
 
 def _record(prompt: str, answer: str) -> Text:
@@ -98,7 +116,7 @@ class TextualRenderer:
 
     async def ask(self, q: Question) -> str:
         _require_worker("ask")
-        answer = await self._app.push_screen_wait(PromptScreen(q))
+        answer = await _wait_for_answer(self._app, PromptScreen(q))
         if answer is None:
             default_ok = q.default is not None and (q.validator is None or q.validator(q.default) is None)
             if q.default is None or not default_ok:
@@ -109,7 +127,7 @@ class TextualRenderer:
 
     async def confirm(self, text: str, *, default: bool = False, flag: str | None = None) -> bool:
         _require_worker("confirm")
-        answer = await self._app.push_screen_wait(ConfirmScreen(text, default=default))
+        answer = await _wait_for_answer(self._app, ConfirmScreen(text, default=default))
         self._app.transcript.append(_record(text, "yes" if answer else "no"))
         return answer
 
@@ -151,13 +169,13 @@ class TextualRenderer:
         seeds = [i for i, c in enumerate(choices) if c.value in initial and not c.disabled]
         picked: list[int]
         if multi:
-            many = await self._app.push_screen_wait(
-                MultiSelectScreen(choices, initial=seeds, title=title, max_items=max_items)
+            many = await _wait_for_answer(
+                self._app, MultiSelectScreen(choices, initial=seeds, title=title, max_items=max_items)
             )
             picked = many if many is not None else []
         else:
-            one = await self._app.push_screen_wait(
-                SelectScreen(choices, initial=seeds[0] if seeds else None, title=title)
+            one = await _wait_for_answer(
+                self._app, SelectScreen(choices, initial=seeds[0] if seeds else None, title=title)
             )
             picked = [one] if one is not None else []
         labels = ", ".join(choices[i].label for i in picked) or "(none)"
@@ -176,8 +194,10 @@ class TextualRenderer:
             self._app.status_bar.pop(handle)
 
     @asynccontextmanager
-    async def stream(self, prefix: RenderableType | None = None) -> AsyncGenerator[StreamSink]:
-        self._app.live.open(prefix)
+    async def stream(
+        self, prefix: RenderableType | None = None, *, render: StreamRender | None = None
+    ) -> AsyncGenerator[StreamSink]:
+        self._app.live.open(prefix, render)
         try:
             yield _LiveSink(self._app)
         finally:

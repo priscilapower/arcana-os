@@ -27,7 +27,7 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/switch <name>", "load another agent in a new session"),
     ("/retry", "re-run your last message"),
     ("/save", "force a session snapshot to disk now"),
-    ("/clear", "clear the transcript (history is kept)"),
+    ("/clear", "clear the screen (the session is kept)"),
     ("/fresh", "start a new session"),
     ("/no-memory", "start a new stateless session (memory off)"),
     ("/exit", "close the session and quit"),

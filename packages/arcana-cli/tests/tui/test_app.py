@@ -65,6 +65,26 @@ async def test_app_uses_the_generated_theme(tui):
         assert h.app.screen.styles.background.hex.lower() == SURFACE
 
 
+async def test_status_bar_shows_the_idle_line_between_statuses(tui):
+    async with tui() as h:
+        h.app.status_bar.set_idle(Text("session #abcd"))
+        await h.pilot.pause()
+        assert "session #abcd" in h.app.status_bar.render_line(0).text
+        handle = h.app.status_bar.push("Working")
+        await h.pilot.pause()
+        assert "Working" in h.app.status_bar.render_line(0).text
+        h.app.status_bar.pop(handle)
+        await h.pilot.pause()
+        assert "session #abcd" in h.app.status_bar.render_line(0).text
+
+
+async def test_markdown_uses_the_arcana_theme(tui):
+    async with tui() as h:
+        style = h.app.console.get_style("markdown.h1")
+        assert style.color is not None and style.color.triplet is not None
+        assert style.color.triplet.hex.lower() == ACCENT.lower()
+
+
 async def test_transcript_renders_a_rich_table(tui):
     async with tui() as h:
         table = Table("Card", "Temp")

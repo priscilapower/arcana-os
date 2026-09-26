@@ -19,6 +19,7 @@ from arcana_cli.ui.renderer.port import (
     NonInteractiveError,
     Question,
     Renderer,
+    StreamRender,
     StreamSink,
     Validator,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "NonInteractiveError",
     "Question",
     "Renderer",
+    "StreamRender",
     "StreamSink",
     "TtyRenderer",
     "Validator",

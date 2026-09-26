@@ -19,6 +19,7 @@ from arcana.memory.federation import MemoryFederation
 from arcana.models.adapters.fastembed_embedding import FastEmbedEmbeddingAdapter
 from arcana.models.connection_store import ConnectionStore
 from arcana.models.gateway import ModelGateway
+from arcana.tools import ToolConfirmer
 from arcana.types.agent import Agent as AgentRecord
 from arcana.types.session import Session
 from arcana.world import (
@@ -134,6 +135,7 @@ async def build_session_runtime(
     sm: SessionManager,
     *,
     no_memory: bool,
+    confirmer: ToolConfirmer | None = None,
 ) -> tuple[RuntimeAgent, MemoryFederation | None]:
     """Assemble a runtime agent + its memory federation for `run` and `chat`.
 
@@ -142,6 +144,8 @@ async def build_session_runtime(
     ``run`` and the interactive ``chat`` drive the exact same agent+memory path
     through here so they never diverge. Returns the agent together with the
     federation it created (``None`` when memory is off) so the caller closes it.
+    ``confirmer`` is the interactive approver a ``REQUIRE_CONFIRMATION`` guardrail
+    asks; without one such a rule denies.
     """
     memory_cfg = load_memory_config(ARCANA_HOME)
     memory_enabled = memory_cfg.enabled and not no_memory
@@ -154,6 +158,7 @@ async def build_session_runtime(
         embedding=embedding,
         session_manager=sm,
         extraction=memory_cfg.extraction,
+        confirmer=confirmer,
     )
 
 

@@ -29,6 +29,9 @@ T = TypeVar("T")
 #: is the encoder; a pydantic model is dumped in ``json`` mode first.
 JsonAble: TypeAlias = dict[str, Any] | list[Any] | BaseModel
 
+#: Turns everything streamed so far into the block shown for it; see :meth:`Renderer.stream`.
+StreamRender: TypeAlias = Callable[[str], RenderableType]
+
 #: Validates a typed answer: return an error message to re-ask, ``None`` to accept.
 #: The message is printed to the user, so it must never quote a secret answer.
 Validator: TypeAlias = Callable[[str], str | None]
@@ -159,6 +162,15 @@ class Renderer(Protocol):
         """Show ``msg`` as an in-progress indicator for the duration of the block."""
         ...
 
-    def stream(self, prefix: RenderableType | None = None) -> AbstractAsyncContextManager[StreamSink]:
-        """Open a block of incremental output, optionally led by ``prefix``."""
+    def stream(
+        self, prefix: RenderableType | None = None, *, render: StreamRender | None = None
+    ) -> AbstractAsyncContextManager[StreamSink]:
+        """Open a block of incremental output, optionally led by ``prefix``.
+
+        ``render`` formats the text: a surface that redraws calls it with
+        everything streamed so far (the empty string before the first chunk, so
+        it can show a placeholder) and shows the result, and the finished block
+        is ``render`` of the whole text. A block that received nothing finishes
+        as its prefix alone. Without ``render`` the text is shown as it came.
+        """
         ...

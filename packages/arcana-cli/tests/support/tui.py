@@ -74,20 +74,31 @@ async def wait_for_screen(pilot: Pilot[Any], screen_type: type[Screen[Any]]) -> 
 
 
 def run_inline_headless(
-    monkeypatch: pytest.MonkeyPatch, app: ArcanaApp, session: Callable[[Pilot[Any]], Awaitable[None]]
+    monkeypatch: pytest.MonkeyPatch, app: ArcanaApp | type[ArcanaApp], session: Callable[[Pilot[Any]], Awaitable[None]]
 ) -> None:
     """Make ``app.run_inline()`` run the real app headless, driven by ``session``.
 
-    Everything around the run (driver and mouse choice, the task-factory restore,
-    the exit replay) is the real code; only the terminal is swapped for Textual's
-    headless driver. ``session`` must end with ``app.exit()``.
+    ``app`` is an instance, or an app class when the code under test builds the
+    app itself (then every instance of it runs headless). Everything around the
+    run (driver and mouse choice, the task-factory restore, the exit replay) is
+    the real code; only the terminal is swapped for Textual's headless driver.
+    ``session`` must end with ``app.exit()``.
     """
-    original = app.run_async
+    if isinstance(app, ArcanaApp):
+        original = app.run_async
 
-    async def headless(**kwargs: Any) -> None:
-        await original(headless=True, auto_pilot=session, mouse=kwargs["mouse"])
+        async def headless(**kwargs: Any) -> None:
+            await original(headless=True, auto_pilot=session, mouse=kwargs["mouse"], size=DEFAULT_SIZE)
 
-    monkeypatch.setattr(app, "run_async", headless)
+        monkeypatch.setattr(app, "run_async", headless)
+        return
+
+    original_method = app.run_async
+
+    async def headless_method(self: ArcanaApp, **kwargs: Any) -> None:
+        await original_method(self, headless=True, auto_pilot=session, mouse=kwargs["mouse"], size=DEFAULT_SIZE)
+
+    monkeypatch.setattr(app, "run_async", headless_method)
 
 
 @asynccontextmanager
