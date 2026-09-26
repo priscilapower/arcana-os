@@ -3,6 +3,9 @@
 * :mod:`~arcana_cli.ui.renderer.port` — the :class:`Renderer` protocol and its value types.
 * :mod:`~arcana_cli.ui.renderer.tty` — :class:`TtyRenderer`, Rich console + line prompts.
 * :mod:`~arcana_cli.ui.renderer.json_renderer` — :class:`JsonRenderer`, the ``--json`` contract.
+* :mod:`~arcana_cli.ui.renderer.textual_renderer` — ``TextualRenderer``, the interactive app.
+  The one adapter not re-exported here: it loads Textual, which one-shot and
+  ``--json`` commands never need, so import it from its module.
 
 A command is written once as ``async def cmd(r: Renderer, ...)``; its Typer
 callback hands it :func:`renderer_for` and runs it through
