@@ -1,0 +1,4 @@
+exit=1
+Ambiguous: The Fool, The Magician, The High Priestess, The Empress, The Emperor, The Hierophant, The
+Lovers, The Chariot, The Hermit, The Hanged Man, The Devil, The Tower, The Star, The Moon, The Sun, 
+The World

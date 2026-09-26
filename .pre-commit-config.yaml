@@ -2,8 +2,11 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
+      # Golden files pin command output byte for byte, trailing spaces included.
       - id: trailing-whitespace
+        exclude: ^packages/arcana-cli/tests/.*/golden/
       - id: end-of-file-fixer
+        exclude: ^packages/arcana-cli/tests/.*/golden/
       - id: check-yaml
         args: [--unsafe]
       - id: check-toml

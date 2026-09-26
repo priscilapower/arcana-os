@@ -1,0 +1,25 @@
+exit=0
+✦ AVAILABLE CARDS
+   1. The Fool                  the-fool
+   2. The Magician              the-magician
+   3. The High Priestess        the-high-priestess
+   4. The Empress               the-empress
+   5. The Emperor               the-emperor
+   6. The Hierophant            the-hierophant
+   7. The Lovers                the-lovers
+   8. The Chariot               the-chariot
+   9. Strength                  strength
+  10. The Hermit                the-hermit
+  11. Wheel of Fortune          wheel-of-fortune
+  12. Justice                   justice
+  13. The Hanged Man            the-hanged-man
+  14. Death                     death
+  15. Temperance                temperance
+  16. The Devil                 the-devil
+  17. The Tower                 the-tower
+  18. The Star                  the-star
+  19. The Moon                  the-moon
+  20. The Sun                   the-sun
+  21. Judgement                 judgement
+
+Browse the Major Arcana (# or name/key, blank to cancel): 

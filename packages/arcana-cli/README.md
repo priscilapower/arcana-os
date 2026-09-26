@@ -399,6 +399,21 @@ uv run pyright packages/arcana-cli/arcana_cli
 uv run pytest packages/arcana-cli/tests/ -v
 ```
 
+### Writing a command against the renderer port
+
+A command body is a coroutine that takes a `Renderer` (`arcana_cli.ui.renderer`) and never touches the terminal directly: `r.emit(...)` for output, `await r.ask(Question(...))` / `r.confirm(...)` / `r.select([Choice(...)])` for input, and `r.status(...)` / `r.stream(...)` for progress. The Typer callback only picks the adapter and runs the coroutine:
+
+```python
+async def show_card(r: Renderer, name: str) -> None:
+    r.emit(card_panel(_resolve_card(r, name), get_registry()))
+
+@app.command("show")
+def show_cmd(name: str) -> None:
+    run_async(show_card(renderer_for(json=False), name))
+```
+
+`renderer_for(json=...)` returns a `TtyRenderer` (Rich console, line prompts, the card picker) or a `JsonRenderer` (`emit_json` documents only; any question fails closed with `NonInteractiveError`, exit code `1`, message on stderr). `arcana_cli/commands/cards.py` is the reference conversion. In tests, hand the coroutine a `RecordingRenderer` (`tests/support/renderer.py`), which records emitted output and answers questions from a script.
+
 ---
 
 ## Roadmap

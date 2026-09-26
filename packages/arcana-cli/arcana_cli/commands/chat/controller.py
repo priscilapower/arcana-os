@@ -21,7 +21,7 @@ from arcana.memory.federation import MemoryFederation
 from arcana.models.gateway import ModelGateway
 from arcana.types.agent import Agent as AgentRecord
 from arcana.types.session import MessageRole, Session
-from arcana_cli.commands.chat.editor import _agent_history, _PasteRegistry
+from arcana_cli.commands.chat.editor import _agent_history
 from arcana_cli.commands.chat.render import (
     _agent_eyebrow_block,
     _card_table,
@@ -34,6 +34,7 @@ from arcana_cli.commands.chat.render import (
     _user_block,
 )
 from arcana_cli.commands.run import build_session_runtime, build_world_engine, find_agent
+from arcana_cli.ui.input_model import _PasteRegistry
 from arcana_cli.ui.theme import TXT3, card_color, dim, err
 
 # Package-internal exports — the app layout builds on these. Declared so the
