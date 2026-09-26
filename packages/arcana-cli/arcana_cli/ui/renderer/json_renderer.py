@@ -5,6 +5,7 @@ JSON shapes and exit codes a script relies on are exactly the ones the commands
 produced before they took a renderer. The surface never prompts: a question
 raises :class:`~arcana_cli.ui.renderer.port.NonInteractiveError` (exit
 ``EXIT_ERROR``, message on stderr) instead of blocking a pipeline on stdin.
+Notes go to stderr too, so stdout carries nothing but the documents.
 """
 
 from collections.abc import AsyncGenerator, Sequence
@@ -15,12 +16,17 @@ from pydantic import BaseModel
 from rich.console import Console, RenderableType
 
 from arcana_cli._render import emit_json
-from arcana_cli.ui.renderer.port import Choice, JsonAble, Question, StreamRender, refuse
+from arcana_cli.ui.renderer.port import Choice, JsonAble, Question, StatusHandle, StreamRender, refuse
 
 T = TypeVar("T")
 
 #: How :class:`~arcana_cli.ui.renderer.port.NonInteractiveError` names this surface.
 JSON_SURFACE = "--json mode"
+
+
+class _NoStatus:
+    def stop(self) -> None:
+        pass
 
 
 class JsonRenderer:
@@ -47,6 +53,9 @@ class JsonRenderer:
                 f"JsonRenderer.emit takes a dict, list, or pydantic model, not {type(renderable).__name__}; "
                 "build the JSON payload for --json output instead of a Rich renderable"
             )
+
+    def note(self, renderable: RenderableType) -> None:
+        self._stderr.print(renderable)
 
     async def ask(self, q: Question) -> NoReturn:
         self._refuse(q.prompt, q.flag)
@@ -91,10 +100,14 @@ class JsonRenderer:
         self._refuse(title or "a selection", flag)
 
     @asynccontextmanager
-    async def status(self, msg: str) -> AsyncGenerator[None]:
+    async def status(self, msg: str) -> AsyncGenerator[StatusHandle]:
         """No indicator: stdout carries only JSON documents."""
-        yield
+        yield _NoStatus()
 
     def stream(self, prefix: RenderableType | None = None, *, render: StreamRender | None = None) -> NoReturn:
-        """Incremental output has no JSON form; a command emits the finished result instead."""
+        """Incremental output has no JSON form; a command emits the finished result instead.
+
+        A command offering both a stream and ``--json`` rejects the pair as a
+        usage error before it gets here.
+        """
         raise TypeError("JsonRenderer has no stream; collect the output and emit it as one JSON document")

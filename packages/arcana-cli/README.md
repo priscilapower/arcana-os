@@ -281,24 +281,31 @@ paths never appear in a shared log or error output.
 
 ### `arcana run`
 
-Run a prompt against a specific agent. `--agent` is required.
+Run a prompt against an agent: the one named with `--agent`, or, without it, the one The World routes to.
 
 ```bash
 arcana run "Summarise the latest on LLM evals" --agent researcher
 arcana run "Refactor this module" --agent my-agent --stream
 arcana run "Where did we leave off?" --agent researcher --continue
 arcana run "One-off, don't remember this" --agent researcher --no-memory
+arcana run "Summarise this" --agent researcher --stream | tee summary.md
+arcana run "Classify this ticket" --agent triage --json | jq -r .response
 ```
 
 | Flag | Default | Description                      |
 |------|---------|----------------------------------|
-| `--agent / -a` | — (required) | Target agent by name or UUID |
+| `--agent / -a` | routed by The World | Target agent by name or UUID |
 | `--stream / -s` | off | Stream output token by token     |
 | `--session` | new session | Resume a specific session by UUID |
 | `--continue` | off | Resume the agent's most recent session |
 | `--no-memory` | off | Run stateless — don't load or persist memory |
+| `--json` | off | Print one JSON document instead; can't be combined with `--stream` |
 
 The agent is rebuilt from its stored record and run through a `ModelGateway` using its configured connection. Each run is recorded to a session under the agent, and — unless `--no-memory` is passed — the agent recalls relevant memory before answering and extracts new memory afterwards through its `MemoryFederation`. The command prints the session id so you can resume it later with `--session` or `--continue`. `--session` and `--continue` are mutually exclusive.
+
+stdout carries the reply alone — the card-bordered panel, or with `--stream` the tokens and a final newline — so it pipes cleanly. The `✦ thinking…` spinner and the notes around the reply (which agent answered, the session id) go to stderr; the spinner only draws when stderr is a terminal and disappears when the first token arrives.
+
+With `--json`, stdout is exactly one document: `{"agent", "session_id", "response"}`, plus `"usage": {"input_tokens", "output_tokens"}` when the model reported token counts. A failure prints `{"error": {"code", "message"}}` instead and exits with that code (`1`). `--json --stream` is a usage error (exit `2`): a token stream has no JSON form.
 
 ---
 
@@ -406,7 +413,7 @@ uv run pytest packages/arcana-cli/tests/ -v
 
 ### Writing a command against the renderer port
 
-A command body is a coroutine that takes a `Renderer` (`arcana_cli.ui.renderer`) and never touches the terminal directly: `r.emit(...)` for output, `await r.ask(Question(...))` / `r.confirm(...)` / `r.select([Choice(...)])` for input, and `r.status(...)` / `r.stream(...)` for progress. The Typer callback only picks the adapter and runs the coroutine:
+A command body is a coroutine that takes a `Renderer` (`arcana_cli.ui.renderer`) and never touches the terminal directly: `r.emit(...)` for output, `r.note(...)` for remarks about the run that aren't its output (stderr on the console and `--json` surfaces), `await r.ask(Question(...))` / `r.confirm(...)` / `r.select([Choice(...)])` for input, and `r.status(...)` / `r.stream(...)` for progress. `async with r.status(msg) as status` yields a handle whose `status.stop()` ends the indicator early — `arcana run --stream` stops it on the first token. The Typer callback only picks the adapter and runs the coroutine:
 
 ```python
 async def show_card(r: Renderer, name: str) -> None:
@@ -417,7 +424,7 @@ def show_cmd(name: str) -> None:
     run_async(show_card(renderer_for(json=False), name))
 ```
 
-`renderer_for(json=...)` returns a `TtyRenderer` (Rich console and line prompts; a `select` whose choices carry previews opens the two-pane picker as a short-lived Textual app on the command's own event loop, and fails closed with `NonInteractiveError` without a terminal) or a `JsonRenderer` (`emit_json` documents only; any question fails closed with `NonInteractiveError`, exit code `1`, message on stderr). `arcana_cli/commands/cards.py` is the reference conversion. In tests, hand the coroutine a `RecordingRenderer` (`tests/support/renderer.py`), which records emitted output and answers questions from a script.
+`renderer_for(json=...)` returns a `TtyRenderer` (Rich console and line prompts; output on stdout, notes and the status spinner on stderr; a `select` whose choices carry previews opens the two-pane picker as a short-lived Textual app on the command's own event loop, and fails closed with `NonInteractiveError` without a terminal) or a `JsonRenderer` (`emit_json` documents only; any question fails closed with `NonInteractiveError`, exit code `1`, message on stderr). `arcana_cli/commands/cards.py` is the reference conversion; `arcana_cli/commands/run.py` (`run_turn`) shows status and streaming, and the `--json` split. In tests, hand the coroutine a `RecordingRenderer` (`tests/support/renderer.py`), which records emitted output and notes, answers questions from a script, and logs statuses, their stops and streamed chunks in order (`events`).
 
 ### The interactive app shell
 
@@ -431,7 +438,7 @@ The chat input (`tui/chat_input.py`) is a `ChatInput` built on Textual's `TextAr
 
 The chat session (`commands/chat/`) runs on it: `ChatApp` adds the session's keys (priority Ctrl+C / Ctrl+D bindings, so they beat the input box's copy and delete-forward), and `_ChatController` holds the session logic and writes only through the renderer port, so its tests hand it a `RecordingRenderer`. A turn runs as an app worker, so anything it awaits, such as a `ToolConfirmer` passed through `build_session_runtime(..., confirmer=...)`, can push a dialog and wait for the answer; cancelling the turn takes the dialog down with it. `Renderer.stream(prefix, render=...)` takes a function from the text so far to the block shown, which is how a reply re-renders as Markdown while it streams. `commands/chat/command.py` settles the agent and session before loading the app module, so `arcana_cli.main` still imports without Textual.
 
-The two-pane picker (`tui/card_picker.py`) is `CardPickerScreen`, a modal screen with a filter box, the list, and a scrollable preview of the highlighted choice's `Choice.preview`; single pick or `Space` multi-select with `max_items`, `Esc`/`Ctrl+C` to cancel. Any `Renderer.select` whose choices carry previews opens it: `TextualRenderer` pushes it over the session (a bare `/switch` uses it to pick an agent), `TtyRenderer` runs it in `PickerApp` (`await pick(...)`). `ui/card_picker.py` keeps `select_card` / `select_cards` as async wrappers over `Renderer.select` with `card_choices()`, which leaves THE WORLD out unless the caller's `exclude` lets it in. No module reads raw keys any other way; a test bans `readchar` imports.
+The two-pane picker (`tui/card_picker.py`) is `CardPickerScreen`, a modal screen with a filter box, the list, and a scrollable preview of the highlighted choice's `Choice.preview`; single pick or `Space` multi-select with `max_items`, `Esc`/`Ctrl+C` to cancel. Any `Renderer.select` whose choices carry previews opens it: `TextualRenderer` pushes it over the session (a bare `/switch` uses it to pick an agent), `TtyRenderer` runs it in `PickerApp` (`await pick(...)`). `ui/card_picker.py` keeps `select_card` / `select_cards` as async wrappers over `Renderer.select` with `card_choices()`, which leaves THE WORLD out unless the caller's `exclude` lets it in. No module reads raw keys any other way, and none runs a `rich.live` display; a test bans `readchar` and `rich.live` imports.
 
 UI tests drive the app headless through Textual's Pilot: `tests/support/tui.py` provides `arcana_pilot()` (exposed as the `tui` fixture under `tests/tui/`), which yields the app, its pilot, and a bound `TextualRenderer`.
 

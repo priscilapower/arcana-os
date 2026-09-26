@@ -3,7 +3,8 @@
 Output is appended to the app's transcript; questions are modal dialogs awaited
 with ``push_screen_wait`` (a selection whose choices carry previews gets the
 two-pane :class:`~arcana_cli.tui.card_picker.CardPickerScreen`); a status is the status-bar spinner; a stream grows in
-the live block and lands in the transcript when it closes.
+the live block and lands in the transcript when it closes. A note is a
+transcript block like any other: the session has no separate stream to put it on.
 
 A question can only be awaited from inside an app worker (``app.run_worker``):
 Textual's ``push_screen_wait`` needs one, and each prompt method checks for it
@@ -40,7 +41,15 @@ from textual.worker import NoActiveWorker, get_current_worker  # pyright: ignore
 from arcana_cli.tui.app import ArcanaApp
 from arcana_cli.tui.card_picker import CardPickerScreen
 from arcana_cli.tui.screens import ConfirmScreen, MultiSelectScreen, PromptScreen, SelectScreen
-from arcana_cli.ui.renderer.port import Choice, JsonAble, Question, StreamRender, StreamSink, initial_indexes
+from arcana_cli.ui.renderer.port import (
+    Choice,
+    JsonAble,
+    Question,
+    StatusHandle,
+    StreamRender,
+    StreamSink,
+    initial_indexes,
+)
 from arcana_cli.ui.theme import ACCENT, TXT2
 
 T = TypeVar("T")
@@ -96,6 +105,17 @@ class _LiveSink:
         self._app.live.feed(chunk)
 
 
+class _StatusBarEntry:
+    """Stops one status-bar entry."""
+
+    def __init__(self, app: ArcanaApp, handle: int) -> None:
+        self._app = app
+        self._handle = handle
+
+    def stop(self) -> None:
+        self._app.status_bar.pop(self._handle)
+
+
 class TextualRenderer:
     """Renders into a running :class:`~arcana_cli.tui.app.ArcanaApp`."""
 
@@ -115,6 +135,9 @@ class TextualRenderer:
         elif isinstance(renderable, dict | list):
             renderable = Pretty(renderable)
         self._app.transcript.append(renderable)
+
+    def note(self, renderable: RenderableType) -> None:
+        self.emit(renderable)
 
     async def ask(self, q: Question) -> str:
         _require_worker("ask")
@@ -194,12 +217,12 @@ class TextualRenderer:
         return values[0] if values else None
 
     @asynccontextmanager
-    async def status(self, msg: str) -> AsyncGenerator[None]:
-        handle = self._app.status_bar.push(msg)
+    async def status(self, msg: str) -> AsyncGenerator[StatusHandle]:
+        entry = _StatusBarEntry(self._app, self._app.status_bar.push(msg))
         try:
-            yield
+            yield entry
         finally:
-            self._app.status_bar.pop(handle)
+            entry.stop()
 
     @asynccontextmanager
     async def stream(

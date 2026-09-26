@@ -1,0 +1,7 @@
+exit=0
+The World routed to scout · default
+Agent: scout · the-hermit · ollama/hermes-3
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ The hermit speaks.                                                                               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+session: <short-id>  ·  continue with  --session <session-id>  (or --continue)
