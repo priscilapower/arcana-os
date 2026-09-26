@@ -281,7 +281,7 @@ class _ChatController:
         # /switch is an explicit reroute — record the decision in the routing
         # audit, then load the named agent. Conversation-context transfer is out
         # of scope here; this only re-resolves the agent.
-        build_world_engine(self.reg).route("", explicit_agent=new_record)
+        await build_world_engine(self.reg).route("", explicit_agent=new_record)
         if self.federation is not None:
             await self.federation.aclose()
         self._sm.close(self.session)

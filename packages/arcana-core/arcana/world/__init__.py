@@ -10,6 +10,8 @@ audit before the agent runs. The selection itself is the pure, side-effect-free
 from arcana.world.audit import RoutingAuditLog
 from arcana.world.config import DEFAULT_TASK_PREVIEW_CHARS, RoutingTunables
 from arcana.world.engine import WorldEngine
+from arcana.world.learning import LearningSignalLog, QualitySignalSink
+from arcana.world.reflex import ReflexClassifier
 from arcana.world.router import NoRouteAskUser, Router
 from arcana.world.store import LoadedWorld, WorldStore
 
@@ -20,6 +22,9 @@ __all__ = [
     "WorldStore",
     "LoadedWorld",
     "RoutingAuditLog",
+    "ReflexClassifier",
+    "QualitySignalSink",
+    "LearningSignalLog",
     "RoutingTunables",
     "DEFAULT_TASK_PREVIEW_CHARS",
 ]

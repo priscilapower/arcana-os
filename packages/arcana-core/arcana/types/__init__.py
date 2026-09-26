@@ -18,6 +18,7 @@ from arcana.types.guardrails import (
     GuardrailSeverity,
     GuardrailViolationError,
 )
+from arcana.types.learning import QualitySignalSource, SessionQualitySignal
 from arcana.types.memory import (
     DEFAULT_DECAY_PROFILES,
     WORLD_DECAY_PROFILES,
@@ -74,6 +75,8 @@ from arcana.types.tool import (
 )
 from arcana.types.workspace import Workspace
 from arcana.types.world import (
+    CapabilityTier,
+    ReflexPick,
     ResolutionLayer,
     RoutingConfig,
     RoutingDecision,
@@ -109,6 +112,9 @@ __all__ = [
     "GuardrailRuleType",
     "GuardrailSeverity",
     "GuardrailViolationError",
+    # Learning loop
+    "QualitySignalSource",
+    "SessionQualitySignal",
     # Memory
     "MemoryAdapter",
     "MemoryEdge",
@@ -164,6 +170,8 @@ __all__ = [
     "RoutingRule",
     "RuleMatchMode",
     "ResolutionLayer",
+    "CapabilityTier",
+    "ReflexPick",
     "RoutingConfig",
     "RoutingDecision",
     "Spread",
