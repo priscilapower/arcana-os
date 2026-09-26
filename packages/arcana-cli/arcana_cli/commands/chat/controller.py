@@ -19,6 +19,7 @@ from textual.worker import Worker
 from arcana.agents.agent import Agent as RuntimeAgent
 from arcana.agents.registry import AgentRegistry
 from arcana.agents.session_manager import SessionManager
+from arcana.cards.registry import get_registry
 from arcana.memory.federation import MemoryFederation
 from arcana.models.gateway import ModelGateway
 from arcana.tools import ToolConfirmer
@@ -39,12 +40,16 @@ from arcana_cli.commands.chat.render import (
 from arcana_cli.commands.run import build_session_runtime, build_world_engine, find_agent
 from arcana_cli.tui.app import ArcanaApp
 from arcana_cli.tui.history import AgentHistory
-from arcana_cli.ui.renderer import Renderer
+from arcana_cli.ui.card_panel import card_panel
+from arcana_cli.ui.renderer import Choice, Renderer
 from arcana_cli.ui.theme import card_color, dim, err
 
 # Package-internal exports — the chat app builds on these. Declared so the split
 # doesn't read as dead code under strict unused-symbol checks.
 __all__ = ["_ChatController", "_friendly_error"]
+
+#: The title of the agent picker a bare ``/switch`` opens.
+SWITCH_TITLE = "Switch to agent"
 
 
 def _friendly_error(exc: Exception) -> str:
@@ -276,14 +281,35 @@ class _ChatController:
         mode = "memory off" if memory_off else "memory on"
         self._note(dim(f"new session — {str(self.session.id)[:8]}… ({mode})"))
 
+    async def _pick_agent(self) -> AgentRecord | None:
+        """Offer every agent in the two-pane picker, each previewed by its primary card; ``None`` if cancelled."""
+        records = self.reg.list()
+        if not records:
+            self._note(dim("No agents to switch to."))
+            return None
+        registry = get_registry()
+        choices = [
+            Choice(
+                record.id,
+                f"{record.name} · {registry.get(record.card).name}",
+                preview=card_panel(registry.get(record.card), registry),
+            )
+            for record in records
+        ]
+        picked = await self.renderer.select(choices, title=SWITCH_TITLE, initial=[self.record.id])
+        return next((record for record in records if record.id == picked), None)
+
     async def _switch(self, arg: str) -> None:
-        new_record = find_agent(arg, self.reg) if arg else None
-        if not arg:
-            self._note(err("Usage: /switch <name>"))
-            return
-        if new_record is None:
-            self._note(err(f"No agent '{escape(arg)}'."))
-            return
+        """``/switch <name>`` loads the named agent; a bare ``/switch`` picks one first (Esc changes nothing)."""
+        if arg:
+            new_record = find_agent(arg, self.reg)
+            if new_record is None:
+                self._note(err(f"No agent '{escape(arg)}'."))
+                return
+        else:
+            new_record = await self._pick_agent()
+            if new_record is None:
+                return
         if not new_record.model:
             self._note(err(f"No model configured for agent '{escape(new_record.name)}'."))
             return

@@ -1,15 +1,20 @@
 """Tests for arcana cards commands."""
 
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 import typer
 from typer.testing import CliRunner
 
+import arcana_cli.tui.card_picker as card_picker_app
+import arcana_cli.ui.renderer.tty as tty_mod
 from arcana.types.card import Card
 from arcana_cli._render import EXIT_ERROR
 from arcana_cli.commands.cards import list_cards, show_card
 from arcana_cli.main import app
+from arcana_cli.ui.renderer import Choice
 from tests.support.renderer import RecordingRenderer
 
 runner = CliRunner()
@@ -19,38 +24,31 @@ GOLDEN = Path(__file__).parent / "golden" / "cards"
 GOLDEN_ENV: dict[str, str | None] = {"COLUMNS": "100", "FORCE_COLOR": None, "TTY_COMPATIBLE": None}
 
 
-def test_cards_browse_lists_all_21_in_non_tty():
-    # non-TTY fallback: prints card names, blank input cancels
-    result = runner.invoke(app, ["cards"], input="\n")
-    assert result.exit_code == 0
-    assert "The Fool" in result.output
-    assert "The Magician" in result.output
-    assert "The High Priestess" in result.output
-    assert "The Empress" in result.output
-    assert "The Emperor" in result.output
-    assert "The Hierophant" in result.output
-    assert "The Lovers" in result.output
-    assert "The Chariot" in result.output
-    assert "Strength" in result.output
-    assert "The Hermit" in result.output
-    assert "Wheel of Fortune" in result.output
-    assert "Justice" in result.output
-    assert "The Hanged Man" in result.output
-    assert "Death" in result.output
-    assert "Temperance" in result.output
-    assert "The Devil" in result.output
-    assert "The Star" in result.output
-    assert "The Moon" in result.output
-    assert "The Sun" in result.output
-    assert "Judgement" in result.output
-
-
-def test_cards_browse_selecting_card_shows_details():
-    # non-TTY fallback: selecting a card by key prints its full panel
+def test_cards_browse_without_a_terminal_fails_closed():
+    # The picker needs a terminal: piped, it refuses and points at `cards show`.
     result = runner.invoke(app, ["cards"], input="the-fool\n")
-    assert result.exit_code == 0
+    assert result.exit_code == EXIT_ERROR
+    assert "never prompts" in result.output
+    assert "arcana cards show" in result.output
+    assert "Explorer" not in result.output
+
+
+def test_cards_browse_on_a_terminal_opens_the_picker_and_shows_the_pick(monkeypatch: pytest.MonkeyPatch):
+    seen: dict[str, Any] = {}
+
+    async def fake_pick(choices: Sequence[Choice[Card]], **kwargs: Any) -> list[int]:
+        seen.update(values=[c.value for c in choices], **kwargs)
+        return [next(i for i, c in enumerate(choices) if c.value is Card.FOOL)]
+
+    monkeypatch.setattr(tty_mod, "_is_terminal", lambda: True)
+    monkeypatch.setattr(card_picker_app, "pick", fake_pick)
+    result = runner.invoke(app, ["cards"])
+    assert result.exit_code == 0, result.output
     assert "Explorer" in result.output
     assert "0.95" in result.output
+    assert Card.WORLD not in seen["values"]
+    assert len(seen["values"]) == len(Card) - 1
+    assert seen["title"] == "Browse the Major Arcana"
 
 
 def test_cards_show_by_key():
@@ -101,8 +99,7 @@ def test_cards_show_unknown_card_exits_nonzero():
         ("show_hermit", ["cards", "show", "hermit"], None),
         ("show_unknown", ["cards", "show", "not-a-real-card"], None),
         ("show_ambiguous", ["cards", "show", "the"], None),
-        ("browse_pick_fool", ["cards"], "the-fool\n"),
-        ("browse_cancel", ["cards"], "\n"),
+        ("browse_non_tty", ["cards"], None),
     ],
 )
 def test_cards_output_matches_golden(golden: str, args: list[str], stdin: str | None):

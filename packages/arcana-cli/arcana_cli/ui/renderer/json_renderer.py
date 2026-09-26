@@ -13,13 +13,14 @@ from typing import Literal, NoReturn, TypeVar, overload
 
 from pydantic import BaseModel
 from rich.console import Console, RenderableType
-from rich.markup import escape
 
 from arcana_cli._render import emit_json
-from arcana_cli.ui.renderer.port import Choice, JsonAble, NonInteractiveError, Question, StreamRender
-from arcana_cli.ui.theme import err
+from arcana_cli.ui.renderer.port import Choice, JsonAble, Question, StreamRender, refuse
 
 T = TypeVar("T")
+
+#: How :class:`~arcana_cli.ui.renderer.port.NonInteractiveError` names this surface.
+JSON_SURFACE = "--json mode"
 
 
 class JsonRenderer:
@@ -29,10 +30,7 @@ class JsonRenderer:
         self._stderr = stderr if stderr is not None else Console(stderr=True)
 
     def _refuse(self, prompt: str, flag: str | None) -> NoReturn:
-        """Report the unanswerable question on stderr and fail closed."""
-        error = NonInteractiveError(prompt, flag=flag)
-        self._stderr.print(err(escape(error.message)))
-        raise error
+        refuse(self._stderr, prompt, flag=flag, surface=JSON_SURFACE)
 
     def emit(self, renderable: RenderableType | JsonAble) -> None:
         """Print one JSON document; a Rich renderable is a programming error here.

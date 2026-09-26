@@ -15,13 +15,15 @@ the test harness) share no state, only this shape.
 from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
-from typing import Any, Generic, Literal, Protocol, TypeAlias, TypeVar, overload
+from typing import Any, Generic, Literal, NoReturn, Protocol, TypeAlias, TypeVar, overload
 
 import typer
 from pydantic import BaseModel
-from rich.console import RenderableType
+from rich.console import Console, RenderableType
+from rich.markup import escape
 
 from arcana_cli._render import EXIT_ERROR
+from arcana_cli.ui.theme import err
 
 T = TypeVar("T")
 
@@ -75,6 +77,14 @@ class Choice(Generic[T]):
     disabled: bool = False
 
 
+def initial_indexes(choices: Sequence[Choice[T]], initial: Sequence[T]) -> list[int]:
+    """The indexes of the enabled ``choices`` whose values ``initial`` names, in ``initial``'s order.
+
+    An adapter pre-selects these and starts its cursor on the first.
+    """
+    return [i for value in initial for i, c in enumerate(choices) if c.value == value and not c.disabled]
+
+
 class NonInteractiveError(typer.Exit):
     """Raised when a command needs an answer on a surface that cannot prompt.
 
@@ -94,6 +104,16 @@ class NonInteractiveError(typer.Exit):
 
     def __str__(self) -> str:
         return self.message
+
+
+def refuse(stderr: Console, prompt: str, *, flag: str | None, surface: str) -> NoReturn:
+    """Fail closed on a question ``surface`` can't ask: say so on ``stderr``, then raise :class:`NonInteractiveError`.
+
+    The message is escaped, so a prompt that looks like Rich markup is printed as written.
+    """
+    error = NonInteractiveError(prompt, flag=flag, surface=surface)
+    stderr.print(err(escape(error.message)))
+    raise error
 
 
 class StreamSink(Protocol):

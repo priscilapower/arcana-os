@@ -24,7 +24,7 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/help", "list these commands"),
     ("/memory", "show what this agent recalls from this session"),
     ("/card", "print the resolved card config — temperature, tone, weights"),
-    ("/switch <name>", "load another agent in a new session"),
+    ("/switch [name]", "load another agent in a new session (no name: pick one)"),
     ("/retry", "re-run your last message"),
     ("/save", "force a session snapshot to disk now"),
     ("/clear", "clear the screen (the session is kept)"),

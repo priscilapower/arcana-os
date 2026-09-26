@@ -226,7 +226,7 @@ def make_error_panel(msg: str, *, title: str = "Error") -> Panel:
 
 
 # ---------------------------------------------------------------------------
-# Card picker styles  (consumed by card_picker.py)
+# Card picker styles  (consumed by tui/card_picker.py; the hex ones also as TCSS variables)
 # ---------------------------------------------------------------------------
 PICKER_CURSOR_SELECTED = f"bold reverse {GREEN}"
 PICKER_CURSOR = f"bold reverse {ACCENT}"

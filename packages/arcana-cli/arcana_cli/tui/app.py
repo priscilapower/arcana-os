@@ -1,6 +1,6 @@
-"""``ArcanaApp`` — the interactive session's Textual app shell.
+"""``ArcanaApp`` — the interactive session's Textual app shell — and its base, ``ArcanaBaseApp``.
 
-The app is a transcript, a live block for streamed output, the chat input
+The session app is a transcript, a live block for streamed output, the chat input
 (focused on start) and a status bar, with question dialogs pushed on top as
 modal screens. It owns the platform
 defaults every screen inside it inherits:
@@ -19,12 +19,18 @@ defaults every screen inside it inherits:
 The app runs on the caller's event loop (``await app.run_inline()`` inside the
 one :func:`asyncio.run` of :func:`arcana_cli._async.run_async`); it never starts
 a loop of its own.
+
+:class:`ArcanaBaseApp` holds what every Arcana app shares — the generated
+stylesheet and theme, and :meth:`ArcanaBaseApp.run_here`, the inline-where-possible
+run on the current loop — so a short-lived app (the one-shot card picker) looks
+and runs like the session.
 """
 
 import asyncio
 import contextlib
 import sys
 from pathlib import Path
+from typing import TypeVar
 
 from rich.console import Console, RenderableType
 from rich.text import Text
@@ -36,6 +42,8 @@ from arcana_cli.tui.config import REPLAY_BLOCKS, load_ui_config
 from arcana_cli.tui.theme_tcss import ARCANA_TCSS, ARCANA_THEME
 from arcana_cli.tui.widgets import LiveBlock, StatusBar, Transcript
 from arcana_cli.ui.theme import MARKDOWN_THEME, dim
+
+_R = TypeVar("_R")
 
 #: Printed before the first full-screen session on Windows.
 FULLSCREEN_NOTICE = "Arcana runs full-screen on Windows; the session transcript is printed when you exit."
@@ -54,14 +62,8 @@ def replay_tail(blocks: list[RenderableType], limit: int) -> list[RenderableType
     return [note, *shown]
 
 
-class ArcanaApp(App[None]):
-    """The interactive session's app shell.
-
-    ``transcript``, ``live``, ``chat_panel`` (holding ``chat_input``) and
-    ``status_bar`` are the standing widgets; a
-    :class:`~arcana_cli.ui.renderer.textual_renderer.TextualRenderer` writes to
-    them and pushes its question dialogs onto the screen stack.
-    """
+class ArcanaBaseApp(App[_R]):
+    """An app on Arcana's stylesheet and theme, run on the caller's loop with :meth:`run_here`."""
 
     CSS = ARCANA_TCSS
     ENABLE_COMMAND_PALETTE = False
@@ -71,6 +73,38 @@ class ArcanaApp(App[None]):
         self.register_theme(ARCANA_THEME)
         self.theme = ARCANA_THEME.name
         self.console.push_theme(MARKDOWN_THEME)
+
+    async def run_here(self, *, mouse: bool | None = None) -> _R | None:
+        """Run the app on the current event loop and return its result.
+
+        Inline on POSIX, full-screen on Windows (Textual has no inline driver
+        there). ``mouse=None`` reads ``ui.mouse`` from ``config.json`` (default on).
+
+        Textual installs its eager task factory on the running loop; the loop's
+        previous factory is put back when the app exits, so the rest of the
+        invocation runs on the loop it started with.
+        """
+        if mouse is None:
+            mouse = load_ui_config(ARCANA_HOME).mouse
+        loop = asyncio.get_running_loop()
+        task_factory = loop.get_task_factory()
+        try:
+            return await self.run_async(inline=sys.platform != "win32", mouse=mouse)
+        finally:
+            loop.set_task_factory(task_factory)
+
+
+class ArcanaApp(ArcanaBaseApp[None]):
+    """The interactive session's app shell.
+
+    ``transcript``, ``live``, ``chat_panel`` (holding ``chat_input``) and
+    ``status_bar`` are the standing widgets; a
+    :class:`~arcana_cli.ui.renderer.textual_renderer.TextualRenderer` writes to
+    them and pushes its question dialogs onto the screen stack.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
         self.transcript = Transcript(id="transcript")
         self.live = LiveBlock(id="live")
         self.chat_input = ChatInput(id="chat-input")
@@ -93,31 +127,18 @@ class ArcanaApp(App[None]):
         console: Console | None = None,
         replay_limit: int = REPLAY_BLOCKS,
     ) -> None:
-        """Run the app on the current event loop, then replay the transcript to ``console``.
+        """Run the app with :meth:`run_here`, then replay the transcript to ``console``.
 
-        Inline on POSIX, full-screen on Windows. ``mouse=None`` reads ``ui.mouse``
-        from ``config.json`` (default on). ``console`` defaults to a stdout
-        console, created at call time.
-
-        The app's console and the default replay console both carry the Markdown
-        theme, so a reply looks the same in the session and in scrollback.
-
-        Textual installs its eager task factory on the running loop; the loop's
-        previous factory is put back when the app exits, so the rest of the
-        invocation runs on the loop it started with.
+        ``console`` defaults to a stdout console, created at call time. The app's
+        console and the default replay console both carry the Markdown theme, so
+        a reply looks the same in the session and in scrollback.
         """
         out = console if console is not None else Console(theme=MARKDOWN_THEME)
-        inline = sys.platform != "win32"
-        if not inline:
+        if sys.platform == "win32":
             _notice_fullscreen_once(out, ARCANA_HOME)
-        if mouse is None:
-            mouse = load_ui_config(ARCANA_HOME).mouse
-        loop = asyncio.get_running_loop()
-        task_factory = loop.get_task_factory()
         try:
-            await self.run_async(inline=inline, mouse=mouse)
+            await self.run_here(mouse=mouse)
         finally:
-            loop.set_task_factory(task_factory)
             for block in replay_tail(self.transcript.retained, replay_limit):
                 out.print(block)
 

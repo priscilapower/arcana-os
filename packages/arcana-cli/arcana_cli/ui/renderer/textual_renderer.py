@@ -1,7 +1,8 @@
 """``TextualRenderer`` — the renderer port over a running :class:`~arcana_cli.tui.app.ArcanaApp`.
 
 Output is appended to the app's transcript; questions are modal dialogs awaited
-with ``push_screen_wait``; a status is the status-bar spinner; a stream grows in
+with ``push_screen_wait`` (a selection whose choices carry previews gets the
+two-pane :class:`~arcana_cli.tui.card_picker.CardPickerScreen`); a status is the status-bar spinner; a stream grows in
 the live block and lands in the transcript when it closes.
 
 A question can only be awaited from inside an app worker (``app.run_worker``):
@@ -37,8 +38,9 @@ from textual.screen import Screen
 from textual.worker import NoActiveWorker, get_current_worker  # pyright: ignore[reportUnknownVariableType]
 
 from arcana_cli.tui.app import ArcanaApp
+from arcana_cli.tui.card_picker import CardPickerScreen
 from arcana_cli.tui.screens import ConfirmScreen, MultiSelectScreen, PromptScreen, SelectScreen
-from arcana_cli.ui.renderer.port import Choice, JsonAble, Question, StreamRender, StreamSink
+from arcana_cli.ui.renderer.port import Choice, JsonAble, Question, StreamRender, StreamSink, initial_indexes
 from arcana_cli.ui.theme import ACCENT, TXT2
 
 T = TypeVar("T")
@@ -166,9 +168,15 @@ class TextualRenderer:
         flag: str | None = None,
     ) -> T | list[T] | None:
         _require_worker("select")
-        seeds = [i for i, c in enumerate(choices) if c.value in initial and not c.disabled]
+        seeds = initial_indexes(choices, initial)
         picked: list[int]
-        if multi:
+        if any(c.preview is not None for c in choices if not c.disabled):
+            chosen = await _wait_for_answer(
+                self._app,
+                CardPickerScreen(choices, multi=multi, initial=seeds, title=title, max_items=max_items),
+            )
+            picked = chosen if chosen is not None else []
+        elif multi:
             many = await _wait_for_answer(
                 self._app, MultiSelectScreen(choices, initial=seeds, title=title, max_items=max_items)
             )

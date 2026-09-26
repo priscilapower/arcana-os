@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 import typer
 from rich.console import Console
+from rich.panel import Panel
 from textual.pilot import Pilot
 
 import arcana_cli.commands.chat.app as chat_app
@@ -25,6 +26,7 @@ from arcana.types.session import MessageRole, SessionStatus
 from arcana_cli._render import EXIT_ERROR
 from arcana_cli.commands.chat.app import ChatApp, run_chat
 from arcana_cli.commands.chat.controller import _ChatController
+from arcana_cli.tui.card_picker import CardPickerScreen
 from arcana_cli.tui.history import AgentHistory
 from arcana_cli.tui.screens import ConfirmScreen
 from arcana_cli.ui.renderer.textual_renderer import TextualRenderer
@@ -320,6 +322,55 @@ async def test_switch_rescopes_history_and_completion(agent_fixture, arcana_home
         assert f"#{str(s.c.session.id)[:4]}" in str(s.app.status_bar.render_line(0).text)
     # The /switch line itself belongs to the agent it was typed to.
     assert AgentHistory.for_agent(agent_fixture.id).entries == ("/switch sage",)
+
+
+async def test_bare_switch_opens_the_agent_picker_and_switches(agent_fixture, arcana_home, monkeypatch):
+    sage = create_agent(arcana_home, name="sage", card=Card.HIGH_PRIESTESS)
+    patch_build(monkeypatch, mock_runtime())
+    async with chat_session(arcana_home, agent_fixture, mock_runtime()) as s:
+        await s.send("/switch")
+        screen = await wait_for_screen(s.pilot, CardPickerScreen)
+        assert isinstance(screen, CardPickerScreen)
+        await s.pilot.press(*"sage")
+        await s.pilot.pause()
+        preview = screen.preview.content
+        assert isinstance(preview, Panel)
+        assert "The High Priestess" in str(preview.renderable)  # the agent's primary card
+        await s.pilot.press("enter")
+        await s.settle()
+        assert s.c.record.id == sage.id
+        assert s.app.chat_input.recall.path == AgentHistory.for_agent(sage.id).path
+        assert f"#{str(s.c.session.id)[:4]}" in str(s.app.status_bar.render_line(0).text)
+        assert "switched to sage" in s.retained()
+        assert s.app.focused is s.app.chat_input
+
+
+async def test_bare_switch_escape_leaves_the_session_unchanged(agent_fixture, arcana_home, monkeypatch):
+    create_agent(arcana_home, name="sage", card=Card.HIGH_PRIESTESS)
+    patch_build(monkeypatch, mock_runtime())
+    async with chat_session(arcana_home, agent_fixture, mock_runtime()) as s:
+        session = s.c.session
+        await s.send("/switch")
+        await wait_for_screen(s.pilot, CardPickerScreen)
+        await s.pilot.press("escape")
+        await s.settle()
+        assert s.c.record.id == agent_fixture.id
+        assert s.c.session is session
+        assert s.app.chat_input.recall.path == AgentHistory.for_agent(agent_fixture.id).path
+        assert s.app.focused is s.app.chat_input
+
+
+async def test_ctrl_c_in_the_agent_picker_cancels_the_switch(agent_fixture, arcana_home, monkeypatch):
+    create_agent(arcana_home, name="sage", card=Card.HIGH_PRIESTESS)
+    patch_build(monkeypatch, mock_runtime())
+    async with chat_session(arcana_home, agent_fixture, mock_runtime()) as s:
+        await s.send("/switch")
+        await wait_for_screen(s.pilot, CardPickerScreen)
+        await s.pilot.press("ctrl+c")
+        await s.settle()
+        assert not isinstance(s.app.screen, CardPickerScreen)
+        assert s.c.record.id == agent_fixture.id
+        assert s.app.is_running  # cancelled the /switch, didn't quit the session
 
 
 async def test_no_memory_updates_the_status_line(agent_fixture, arcana_home, monkeypatch):

@@ -1,0 +1,3 @@
+exit=1
+✗ 'Browse the Major Arcana' needs an answer, but a non-interactive terminal never prompts; pass a 
+card name to 'arcana cards show' instead
