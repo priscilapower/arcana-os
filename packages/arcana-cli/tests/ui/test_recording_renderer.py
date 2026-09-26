@@ -92,3 +92,28 @@ async def test_stream_with_render_emits_the_finished_block():
         sink.write("hi")
     assert r.streamed == ["hi"]
     assert "HI" in r.text()
+
+
+async def test_notes_are_kept_apart_from_output():
+    r = RecordingRenderer()
+    r.emit(Text("reply"))
+    r.note(Text("routed to scout"))
+    assert "routed" not in r.text()
+    assert "routed to scout" in r.notes_text()
+
+
+async def test_events_order_a_stopped_status_before_the_chunks():
+    r = RecordingRenderer()
+    async with r.stream() as sink, r.status("thinking") as status:
+        status.stop()
+        sink.write("a")
+        status.stop()
+        sink.write("b")
+    assert r.events == [("status", "thinking"), ("stop", "thinking"), ("chunk", "a"), ("chunk", "b")]
+
+
+async def test_a_status_stops_when_its_block_ends():
+    r = RecordingRenderer()
+    async with r.status("working"):
+        pass
+    assert r.events == [("status", "working"), ("stop", "working")]

@@ -1,9 +1,10 @@
 """The renderer port — the one seam between a command and the surface it runs on.
 
 A command body is a coroutine that takes a :class:`Renderer` and never touches
-the terminal directly: output goes through :meth:`Renderer.emit`, questions
-through :meth:`Renderer.ask` / :meth:`Renderer.confirm` / :meth:`Renderer.select`,
-and progress through :meth:`Renderer.status` / :meth:`Renderer.stream`. Which
+the terminal directly: output goes through :meth:`Renderer.emit`, side remarks
+about the run through :meth:`Renderer.note`, questions through
+:meth:`Renderer.ask` / :meth:`Renderer.confirm` / :meth:`Renderer.select`, and
+progress through :meth:`Renderer.status` / :meth:`Renderer.stream`. Which
 adapter it receives decides where that lands (a Rich console with line prompts,
 or the ``--json`` stream that never prompts), so one command body serves every
 surface.
@@ -122,11 +123,28 @@ class StreamSink(Protocol):
     def write(self, chunk: str) -> None: ...
 
 
+class StatusHandle(Protocol):
+    """The value of a :meth:`Renderer.status` block."""
+
+    def stop(self) -> None:
+        """End the indicator before the block does; a second call (or the block's exit) is a no-op."""
+        ...
+
+
 class Renderer(Protocol):
     """Where a command's output and questions go."""
 
     def emit(self, renderable: RenderableType | JsonAble) -> None:
         """Show one block of output."""
+        ...
+
+    def note(self, renderable: RenderableType) -> None:
+        """Show a remark about the command rather than its output (which agent answered, how to resume).
+
+        A console surface writes it to stderr, so a pipe reading stdout gets the
+        output alone; the ``--json`` surface does the same, keeping it out of
+        the JSON stream.
+        """
         ...
 
     async def ask(self, q: Question) -> str:
@@ -178,8 +196,13 @@ class Renderer(Protocol):
         """
         ...
 
-    def status(self, msg: str) -> AbstractAsyncContextManager[None]:
-        """Show ``msg`` as an in-progress indicator for the duration of the block."""
+    def status(self, msg: str) -> AbstractAsyncContextManager[StatusHandle]:
+        """Show ``msg`` as an in-progress indicator for the duration of the block.
+
+        The block's value can :meth:`~StatusHandle.stop` the indicator early,
+        e.g. when the first chunk of a :meth:`stream` arrives, so the two never
+        draw over each other.
+        """
         ...
 
     def stream(

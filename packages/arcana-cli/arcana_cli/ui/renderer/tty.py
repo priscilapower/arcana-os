@@ -4,6 +4,10 @@ Output is ``console.print``; questions are ``typer.prompt`` / ``typer.confirm``.
 That is exactly what the commands did before they took a renderer, so a
 converted command's output is unchanged byte for byte.
 
+Output and streamed text go to stdout; notes and the status spinner go to
+stderr, so ``arcana run … | cat`` carries the reply alone. The spinner draws
+only when stderr is a terminal.
+
 A selection whose choices carry previews (cards, agents) opens the two-pane
 picker (:mod:`arcana_cli.tui.card_picker`) as a short-lived Textual app on the
 invocation's own event loop; it needs a terminal, so without one it fails closed
@@ -31,12 +35,13 @@ from arcana_cli.ui.renderer.port import (
     Choice,
     JsonAble,
     Question,
+    StatusHandle,
     StreamRender,
     StreamSink,
     initial_indexes,
     refuse,
 )
-from arcana_cli.ui.theme import err, eyebrow
+from arcana_cli.ui.theme import ACCENT, err, eyebrow
 
 if sys.platform != "win32":
     import termios
@@ -162,6 +167,9 @@ class TtyRenderer:
     def emit(self, renderable: RenderableType | JsonAble) -> None:
         self._console.print(renderable)
 
+    def note(self, renderable: RenderableType) -> None:
+        self._stderr.print(renderable)
+
     async def ask(self, q: Question) -> str:
         # A secret's default is never shown in the prompt line (an empty one still
         # renders as ``[]``, as it always has).
@@ -283,9 +291,10 @@ class TtyRenderer:
                 return [choices[i].value for i in indexes]
 
     @asynccontextmanager
-    async def status(self, msg: str) -> AsyncGenerator[None]:
-        with self._console.status(msg):
-            yield
+    async def status(self, msg: str) -> AsyncGenerator[StatusHandle]:
+        """A transient spinner on stderr; it draws nothing when stderr isn't a terminal."""
+        with self._stderr.status(msg, spinner="dots", spinner_style=f"bold {ACCENT}") as spinner:
+            yield spinner
 
     @asynccontextmanager
     async def stream(

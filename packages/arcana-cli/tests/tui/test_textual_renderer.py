@@ -373,6 +373,22 @@ async def test_status_shows_in_the_status_bar_while_open(tui):
         assert h.app.status_bar.auto_refresh is None
 
 
+async def test_status_stop_clears_it_before_the_block_ends(tui):
+    async with tui() as h:
+        async with h.renderer.status("Thinking") as status:
+            status.stop()
+            assert h.app.status_bar.messages == ()
+            status.stop()
+        assert h.app.status_bar.messages == ()
+
+
+async def test_note_is_a_transcript_block(tui):
+    async with tui() as h:
+        h.renderer.note(Text("routed to scout"))
+        await h.pilot.pause()
+        assert "routed to scout" in h.visible_text()
+
+
 async def test_status_spinner_animates(tui):
     async with tui() as h:
         async with h.renderer.status("Working"):

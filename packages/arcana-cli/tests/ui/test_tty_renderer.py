@@ -322,6 +322,44 @@ async def test_status_wraps_the_block():
     assert ran
 
 
+def _split_renderer(*, stderr_terminal: bool) -> tuple[TtyRenderer, io.StringIO, io.StringIO]:
+    out, err_out = io.StringIO(), io.StringIO()
+    stderr = Console(file=err_out, width=100, force_terminal=stderr_terminal, color_system=None)
+    return TtyRenderer(Console(file=out, width=100, color_system=None), stderr=stderr), out, err_out
+
+
+def test_note_goes_to_stderr():
+    r, out, err_out = _split_renderer(stderr_terminal=False)
+    r.note("routed to scout")
+    assert out.getvalue() == ""
+    assert err_out.getvalue() == "routed to scout\n"
+
+
+async def test_status_spins_on_stderr_never_stdout():
+    r, out, err_out = _split_renderer(stderr_terminal=True)
+    async with r.status("thinking"):
+        await asyncio.sleep(0.05)
+    assert out.getvalue() == ""
+    assert "thinking" in err_out.getvalue()
+
+
+async def test_status_draws_nothing_when_stderr_is_not_a_terminal():
+    r, out, err_out = _split_renderer(stderr_terminal=False)
+    async with r.status("thinking"):
+        await asyncio.sleep(0.05)
+    assert (out.getvalue(), err_out.getvalue()) == ("", "")
+
+
+async def test_status_stop_ends_the_spinner_before_the_block_does():
+    r, _, err_out = _split_renderer(stderr_terminal=True)
+    async with r.status("thinking") as status:
+        status.stop()
+        drawn = err_out.getvalue()
+        await asyncio.sleep(0.05)
+        assert err_out.getvalue() == drawn, "the spinner kept drawing after stop()"
+        status.stop()  # a second stop is a no-op
+
+
 async def test_stream_writes_chunks_then_a_newline():
     r, out = _renderer()
     async with r.stream(prefix=Text("» ")) as sink:

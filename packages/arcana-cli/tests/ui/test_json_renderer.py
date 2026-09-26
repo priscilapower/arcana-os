@@ -91,9 +91,16 @@ async def test_select_fails_closed():
 
 
 async def test_status_prints_nothing(capsys: pytest.CaptureFixture[str]):
-    async with JsonRenderer().status("working"):
-        pass
+    async with JsonRenderer().status("working") as status:
+        status.stop()
     assert capsys.readouterr() == ("", "")
+
+
+def test_note_goes_to_stderr_off_the_json_stream(capsys: pytest.CaptureFixture[str]):
+    r, stderr = _renderer()
+    r.note("routed to scout")
+    assert capsys.readouterr().out == ""
+    assert "routed to scout" in stderr.getvalue()
 
 
 def test_stream_has_no_json_form():

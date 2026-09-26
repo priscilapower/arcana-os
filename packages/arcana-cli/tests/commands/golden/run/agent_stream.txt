@@ -1,0 +1,4 @@
+exit=0
+Agent: scout · the-hermit · ollama/hermes-3
+Hello from stream
+session: <short-id>  ·  continue with  --session <session-id>  (or --continue)

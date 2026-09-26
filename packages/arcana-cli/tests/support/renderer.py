@@ -2,7 +2,7 @@
 
 A command coroutine takes a :class:`~arcana_cli.ui.renderer.Renderer`; tests hand
 it one of these instead of a terminal. It records everything the command emits
-(and every question, status and stream it opens) and answers questions from
+and notes (and every question, status and stream it opens) and answers questions from
 scripts given up front. A question the script didn't anticipate fails the test
 loudly instead of blocking.
 
@@ -21,17 +21,35 @@ from typing import Any, Literal, TypeVar, overload
 
 from rich.console import Console, RenderableType
 
-from arcana_cli.ui.renderer import Choice, JsonAble, Question, StreamRender, StreamSink
+from arcana_cli.ui.renderer import Choice, JsonAble, Question, StatusHandle, StreamRender, StreamSink
 
 T = TypeVar("T")
 
 
+#: One entry of :attr:`RecordingRenderer.events`: ``("status", msg)``, ``("stop", msg)`` or ``("chunk", text)``.
+Event = tuple[Literal["status", "stop", "chunk"], str]
+
+
 class _ListSink:
-    def __init__(self, chunks: list[str]) -> None:
+    def __init__(self, chunks: list[str], events: list[Event]) -> None:
         self._chunks = chunks
+        self._events = events
 
     def write(self, chunk: str) -> None:
         self._chunks.append(chunk)
+        self._events.append(("chunk", chunk))
+
+
+class _RecordedStatus:
+    def __init__(self, msg: str, events: list[Event]) -> None:
+        self._msg = msg
+        self._events = events
+        self._stopped = False
+
+    def stop(self) -> None:
+        if not self._stopped:
+            self._stopped = True
+            self._events.append(("stop", self._msg))
 
 
 class RecordingRenderer:
@@ -42,6 +60,9 @@ class RecordingRenderer:
     :meth:`select` — each entry is the picked *value* (``None`` to cancel), or a
     list of values for a multi-select. A scripted selection must be one of the
     offered, enabled choices.
+
+    :attr:`events` orders statuses, their stops and streamed chunks, so a test
+    can check that a status ended before the first chunk arrived.
     """
 
     def __init__(
@@ -52,6 +73,7 @@ class RecordingRenderer:
         selections: Iterable[object] = (),
     ) -> None:
         self.emitted: list[RenderableType | JsonAble] = []
+        self.notes: list[RenderableType] = []
         self.questions: list[Question] = []
         self.rejections: list[str] = []
         self.confirmations: list[str] = []
@@ -59,6 +81,7 @@ class RecordingRenderer:
         self.select_options: list[dict[str, Any]] = []
         self.statuses: list[str] = []
         self.streamed: list[str] = []
+        self.events: list[Event] = []
         self._answers = deque(answers)
         self._confirms = deque(confirms)
         self._selections = deque(selections)
@@ -68,12 +91,16 @@ class RecordingRenderer:
     def emit(self, renderable: RenderableType | JsonAble) -> None:
         self.emitted.append(renderable)
 
+    def note(self, renderable: RenderableType) -> None:
+        self.notes.append(renderable)
+
     def text(self, width: int = 100) -> str:
         """Everything emitted, rendered as plain text (no ANSI) at ``width`` columns."""
-        console = Console(width=width, record=True, file=io.StringIO(), color_system=None)
-        for renderable in self.emitted:
-            console.print(renderable)
-        return console.export_text()
+        return _plain(self.emitted, width)
+
+    def notes_text(self, width: int = 100) -> str:
+        """Every note, rendered as plain text (no ANSI) at ``width`` columns."""
+        return _plain(self.notes, width)
 
     # ── questions ─────────────────────────────────────────────────────────
 
@@ -148,9 +175,14 @@ class RecordingRenderer:
     # ── progress ──────────────────────────────────────────────────────────
 
     @asynccontextmanager
-    async def status(self, msg: str) -> AsyncGenerator[None]:
+    async def status(self, msg: str) -> AsyncGenerator[StatusHandle]:
         self.statuses.append(msg)
-        yield
+        self.events.append(("status", msg))
+        status = _RecordedStatus(msg, self.events)
+        try:
+            yield status
+        finally:
+            status.stop()
 
     @asynccontextmanager
     async def stream(
@@ -161,11 +193,18 @@ class RecordingRenderer:
             self.emitted.append(prefix)
         start = len(self.streamed)
         try:
-            yield _ListSink(self.streamed)
+            yield _ListSink(self.streamed, self.events)
         finally:
             text = "".join(self.streamed[start:])
             if render is not None and text:
                 self.emitted.append(render(text))
+
+
+def _plain(renderables: Iterable[RenderableType | JsonAble], width: int) -> str:
+    console = Console(width=width, record=True, file=io.StringIO(), color_system=None)
+    for renderable in renderables:
+        console.print(renderable)
+    return console.export_text()
 
 
 def _offered(choices: Sequence[Choice[T]], value: object) -> T:
