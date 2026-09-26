@@ -82,6 +82,60 @@ StatusBar {
     color: $txt2;
 }
 
+ChatInputPanel {
+    height: auto;
+}
+
+ChatInput, ChatInput:focus {
+    height: auto;
+    max-height: 8;
+    border: none;
+    padding: 0;
+    background: $surface;
+    color: $txt;
+}
+
+ChatInput .chat-input--prompt {
+    color: $accent;
+    text-style: bold;
+}
+
+ChatInput .chat-input--continuation {
+    color: $txt3;
+}
+
+ChatInput .text-area--suggestion {
+    color: $txt3;
+}
+
+CompletionMenu {
+    display: none;
+    width: auto;
+    height: auto;
+    background: $surface-hi;
+    color: $txt2;
+}
+
+CompletionMenu.-open {
+    display: block;
+}
+
+CompletionMenu .completion-menu--highlight {
+    background: $accent;
+    color: $surface;
+    text-style: bold;
+}
+
+SearchBar {
+    display: none;
+    height: 1;
+    color: $txt2;
+}
+
+SearchBar.-active {
+    display: block;
+}
+
 ModalScreen {
     align: center middle;
 }

@@ -1,7 +1,8 @@
 """``ArcanaApp`` — the interactive session's Textual app shell.
 
-The app is a transcript, a live block for streamed output, and a status bar,
-with question dialogs pushed on top as modal screens. It owns the platform
+The app is a transcript, a live block for streamed output, the chat input
+(focused on start) and a status bar, with question dialogs pushed on top as
+modal screens. It owns the platform
 defaults every screen inside it inherits:
 
 * **Inline where the terminal allows it.** :meth:`ArcanaApp.run_inline` runs the
@@ -30,6 +31,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 
 from arcana_cli.constants import ARCANA_HOME
+from arcana_cli.tui.chat_input import ChatInput, ChatInputPanel
 from arcana_cli.tui.config import REPLAY_BLOCKS, load_ui_config
 from arcana_cli.tui.theme_tcss import ARCANA_TCSS, ARCANA_THEME
 from arcana_cli.tui.widgets import LiveBlock, StatusBar, Transcript
@@ -55,7 +57,8 @@ def replay_tail(blocks: list[RenderableType], limit: int) -> list[RenderableType
 class ArcanaApp(App[None]):
     """The interactive session's app shell.
 
-    ``transcript``, ``live`` and ``status_bar`` are the standing widgets; a
+    ``transcript``, ``live``, ``chat_panel`` (holding ``chat_input``) and
+    ``status_bar`` are the standing widgets; a
     :class:`~arcana_cli.ui.renderer.textual_renderer.TextualRenderer` writes to
     them and pushes its question dialogs onto the screen stack.
     """
@@ -69,12 +72,18 @@ class ArcanaApp(App[None]):
         self.theme = ARCANA_THEME.name
         self.transcript = Transcript(id="transcript")
         self.live = LiveBlock(id="live")
+        self.chat_input = ChatInput(id="chat-input")
+        self.chat_panel = ChatInputPanel(self.chat_input, id="chat")
         self.status_bar = StatusBar(id="status")
 
     def compose(self) -> ComposeResult:
         yield self.transcript
         yield self.live
+        yield self.chat_panel
         yield self.status_bar
+
+    def on_mount(self) -> None:
+        self.chat_input.focus()
 
     async def run_inline(
         self,
