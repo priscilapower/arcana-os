@@ -7,9 +7,12 @@ import pytest
 from typer.testing import CliRunner
 
 import arcana_cli.commands.agent as agent_mod
+import arcana_cli.tui.card_picker as card_picker_app
+import arcana_cli.ui.renderer.tty as tty_mod
 from arcana.agents.registry import AgentRegistry
 from arcana.types.card import Card
 from arcana.types.model import ModelConnection, ModelProvider
+from arcana_cli._render import EXIT_ERROR
 from arcana_cli.main import app
 
 runner = CliRunner()
@@ -265,6 +268,49 @@ def test_agent_create_modifier_excludes_primary_and_world(conn_fixture, arcana_h
     assert kwargs["exclude"] == {Card.STAR, Card.WORLD}
 
 
+def test_agent_create_without_a_terminal_requires_card(conn_fixture, arcana_home):
+    """Piped stdin can't drive the card picker: the command fails closed and names --card."""
+    result = runner.invoke(app, ["agent", "create", "--name", "scout", "--model", "ollama"])
+    assert result.exit_code == EXIT_ERROR
+    assert "pass --card instead" in result.output
+    assert AgentRegistry(arcana_home / "agents").list() == []
+
+
+def test_agent_create_on_a_terminal_runs_the_picker(conn_fixture, arcana_home, monkeypatch):
+    """The real select_card path: the picker app is offered every card but THE WORLD."""
+    offered: list[list[Card]] = []
+
+    async def fake_pick(choices, **kwargs):
+        offered.append([c.value for c in choices])
+        return [offered[-1].index(Card.HERMIT)]
+
+    monkeypatch.setattr(tty_mod, "_is_terminal", lambda: True)
+    monkeypatch.setattr(card_picker_app, "pick", fake_pick)
+    with patch("typer.confirm", return_value=False):
+        result = runner.invoke(app, ["agent", "create", "--name", "scout", "--model", "ollama"])
+    assert result.exit_code == 0, result.output
+    assert Card.WORLD not in offered[0]
+    agent = AgentRegistry(arcana_home / "agents").list()[0]
+    assert agent.card is Card.HERMIT
+
+
+def test_agent_create_picker_cancel_exits_cleanly(conn_fixture, arcana_home):
+    with patch("arcana_cli.commands.agent.select_card", return_value=None):
+        result = runner.invoke(app, ["agent", "create", "--name", "scout", "--model", "ollama"])
+    assert result.exit_code == 0
+    assert AgentRegistry(arcana_home / "agents").list() == []
+
+
+def test_agent_create_asks_the_picker_with_the_card_flag(conn_fixture, arcana_home):
+    with (
+        patch("arcana_cli.commands.agent.select_card", return_value=Card.HERMIT) as mock_select_card,
+        patch("typer.confirm", return_value=False),
+    ):
+        runner.invoke(app, ["agent", "create", "--name", "scout", "--model", "ollama"])
+    _, kwargs = mock_select_card.call_args
+    assert kwargs["flag"] == "--card"
+
+
 # ---------------------------------------------------------------------------
 # arcana agent edit — interactive blend gate
 # ---------------------------------------------------------------------------
@@ -292,3 +338,9 @@ def test_agent_edit_modifier_excludes_primary_and_world(agent_fixture, conn_fixt
         runner.invoke(app, ["agent", "edit", "scout"], input="scout\n\n\n\n")
     _, kwargs = mock_select_cards.call_args
     assert kwargs["exclude"] == {Card.FOOL, Card.WORLD}
+
+
+def test_agent_edit_without_a_terminal_requires_card(agent_fixture, conn_fixture, arcana_home):
+    result = runner.invoke(app, ["agent", "edit", "scout"], input="scout\n\n")
+    assert result.exit_code == EXIT_ERROR
+    assert "pass --card instead" in result.output

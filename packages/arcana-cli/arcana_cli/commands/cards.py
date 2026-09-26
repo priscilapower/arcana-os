@@ -12,7 +12,8 @@ from arcana.types.card import Card, TarotCard
 from arcana_cli._async import run_async
 from arcana_cli._render import EXIT_ERROR
 from arcana_cli.ui.card_panel import card_panel
-from arcana_cli.ui.renderer import Choice, Renderer, renderer_for
+from arcana_cli.ui.card_picker import select_card
+from arcana_cli.ui.renderer import Renderer, renderer_for
 from arcana_cli.ui.theme import err, warn
 
 app = typer.Typer(help="Browse the 22 Major Arcana card definitions.")
@@ -35,16 +36,15 @@ def _resolve_card(r: Renderer, name: str) -> TarotCard:
     raise typer.Exit(EXIT_ERROR)
 
 
+#: Names what answers the browse picker when there is no terminal to show it on.
+BROWSE_INSTEAD = "a card name to 'arcana cards show'"
+
+
 async def list_cards(r: Renderer) -> None:
     """Offer every card but THE WORLD (reserved for the meta-agent) and show the one picked."""
-    registry = get_registry()
-    choices = [
-        Choice(card.id, card.name, preview=card_panel(card, registry))
-        for card in registry.all()
-        if card.id is not Card.WORLD
-    ]
-    picked = await r.select(choices, title="Browse the Major Arcana")
+    picked = await select_card("Browse the Major Arcana", renderer=r, flag=BROWSE_INSTEAD)
     if picked is not None:
+        registry = get_registry()
         r.emit(card_panel(registry.get(picked), registry))
 
 

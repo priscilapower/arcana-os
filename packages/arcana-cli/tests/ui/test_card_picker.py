@@ -1,229 +1,120 @@
-"""Tests for arcana_cli.ui.card_picker — non-TTY fallback and TTY keypress paths."""
+"""Tests for arcana_cli.ui.card_picker — card choices, and select_card / select_cards over the renderer port."""
 
-import sys
-from io import StringIO
-from unittest.mock import patch
+import pytest
 
-import readchar
-
+import arcana_cli.ui.card_picker as card_picker
 from arcana.types.card import Card
-from arcana_cli.ui.card_picker import select_card, select_cards
+from arcana_cli.ui.card_picker import card_choices, select_card, select_cards
+from arcana_cli.ui.renderer import NonInteractiveError, TtyRenderer
+from tests.support.renderer import RecordingRenderer
 
-# ─────────────────────────── stdin helpers ───────────────────────────
-
-
-class _FakeTTY(StringIO):
-    """StringIO that reports itself as a TTY so _run_picker enters the Live path."""
-
-    def isatty(self) -> bool:
-        return True
+# ── the choices ───────────────────────────────────────────────────────────
 
 
-class _FakeStdin(StringIO):
-    """StringIO that reports itself as non-TTY so _run_picker uses _non_tty_fallback."""
-
-    def isatty(self) -> bool:
-        return False
-
-
-# ─────────────────────────── non-TTY fallback ────────────────────────
+def test_card_choices_leave_the_world_out_by_default():
+    values = [c.value for c in card_choices()]
+    assert Card.WORLD not in values
+    assert values == [c for c in Card if c is not Card.WORLD]
 
 
-def test_non_tty_select_by_key(monkeypatch):
-    monkeypatch.setattr(sys, "stdin", _FakeStdin("the-hermit\n"))
-    assert select_card("Pick") == Card.HERMIT
+def test_card_choices_offer_the_world_only_when_the_caller_lets_it_in():
+    assert Card.WORLD in [c.value for c in card_choices(exclude=())]
 
 
-def test_non_tty_select_by_partial_name(monkeypatch):
-    monkeypatch.setattr(sys, "stdin", _FakeStdin("hermit\n"))
-    assert select_card("Pick") == Card.HERMIT
+def test_card_choices_honour_exclude():
+    values = [c.value for c in card_choices(exclude={Card.FOOL, Card.WORLD})]
+    assert Card.FOOL not in values
+    assert Card.WORLD not in values
+    assert len(values) == len(Card) - 2
 
 
-def test_non_tty_select_by_number(monkeypatch):
-    # canonical order: 1 = The Fool
-    monkeypatch.setattr(sys, "stdin", _FakeStdin("1\n"))
-    assert select_card("Pick") == Card.FOOL
+def test_card_choices_carry_a_label_and_a_preview():
+    hermit = next(c for c in card_choices() if c.value is Card.HERMIT)
+    assert hermit.label == "IX. The Hermit"
+    assert hermit.preview is not None
 
 
-def test_non_tty_select_by_number_hermit(monkeypatch):
-    # HERMIT is index 9 (0-based) → 1-based = 10
-    monkeypatch.setattr(sys, "stdin", _FakeStdin("10\n"))
-    assert select_card("Pick") == Card.HERMIT
+# ── select_card ───────────────────────────────────────────────────────────
 
 
-def test_non_tty_blank_cancels(monkeypatch):
-    monkeypatch.setattr(sys, "stdin", _FakeStdin("\n"))
-    assert select_card("Pick") is None
+async def test_select_card_returns_the_pick():
+    r = RecordingRenderer(selections=[Card.HERMIT])
+    assert await select_card("Pick", renderer=r) is Card.HERMIT
+    (options,) = r.select_options
+    assert options["title"] == "Pick"
+    assert options["multi"] is False
+    assert Card.WORLD not in [c.value for c in r.offered[0]]
 
 
-def test_non_tty_unknown_returns_none(monkeypatch):
-    monkeypatch.setattr(sys, "stdin", _FakeStdin("not-a-real-card\n"))
-    assert select_card("Pick") is None
+async def test_select_card_cancel_returns_none():
+    assert await select_card(renderer=RecordingRenderer(selections=[None])) is None
 
 
-def test_non_tty_number_out_of_range_returns_none(monkeypatch):
-    monkeypatch.setattr(sys, "stdin", _FakeStdin("99\n"))
-    assert select_card("Pick") is None
+async def test_select_card_passes_initial_and_flag():
+    r = RecordingRenderer(selections=[Card.HERMIT])
+    await select_card("Pick", initial=Card.HERMIT, flag="--card", renderer=r)
+    assert r.select_options[0]["initial"] == [Card.HERMIT]
+    assert r.select_options[0]["flag"] == "--card"
 
 
-def test_non_tty_multi_by_keys(monkeypatch):
-    monkeypatch.setattr(sys, "stdin", _FakeStdin("the-fool, the-star\n"))
-    result = select_cards("Pick")
-    assert set(result) == {Card.FOOL, Card.STAR}
+async def test_select_card_exclude_hides_cards():
+    r = RecordingRenderer(selections=[Card.SUN])
+    await select_card(exclude={Card.FOOL, Card.WORLD}, renderer=r)
+    offered = [c.value for c in r.offered[0]]
+    assert Card.FOOL not in offered
+    assert Card.WORLD not in offered
 
 
-def test_non_tty_multi_by_numbers(monkeypatch):
-    # 1 = FOOL, 2 = MAGICIAN
-    monkeypatch.setattr(sys, "stdin", _FakeStdin("1, 2\n"))
-    result = select_cards("Pick")
-    assert Card.FOOL in result
-    assert Card.MAGICIAN in result
-    assert len(result) == 2
+async def test_select_card_defaults_to_the_terminal_renderer(monkeypatch: pytest.MonkeyPatch):
+    built: list[RecordingRenderer] = []
+
+    def fake_tty() -> RecordingRenderer:
+        built.append(RecordingRenderer(selections=[Card.STAR]))
+        return built[-1]
+
+    monkeypatch.setattr(card_picker, "TtyRenderer", fake_tty)
+    assert await select_card() is Card.STAR
+    assert len(built) == 1
 
 
-def test_non_tty_multi_blank_returns_empty(monkeypatch):
-    monkeypatch.setattr(sys, "stdin", _FakeStdin("\n"))
-    assert select_cards("Pick") == []
+# ── select_cards ──────────────────────────────────────────────────────────
 
 
-def test_non_tty_multi_mixed_number_and_name(monkeypatch):
-    # "1" = FOOL by number, "the-star" = STAR by key
-    monkeypatch.setattr(sys, "stdin", _FakeStdin("1, the-star\n"))
-    result = select_cards("Pick")
-    assert Card.FOOL in result
-    assert Card.STAR in result
+async def test_select_cards_returns_the_picks():
+    r = RecordingRenderer(selections=[[Card.FOOL, Card.STAR]])
+    assert await select_cards("Pick", max_items=3, renderer=r) == [Card.FOOL, Card.STAR]
+    (options,) = r.select_options
+    assert options == {"multi": True, "initial": [], "title": "Pick", "max_items": 3, "flag": None}
 
 
-# ─────────────────────────── TTY path ────────────────────────────────
-#
-# Live is mocked to a no-op context manager so tests don't need a real
-# terminal.  readchar.readkey is replaced with an iterator of keys.
+async def test_select_cards_cancel_returns_an_empty_list():
+    assert await select_cards(renderer=RecordingRenderer(selections=[None])) == []
 
 
-def test_tty_enter_selects_first_card(monkeypatch):
-    monkeypatch.setattr(sys, "stdin", _FakeTTY())
-    with patch("readchar.readkey", side_effect=iter([readchar.key.ENTER])), patch("arcana_cli.ui.card_picker.Live"):
-        result = select_card("Test")
-    assert result == Card.FOOL
+async def test_select_cards_pre_selects_initial():
+    r = RecordingRenderer(selections=[[Card.FOOL]])
+    await select_cards(initial=[Card.FOOL, Card.STAR], renderer=r)
+    assert r.select_options[0]["initial"] == [Card.FOOL, Card.STAR]
 
 
-def test_tty_down_then_enter_selects_second(monkeypatch):
-    monkeypatch.setattr(sys, "stdin", _FakeTTY())
-    with (
-        patch("readchar.readkey", side_effect=iter([readchar.key.DOWN, readchar.key.ENTER])),
-        patch("arcana_cli.ui.card_picker.Live"),
-    ):
-        result = select_card("Test")
-    assert result == Card.MAGICIAN
+async def test_select_cards_hides_the_world_by_default():
+    r = RecordingRenderer(selections=[[]])
+    await select_cards(renderer=r)
+    assert Card.WORLD not in [c.value for c in r.offered[0]]
 
 
-def test_tty_up_clamps_at_zero(monkeypatch):
-    """Up at top of list stays at first card."""
-    monkeypatch.setattr(sys, "stdin", _FakeTTY())
-    with (
-        patch("readchar.readkey", side_effect=iter([readchar.key.UP, readchar.key.ENTER])),
-        patch("arcana_cli.ui.card_picker.Live"),
-    ):
-        result = select_card("Test")
-    assert result == Card.FOOL
+async def test_select_cards_exclude_hides_cards():
+    r = RecordingRenderer(selections=[[]])
+    await select_cards(exclude={Card.FOOL, Card.WORLD}, renderer=r)
+    assert Card.FOOL not in [c.value for c in r.offered[0]]
 
 
-def test_tty_initial_positions_cursor(monkeypatch):
-    """initial= pre-positions cursor; immediate Enter selects that card."""
-    monkeypatch.setattr(sys, "stdin", _FakeTTY())
-    with patch("readchar.readkey", side_effect=iter([readchar.key.ENTER])), patch("arcana_cli.ui.card_picker.Live"):
-        result = select_card("Test", initial=Card.HERMIT)
-    assert result == Card.HERMIT
+# ── without a terminal ────────────────────────────────────────────────────
 
 
-def test_tty_esc_cancels(monkeypatch):
-    monkeypatch.setattr(sys, "stdin", _FakeTTY())
-    with patch("readchar.readkey", side_effect=iter([readchar.key.ESC])), patch("arcana_cli.ui.card_picker.Live"):
-        result = select_card("Test")
-    assert result is None
-
-
-def test_tty_ctrl_c_cancels(monkeypatch):
-    monkeypatch.setattr(sys, "stdin", _FakeTTY())
-    with patch("readchar.readkey", side_effect=iter([readchar.key.CTRL_C])), patch("arcana_cli.ui.card_picker.Live"):
-        result = select_card("Test")
-    assert result is None
-
-
-# ─────────────────────────── multi-select ────────────────────────────
-
-
-def test_tty_multi_space_selects_two(monkeypatch):
-    """Space on first, Down, Space on second, Enter → both selected."""
-    monkeypatch.setattr(sys, "stdin", _FakeTTY())
-    keys = iter(
-        [
-            readchar.key.SPACE,
-            readchar.key.DOWN,
-            readchar.key.SPACE,
-            readchar.key.ENTER,
-        ]
-    )
-    with patch("readchar.readkey", side_effect=keys), patch("arcana_cli.ui.card_picker.Live"):
-        result = select_cards("Test")
-    assert set(result) == {Card.FOOL, Card.MAGICIAN}
-
-
-def test_tty_multi_space_toggles_off(monkeypatch):
-    """Select then deselect; Enter confirms empty list."""
-    monkeypatch.setattr(sys, "stdin", _FakeTTY())
-    keys = iter(
-        [
-            readchar.key.SPACE,
-            readchar.key.SPACE,
-            readchar.key.ENTER,
-        ]
-    )
-    with patch("readchar.readkey", side_effect=keys), patch("arcana_cli.ui.card_picker.Live"):
-        result = select_cards("Test")
-    assert result == []
-
-
-def test_tty_multi_esc_discards_selection(monkeypatch):
-    """Space to select, Esc → returns empty (selection discarded)."""
-    monkeypatch.setattr(sys, "stdin", _FakeTTY())
-    keys = iter([readchar.key.SPACE, readchar.key.ESC])
-    with patch("readchar.readkey", side_effect=keys), patch("arcana_cli.ui.card_picker.Live"):
-        result = select_cards("Test")
-    assert result == []
-
-
-def test_tty_multi_ctrl_c_discards_selection(monkeypatch):
-    monkeypatch.setattr(sys, "stdin", _FakeTTY())
-    keys = iter([readchar.key.SPACE, readchar.key.CTRL_C])
-    with patch("readchar.readkey", side_effect=keys), patch("arcana_cli.ui.card_picker.Live"):
-        result = select_cards("Test")
-    assert result == []
-
-
-def test_tty_multi_initial_preselected(monkeypatch):
-    """initial= pre-selects cards; Enter confirms them unchanged."""
-    monkeypatch.setattr(sys, "stdin", _FakeTTY())
-    with patch("readchar.readkey", side_effect=iter([readchar.key.ENTER])), patch("arcana_cli.ui.card_picker.Live"):
-        result = select_cards("Test", initial=[Card.FOOL, Card.STAR])
-    assert set(result) == {Card.FOOL, Card.STAR}
-
-
-# ─────────────────────────── exclude parameter ───────────────────────
-
-
-def test_non_tty_select_cards_exclude_hides_card(monkeypatch):
-    """Excluded card is not offered in the non-TTY fallback."""
-    monkeypatch.setattr(sys, "stdin", _FakeStdin("the-fool\n"))
-    result = select_cards("Pick", exclude={Card.FOOL})
-    assert Card.FOOL not in result
-    assert result == []
-
-
-def test_tty_select_cards_exclude_removes_from_list(monkeypatch):
-    """With FOOL excluded, cursor 0 lands on MAGICIAN; Space+Enter selects it."""
-    monkeypatch.setattr(sys, "stdin", _FakeTTY())
-    keys = iter([readchar.key.SPACE, readchar.key.ENTER])
-    with patch("readchar.readkey", side_effect=keys), patch("arcana_cli.ui.card_picker.Live"):
-        result = select_cards("Test", exclude={Card.FOOL})
-    assert result == [Card.MAGICIAN]
+async def test_without_a_terminal_the_picker_fails_closed_naming_the_flag(capsys: pytest.CaptureFixture[str]):
+    # pytest's captured stdin is not a terminal.
+    with pytest.raises(NonInteractiveError) as exc:
+        await select_card("Choose a card", flag="--card", renderer=TtyRenderer())
+    assert exc.value.flag == "--card"
+    assert "pass --card instead" in capsys.readouterr().err

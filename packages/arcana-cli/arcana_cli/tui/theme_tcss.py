@@ -181,6 +181,52 @@ ModalScreen:inline {
     border: none;
     background: $surface-hi;
 }
+
+.card-picker {
+    width: 100%;
+    height: 26;
+    max-height: 100vh;
+    background: $surface;
+}
+
+.card-picker-list {
+    width: 1fr;
+    min-width: 28;
+    max-width: 44;
+    height: 100%;
+    border: round $picker-border;
+    padding: 0 1;
+}
+
+.card-picker-list Input {
+    background: $surface;
+    color: $txt;
+}
+
+.card-picker-list OptionList {
+    height: 1fr;
+    border: none;
+    padding: 0;
+    background: $surface;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: $picker-hint-dim;
+    scrollbar-background: $surface;
+}
+
+.card-picker-list OptionList > .option-list--option-highlighted,
+.card-picker-list OptionList > .option-list--option-hover {
+    background: $surface;
+    color: $txt;
+    text-style: none;
+}
+
+.card-picker-preview {
+    width: 2fr;
+    height: 100%;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: $picker-hint-dim;
+    scrollbar-background: $surface;
+}
 """
 
 

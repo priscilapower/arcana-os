@@ -14,9 +14,11 @@ from rich.console import Console
 from rich.text import Text
 from typer.testing import CliRunner
 
+import arcana_cli.tui.card_picker as card_picker_app
 from arcana.types.card import Card
 from arcana_cli._async import run_async
-from arcana_cli.ui.renderer import Choice, Question, TtyRenderer
+from arcana_cli._render import EXIT_ERROR
+from arcana_cli.ui.renderer import Choice, NonInteractiveError, Question, TtyRenderer
 from arcana_cli.ui.renderer import tty as tty_mod
 
 if sys.platform != "win32":
@@ -164,60 +166,91 @@ async def test_confirm_forwards_the_default(monkeypatch: pytest.MonkeyPatch):
     assert calls == [("Remove it?", True)]
 
 
-# ── select: card choices open the card picker ─────────────────────────────
+# ── select: choices with previews open the two-pane picker ────────────────
 
 
-async def test_select_cards_opens_the_single_picker(monkeypatch: pytest.MonkeyPatch):
-    seen: dict[str, Any] = {}
+def _previewed(*values: Card, disabled: tuple[Card, ...] = ()) -> list[Choice[Card]]:
+    return [Choice(v, v.value, preview=Text(v.value), disabled=v in disabled) for v in values]
 
-    def fake_select_card(prompt: str, *, initial: Card | None, exclude: set[Card]) -> Card | None:
-        seen.update(prompt=prompt, initial=initial, exclude=exclude)
-        return Card.HERMIT
 
-    monkeypatch.setattr(tty_mod, "select_card", fake_select_card)
+@pytest.fixture()
+def picker(monkeypatch: pytest.MonkeyPatch) -> Callable[..., dict[str, Any]]:
+    """Give the renderer a terminal and stand in for the picker app: it answers with the scripted indexes."""
+
+    def install(answer: list[int]) -> dict[str, Any]:
+        seen: dict[str, Any] = {}
+
+        async def fake_pick(choices: Any, **kwargs: Any) -> list[int]:
+            seen.update(choices=list(choices), **kwargs)
+            return answer
+
+        monkeypatch.setattr(tty_mod, "_is_terminal", lambda: True)
+        monkeypatch.setattr(card_picker_app, "pick", fake_pick)
+        return seen
+
+    return install
+
+
+async def test_select_with_previews_opens_the_picker(picker: Callable[..., dict[str, Any]]):
+    seen = picker([1])
     r, _ = _renderer()
-    choices = [Choice(c, c.value) for c in (Card.FOOL, Card.HERMIT)]
-    picked = await r.select(choices, title="Pick", initial=[Card.HERMIT])
-    assert picked is Card.HERMIT
-    assert seen["prompt"] == "Pick"
-    assert seen["initial"] is Card.HERMIT
-    assert seen["exclude"] == set(Card) - {Card.FOOL, Card.HERMIT}
+    choices = _previewed(Card.FOOL, Card.HERMIT)
+    assert await r.select(choices, title="Pick", initial=[Card.HERMIT]) is Card.HERMIT
+    assert seen["choices"] == choices
+    assert (seen["multi"], seen["initial"], seen["title"], seen["max_items"]) == (False, [1], "Pick", None)
 
 
-async def test_select_cards_multi_opens_the_multi_picker(monkeypatch: pytest.MonkeyPatch):
-    seen: dict[str, Any] = {}
-
-    def fake_select_cards(
-        prompt: str, *, initial: list[Card], max_items: int | None, exclude: set[Card]
-    ) -> list[Card]:
-        seen.update(prompt=prompt, initial=initial, max_items=max_items, exclude=exclude)
-        return [Card.SUN, Card.MOON]
-
-    monkeypatch.setattr(tty_mod, "select_cards", fake_select_cards)
+async def test_select_multi_with_previews_opens_the_multi_picker(picker: Callable[..., dict[str, Any]]):
+    seen = picker([0, 2])
     r, _ = _renderer()
-    choices = [Choice(c, c.value) for c in Card if c is not Card.WORLD]
-    picked = await r.select(choices, multi=True, initial=[Card.SUN], max_items=2)
-    assert picked == [Card.SUN, Card.MOON]
-    assert seen == {"prompt": "Select cards", "initial": [Card.SUN], "max_items": 2, "exclude": {Card.WORLD}}
+    choices = _previewed(Card.SUN, Card.MOON, Card.STAR)
+    picked = await r.select(choices, multi=True, initial=[Card.STAR, Card.SUN], max_items=2)
+    assert picked == [Card.SUN, Card.STAR]
+    assert seen["multi"] is True
+    assert seen["initial"] == [2, 0]  # initial's order: the cursor starts on the first named
+    assert seen["max_items"] == 2
 
 
-async def test_select_cards_cancel(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(tty_mod, "select_card", lambda *a, **k: None)
+async def test_select_picker_cancel(picker: Callable[..., dict[str, Any]]):
+    picker([])
     r, _ = _renderer()
-    assert await r.select([Choice(Card.FOOL, "fool")]) is None
+    assert await r.select(_previewed(Card.FOOL)) is None
+    assert await r.select(_previewed(Card.FOOL), multi=True) == []
 
 
-async def test_select_cards_leaves_disabled_cards_out(monkeypatch: pytest.MonkeyPatch):
-    seen: dict[str, Any] = {}
-
-    def fake_select_card(prompt: str, *, initial: Card | None, exclude: set[Card]) -> Card | None:
-        seen["exclude"] = exclude
-        return Card.FOOL
-
-    monkeypatch.setattr(tty_mod, "select_card", fake_select_card)
+async def test_select_picker_leaves_disabled_choices_out(picker: Callable[..., dict[str, Any]]):
+    seen = picker([0])
     r, _ = _renderer()
-    await r.select([Choice(Card.FOOL, "fool"), Choice(Card.SUN, "sun", disabled=True)])
-    assert Card.SUN in seen["exclude"]
+    await r.select(_previewed(Card.FOOL, Card.SUN, disabled=(Card.SUN,)))
+    assert [c.value for c in seen["choices"]] == [Card.FOOL]
+
+
+async def test_select_picker_without_a_terminal_fails_closed(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(tty_mod, "_is_terminal", lambda: False)
+    err = io.StringIO()
+    r = TtyRenderer(Console(file=io.StringIO()), stderr=Console(file=err, width=200, color_system=None))
+    with pytest.raises(NonInteractiveError) as exc:
+        await r.select(_previewed(Card.FOOL), title="Choose a card", flag="--card")
+    assert exc.value.exit_code == EXIT_ERROR
+    assert exc.value.flag == "--card"
+    assert "'Choose a card' needs an answer, but a non-interactive terminal never prompts; pass --card instead" in (
+        err.getvalue()
+    )
+
+
+def test_is_terminal_needs_both_stdin_and_stdout(monkeypatch: pytest.MonkeyPatch):
+    class _Stream(io.StringIO):
+        def __init__(self, tty: bool) -> None:
+            super().__init__()
+            self._tty = tty
+
+        def isatty(self) -> bool:
+            return self._tty
+
+    for stdin, stdout, expected in [(True, True, True), (True, False, False), (False, True, False)]:
+        monkeypatch.setattr(sys, "stdin", _Stream(stdin))
+        monkeypatch.setattr(sys, "stdout", _Stream(stdout))
+        assert tty_mod._is_terminal() is expected
 
 
 # ── select: anything else is a numbered list ──────────────────────────────

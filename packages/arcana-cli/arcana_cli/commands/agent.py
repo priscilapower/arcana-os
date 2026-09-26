@@ -12,6 +12,7 @@ from arcana.cards.registry import CardRegistry, get_registry
 from arcana.models.connection_store import ConnectionStore
 from arcana.types.agent import Agent as AgentRecord
 from arcana.types.card import Card
+from arcana_cli._async import run_async
 from arcana_cli.constants import AGENTS_BASE, CONNECTIONS_PATH, ROMAN
 from arcana_cli.ui.card_picker import select_card, select_cards
 from arcana_cli.ui.theme import (
@@ -30,6 +31,9 @@ from arcana_cli.ui.theme import (
 
 app = typer.Typer(help="Manage agents.")
 console = Console()
+
+#: The option that answers the card picker without a terminal.
+CARD_FLAG = "--card"
 
 
 def _registry() -> AgentRegistry:
@@ -151,20 +155,23 @@ def create(
     ),
 ) -> None:
     """Create a new agent. Interactive if no flags provided."""
-    if not name:
-        name = typer.prompt("Agent name")
+    run_async(_create(name=name, card=card, model=model))
+
+
+async def _create(*, name: str | None, card: str | None, model: str | None) -> None:
+    agent_name = name or str(typer.prompt("Agent name"))
 
     modifier_cards: list[Card] = []
 
     if not card:
-        card_enum = select_card("Choose a primary card for this agent")
+        card_enum = await select_card("Choose a primary card for this agent", flag=CARD_FLAG)
         if card_enum is None:
             raise typer.Exit()
         if card_enum == Card.WORLD:
             console.print(err("The World is reserved and cannot be assigned."))
             raise typer.Exit(1)
         if typer.confirm("Blend with modifier cards?", default=False):
-            raw_modifiers = select_cards(
+            raw_modifiers = await select_cards(
                 "Select modifier cards (Space to toggle, Enter to confirm)",
                 initial=[],
                 max_items=CardEngine.MAX_MODIFIERS,
@@ -196,7 +203,7 @@ def create(
 
     registry = get_registry()
     record = _registry().create(
-        name=name,
+        name=agent_name,
         card=card_enum,
         model=model_str,
         modifier_cards=modifier_cards,
@@ -282,6 +289,18 @@ def edit(
     tags: str | None = typer.Option(None, "--tags", "-t", help="Comma-separated tags"),
 ) -> None:
     """Edit an agent's name, description, card, model, or tags."""
+    run_async(_edit(name, new_name=new_name, description=description, card=card, model=model, tags=tags))
+
+
+async def _edit(
+    name: str,
+    *,
+    new_name: str | None,
+    description: str | None,
+    card: str | None,
+    model: str | None,
+    tags: str | None,
+) -> None:
     record = _resolve_agent(name)
 
     updated_name = new_name if new_name is not None else typer.prompt("Name", default=record.name)
@@ -297,13 +316,13 @@ def edit(
             raise typer.Exit(1) from exc
         updated_modifiers = record.modifier_cards
     else:
-        picked = select_card("Choose a card", initial=record.card)
+        picked = await select_card("Choose a card", initial=record.card, flag=CARD_FLAG)
         if picked is None:
             raise typer.Exit()
         updated_card = picked
         updated_modifiers = record.modifier_cards
         if typer.confirm("Edit modifier cards?", default=bool(record.modifier_cards)):
-            raw_modifiers = select_cards(
+            raw_modifiers = await select_cards(
                 "Modifier cards (Space to toggle, Enter to confirm)",
                 initial=record.modifier_cards,
                 max_items=CardEngine.MAX_MODIFIERS,

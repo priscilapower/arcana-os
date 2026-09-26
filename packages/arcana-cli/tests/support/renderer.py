@@ -56,6 +56,7 @@ class RecordingRenderer:
         self.rejections: list[str] = []
         self.confirmations: list[str] = []
         self.offered: list[Sequence[Choice[Any]]] = []
+        self.select_options: list[dict[str, Any]] = []
         self.statuses: list[str] = []
         self.streamed: list[str] = []
         self._answers = deque(answers)
@@ -128,6 +129,9 @@ class RecordingRenderer:
         flag: str | None = None,
     ) -> T | list[T] | None:
         self.offered.append(choices)
+        self.select_options.append(
+            {"multi": multi, "initial": list(initial), "title": title, "max_items": max_items, "flag": flag}
+        )
         if not self._selections:
             raise AssertionError(f"unscripted select: {title or [c.label for c in choices]!r}")
         scripted = self._selections.popleft()

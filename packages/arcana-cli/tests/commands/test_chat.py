@@ -21,7 +21,7 @@ from arcana.agents.session_manager import SessionManager
 from arcana.types.card import Card
 from arcana.types.session import Message, MessageRole
 from arcana_cli._render import EXIT_ERROR
-from arcana_cli.commands.chat.controller import _ChatController, _friendly_error
+from arcana_cli.commands.chat.controller import SWITCH_TITLE, _ChatController, _friendly_error
 from arcana_cli.commands.chat.render import (
     _footer_line,
     _live_reply,
@@ -383,10 +383,48 @@ async def test_switch_unknown_agent(agent_fixture, arcana_home):
     assert "No agent 'ghost'" in _out(c)
 
 
-async def test_switch_requires_name(agent_fixture, arcana_home):
-    c = make_controller(arcana_home, agent_fixture, mock_runtime())
+async def test_bare_switch_offers_every_agent_with_a_card_preview(agent_fixture, arcana_home, monkeypatch):
+    sage = create_agent(arcana_home, name="sage", card=Card.HIGH_PRIESTESS)
+    r = RecordingRenderer(selections=[sage.id])
+    c = make_controller(arcana_home, agent_fixture, mock_runtime(), renderer=r)
+    patch_build(monkeypatch, mock_runtime())
     await _feed(c, ["/switch"])
-    assert "Usage: /switch" in _out(c)
+    (offered,) = r.offered
+    assert sorted(choice.label for choice in offered) == ["sage · The High Priestess", "scout · The Hermit"]
+    assert all(choice.preview is not None for choice in offered)
+    assert r.select_options[0]["title"] == SWITCH_TITLE
+    assert r.select_options[0]["initial"] == [agent_fixture.id]  # the cursor starts on the current agent
+    assert c.record.id == sage.id
+    assert "switched to sage" in _out(c)
+
+
+async def test_bare_switch_records_explicit_routing_audit(agent_fixture, arcana_home, monkeypatch):
+    sage = create_agent(arcana_home, name="sage", card=Card.HIGH_PRIESTESS)
+    c = make_controller(arcana_home, agent_fixture, mock_runtime(), renderer=RecordingRenderer(selections=[sage.id]))
+    patch_build(monkeypatch, mock_runtime())
+    await _feed(c, ["/switch"])
+    assert '"layer":"explicit"' in (arcana_home / "world" / "routing_audit.jsonl").read_text()
+
+
+async def test_bare_switch_cancelled_leaves_the_session_unchanged(agent_fixture, arcana_home, monkeypatch):
+    create_agent(arcana_home, name="sage", card=Card.HIGH_PRIESTESS)
+    c = make_controller(arcana_home, agent_fixture, mock_runtime(), renderer=RecordingRenderer(selections=[None]))
+    calls = patch_build(monkeypatch, mock_runtime())
+    session = c.session
+    await _feed(c, ["/switch"])
+    assert c.record.id == agent_fixture.id
+    assert c.session is session
+    assert calls == []
+    assert "switched" not in _out(c)
+
+
+async def test_bare_switch_to_an_agent_without_a_model_is_refused(agent_fixture, arcana_home, monkeypatch):
+    bare = create_agent(arcana_home, name="bare", card=Card.STAR, model="")
+    c = make_controller(arcana_home, agent_fixture, mock_runtime(), renderer=RecordingRenderer(selections=[bare.id]))
+    patch_build(monkeypatch, mock_runtime())
+    await _feed(c, ["/switch"])
+    assert "No model configured for agent 'bare'" in _out(c)
+    assert c.record.id == agent_fixture.id
 
 
 async def test_switch_loads_named_agent(agent_fixture, arcana_home, monkeypatch):

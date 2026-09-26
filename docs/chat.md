@@ -41,7 +41,7 @@ Type `/` in the input to open the command menu; `Tab` completes and cycles it.
 | `/help` | list these commands |
 | `/memory` | show what this agent recalls from this session |
 | `/card` | print the resolved card config — temperature, tone, weights |
-| `/switch <name>` | load another agent in a new session |
+| `/switch [name]` | load another agent in a new session (no name: pick one) |
 | `/retry` | re-run your last message |
 | `/save` | force a session snapshot to disk now |
 | `/clear` | clear the screen (the session is kept, and printed in full on exit) |
@@ -49,7 +49,9 @@ Type `/` in the input to open the command menu; `Tab` completes and cycles it.
 | `/no-memory` | start a new stateless session (memory off) |
 | `/exit` | close the session and quit |
 
-After `/switch`, `Tab` also completes agent names.
+After `/switch`, `Tab` also completes agent names. A bare `/switch` opens the
+agent picker: every agent beside a preview of its primary card. Type to filter,
+`↑` / `↓` to move, `Enter` to switch, `Esc` to stay where you are.
 
 ## Keys
 

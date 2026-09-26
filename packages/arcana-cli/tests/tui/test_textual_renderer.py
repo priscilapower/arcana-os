@@ -14,8 +14,11 @@ from rich.text import Text
 from textual.widgets import Input
 from textual.worker import WorkerFailed
 
+from arcana.types.card import Card
 from arcana_cli.tui.app import ArcanaApp
+from arcana_cli.tui.card_picker import CardPickerScreen
 from arcana_cli.tui.screens import ConfirmScreen, MultiSelectScreen, PromptScreen, SelectScreen
+from arcana_cli.ui.card_picker import card_choices
 from arcana_cli.ui.renderer import JsonRenderer, Question, Renderer, TtyRenderer, renderer_for
 from arcana_cli.ui.renderer.port import Choice
 from arcana_cli.ui.renderer.textual_renderer import HIDDEN_ANSWER, TextualRenderer
@@ -168,6 +171,52 @@ async def test_multi_select_escape_returns_empty(tui):
         await h.wait_for_screen(MultiSelectScreen)
         await h.pilot.press("escape")
         assert await worker.wait() == []
+
+
+# ── select with previews: the two-pane picker ─────────────────────────────
+
+
+async def test_select_with_previews_opens_the_card_picker(tui):
+    choices = card_choices()
+    hermit = next(c for c in choices if c.value is Card.HERMIT)
+    async with tui() as h:
+        worker = h.start(h.renderer.select(choices, title="Choose a card", initial=[Card.HERMIT]))
+        screen = await h.wait_for_screen(CardPickerScreen)
+        assert isinstance(screen, CardPickerScreen)
+        assert screen.preview.content is hermit.preview
+        await h.pilot.press("down", "enter")
+        assert await worker.wait() is Card.WHEEL_OF_FORTUNE
+        assert "? Choose a card X. Wheel of Fortune" in h.retained_text()
+
+
+async def test_select_multi_with_previews_toggles_in_the_card_picker(tui):
+    async with tui() as h:
+        worker = h.start(h.renderer.select(card_choices(), multi=True, initial=[Card.SUN], max_items=2))
+        await h.wait_for_screen(CardPickerScreen)
+        await h.pilot.press(*"moon", "space", "enter")
+        assert await worker.wait() == [Card.MOON, Card.SUN]
+
+
+async def test_select_card_picker_escape_returns_none_or_empty(tui):
+    async with tui() as h:
+        single = h.start(h.renderer.select(card_choices()))
+        await h.wait_for_screen(CardPickerScreen)
+        await h.pilot.press("escape")
+        assert await single.wait() is None
+        multi = h.start(h.renderer.select(card_choices(), multi=True, initial=[Card.SUN]))
+        await h.wait_for_screen(CardPickerScreen)
+        await h.pilot.press("escape")
+        assert await multi.wait() == []
+
+
+async def test_the_card_picker_returns_focus_to_the_chat_input(tui):
+    async with tui() as h:
+        worker = h.start(h.renderer.select(card_choices()))
+        await h.wait_for_screen(CardPickerScreen)
+        await h.pilot.press("enter")
+        await worker.wait()
+        await h.pilot.pause()
+        assert h.app.focused is h.app.chat_input
 
 
 # ── ask ───────────────────────────────────────────────────────────────────

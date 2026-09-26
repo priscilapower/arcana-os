@@ -1,13 +1,18 @@
 """``TtyRenderer`` — the renderer port over a Rich console and line prompts.
 
-Output is ``console.print``; questions are ``typer.prompt`` / ``typer.confirm``;
-card selection is the two-pane card picker. That is exactly what the commands
-did before they took a renderer, so a converted command's output is unchanged
-byte for byte.
+Output is ``console.print``; questions are ``typer.prompt`` / ``typer.confirm``.
+That is exactly what the commands did before they took a renderer, so a
+converted command's output is unchanged byte for byte.
 
-Every blocking read runs on a daemon thread (see :func:`_off_loop`), never on the
-event loop, so anything else scheduled on the loop keeps running while the user
-types.
+A selection whose choices carry previews (cards, agents) opens the two-pane
+picker (:mod:`arcana_cli.tui.card_picker`) as a short-lived Textual app on the
+invocation's own event loop; it needs a terminal, so without one it fails closed
+with :class:`~arcana_cli.ui.renderer.port.NonInteractiveError` naming the flag
+that answers it. Any other selection is a numbered list read as a line.
+
+Every blocking line read runs on a daemon thread (see :func:`_off_loop`), never
+on the event loop, so anything else scheduled on the loop keeps running while
+the user types.
 """
 
 import asyncio
@@ -22,9 +27,15 @@ import typer
 from rich.console import Console, RenderableType
 from rich.text import Text
 
-from arcana.types.card import Card
-from arcana_cli.ui.card_picker import select_card, select_cards
-from arcana_cli.ui.renderer.port import Choice, JsonAble, Question, StreamRender, StreamSink
+from arcana_cli.ui.renderer.port import (
+    Choice,
+    JsonAble,
+    Question,
+    StreamRender,
+    StreamSink,
+    initial_indexes,
+    refuse,
+)
 from arcana_cli.ui.theme import err, eyebrow
 
 if sys.platform != "win32":
@@ -32,6 +43,17 @@ if sys.platform != "win32":
 
 T = TypeVar("T")
 _R = TypeVar("_R")
+
+#: How :class:`NonInteractiveError` names this surface when it has no terminal to prompt on.
+NO_TERMINAL = "a non-interactive terminal"
+
+
+def _is_terminal() -> bool:
+    """Whether stdin and stdout are both a terminal, which the two-pane picker draws on and reads from."""
+    try:
+        return sys.stdin.isatty() and sys.stdout.isatty()
+    except (AttributeError, ValueError):  # a closed or replaced stream
+        return False
 
 
 def _settle_result(future: asyncio.Future[_R], result: _R) -> None:
@@ -133,8 +155,9 @@ class _FileSink:
 class TtyRenderer:
     """Renders to a Rich :class:`~rich.console.Console` and asks with line prompts."""
 
-    def __init__(self, console: Console | None = None) -> None:
+    def __init__(self, console: Console | None = None, *, stderr: Console | None = None) -> None:
         self._console = console if console is not None else Console()
+        self._stderr = stderr if stderr is not None else Console(stderr=True)
 
     def emit(self, renderable: RenderableType | JsonAble) -> None:
         self._console.print(renderable)
@@ -190,15 +213,16 @@ class TtyRenderer:
         max_items: int | None = None,
         flag: str | None = None,
     ) -> T | list[T] | None:
-        """Card choices open the two-pane card picker; anything else is a numbered list.
+        """Choices with previews open the two-pane picker; anything else is a numbered list.
 
-        The card picker renders from the card registry (its own order, labels and
-        previews); the choices decide which cards it offers.
+        Disabled choices are left out. The picker needs a terminal: without one
+        it raises :class:`NonInteractiveError` (message on stderr) naming ``flag``.
         """
         enabled = [c for c in choices if not c.disabled]
-        cards = {c.value: c for c in enabled if isinstance(c.value, Card)}
-        if cards and len(cards) == len(enabled):
-            picked = await self._select_cards(cards, multi=multi, initial=initial, title=title, max_items=max_items)
+        if any(c.preview is not None for c in enabled):
+            picked = await self._select_picker(
+                enabled, multi=multi, initial=initial, title=title, max_items=max_items, flag=flag
+            )
         else:
             picked = await self._select_numbered(
                 enabled, multi=multi, initial=initial, title=title, max_items=max_items
@@ -207,28 +231,27 @@ class TtyRenderer:
             return picked
         return picked[0] if picked else None
 
-    async def _select_cards(
+    async def _select_picker(
         self,
-        cards: dict[Card, Choice[T]],
+        choices: Sequence[Choice[T]],
         *,
         multi: bool,
         initial: Sequence[T],
         title: str,
         max_items: int | None,
+        flag: str | None,
     ) -> list[T]:
-        exclude = set(Card) - cards.keys()
-        seeds: list[Card] = [v for v in initial if isinstance(v, Card)]
-        if multi:
-            prompt = title or "Select cards"
-            picked = await _off_loop(
-                lambda: select_cards(prompt, initial=seeds, max_items=max_items, exclude=exclude),
-            )
-        else:
-            prompt = title or "Select a card"
-            seed = seeds[0] if seeds else None
-            one = await _off_loop(lambda: select_card(prompt, initial=seed, exclude=exclude))
-            picked = [one] if one is not None else []
-        return [cards[card].value for card in picked]
+        if not _is_terminal():
+            refuse(self._stderr, title or "a selection", flag=flag, surface=NO_TERMINAL)
+        # Deferred: the picker is a Textual app (over 100 ms to import), which the
+        # one-shot and --json commands that never open it must not pay for; a test
+        # asserts this module imports without Textual.
+        from arcana_cli.tui.card_picker import pick
+
+        picked = await pick(
+            choices, multi=multi, initial=initial_indexes(choices, initial), title=title, max_items=max_items
+        )
+        return [choices[i].value for i in picked]
 
     async def _select_numbered(
         self,

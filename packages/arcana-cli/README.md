@@ -121,7 +121,7 @@ arcana agent delete my-agent
 arcana agent delete my-agent --yes           # skip confirmation
 ```
 
-`arcana agent create` without flags walks you through a card picker showing all 22 Major Arcana with their archetype and default temperature, lets you toggle optional modifier cards, and prints a blend-compatibility summary before saving. The World is reserved and cannot be assigned.
+`arcana agent create` without flags walks you through a two-pane card picker — the Major Arcana beside a live preview of the highlighted card (archetype, default temperature, prompt ingredients) — lets you toggle optional modifier cards, and prints a blend-compatibility summary before saving. In the picker, type to filter, `↑`/`↓` to move, `Enter` to pick, `Space` to toggle a modifier (up to the limit), `Esc` or `Ctrl+C` to cancel. The World is reserved: the picker never offers it. The picker needs a terminal; with stdin or stdout piped, `agent create` / `agent edit` exit with code `1` and ask for `--card`.
 
 | Subcommand | Description |
 |-----------|-------------|
@@ -330,7 +330,7 @@ Inside the session, slash commands are available (type `/help` to list them):
 | `/help` | List the in-session commands |
 | `/memory` | Show what this agent recalls from this session |
 | `/card` | Print the resolved card config — temperature, tone, weights |
-| `/switch <name>` | Load another agent in a new session |
+| `/switch [name]` | Load another agent in a new session; with no name, pick one (previewed by its card) |
 | `/retry` | Re-run your last message |
 | `/save` | Force a session snapshot to disk now |
 | `/clear` | Clear the screen (the session is kept) |
@@ -363,13 +363,13 @@ arcana soul show   # print the current soul.md
 Browse the card definitions.
 
 ```bash
-arcana cards            # list all 22 Major Arcana
+arcana cards            # browse the Major Arcana in the two-pane picker (needs a terminal)
 arcana cards show hermit
 ```
 
 | Subcommand | Description |
 |-----------|-------------|
-| *(default)* | List all 22 Major Arcana |
+| *(default)* | Browse the Major Arcana (The World is reserved) in the two-pane picker |
 | `show <name>` | Show one card's archetype, temperature, and details |
 
 ---
@@ -417,7 +417,7 @@ def show_cmd(name: str) -> None:
     run_async(show_card(renderer_for(json=False), name))
 ```
 
-`renderer_for(json=...)` returns a `TtyRenderer` (Rich console, line prompts, the card picker) or a `JsonRenderer` (`emit_json` documents only; any question fails closed with `NonInteractiveError`, exit code `1`, message on stderr). `arcana_cli/commands/cards.py` is the reference conversion. In tests, hand the coroutine a `RecordingRenderer` (`tests/support/renderer.py`), which records emitted output and answers questions from a script.
+`renderer_for(json=...)` returns a `TtyRenderer` (Rich console and line prompts; a `select` whose choices carry previews opens the two-pane picker as a short-lived Textual app on the command's own event loop, and fails closed with `NonInteractiveError` without a terminal) or a `JsonRenderer` (`emit_json` documents only; any question fails closed with `NonInteractiveError`, exit code `1`, message on stderr). `arcana_cli/commands/cards.py` is the reference conversion. In tests, hand the coroutine a `RecordingRenderer` (`tests/support/renderer.py`), which records emitted output and answers questions from a script.
 
 ### The interactive app shell
 
@@ -430,6 +430,8 @@ The chat input (`tui/chat_input.py`) is a `ChatInput` built on Textual's `TextAr
 `TextualRenderer` (`arcana_cli.ui.renderer.textual_renderer`) is the renderer-port adapter over a running app. Its question methods must be awaited from an app worker (`app.run_worker(...)`); Esc cancels any dialog, and a secret answer never reaches the transcript or the exit replay. It is imported from its module rather than `arcana_cli.ui.renderer`, so the one-shot and `--json` paths never load Textual.
 
 The chat session (`commands/chat/`) runs on it: `ChatApp` adds the session's keys (priority Ctrl+C / Ctrl+D bindings, so they beat the input box's copy and delete-forward), and `_ChatController` holds the session logic and writes only through the renderer port, so its tests hand it a `RecordingRenderer`. A turn runs as an app worker, so anything it awaits, such as a `ToolConfirmer` passed through `build_session_runtime(..., confirmer=...)`, can push a dialog and wait for the answer; cancelling the turn takes the dialog down with it. `Renderer.stream(prefix, render=...)` takes a function from the text so far to the block shown, which is how a reply re-renders as Markdown while it streams. `commands/chat/command.py` settles the agent and session before loading the app module, so `arcana_cli.main` still imports without Textual.
+
+The two-pane picker (`tui/card_picker.py`) is `CardPickerScreen`, a modal screen with a filter box, the list, and a scrollable preview of the highlighted choice's `Choice.preview`; single pick or `Space` multi-select with `max_items`, `Esc`/`Ctrl+C` to cancel. Any `Renderer.select` whose choices carry previews opens it: `TextualRenderer` pushes it over the session (a bare `/switch` uses it to pick an agent), `TtyRenderer` runs it in `PickerApp` (`await pick(...)`). `ui/card_picker.py` keeps `select_card` / `select_cards` as async wrappers over `Renderer.select` with `card_choices()`, which leaves THE WORLD out unless the caller's `exclude` lets it in. No module reads raw keys any other way; a test bans `readchar` imports.
 
 UI tests drive the app headless through Textual's Pilot: `tests/support/tui.py` provides `arcana_pilot()` (exposed as the `tui` fixture under `tests/tui/`), which yields the app, its pilot, and a bound `TextualRenderer`.
 

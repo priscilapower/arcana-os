@@ -22,6 +22,7 @@ from arcana_cli.ui.renderer.port import (
     StreamRender,
     StreamSink,
     Validator,
+    initial_indexes,
 )
 from arcana_cli.ui.renderer.tty import TtyRenderer
 
@@ -36,6 +37,7 @@ __all__ = [
     "StreamSink",
     "TtyRenderer",
     "Validator",
+    "initial_indexes",
     "renderer_for",
 ]
 

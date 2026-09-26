@@ -1,273 +1,80 @@
-"""Interactive card picker — rich.Live two-pane layout with readchar input.
+"""Card selection over the renderer port.
 
 Public API:
-    select_card()   → Card | None        (single selection)
-    select_cards()  → list[Card]         (multi-select with Space)
+    card_choices()  → list[Choice[Card]]  (every card but the excluded, each with its preview panel)
+    select_card()   → Card | None         (single selection)
+    select_cards()  → list[Card]          (multi-select with Space)
 
-Falls back to a plain typed prompt when stdin is not a TTY.
+Both pickers are :meth:`~arcana_cli.ui.renderer.Renderer.select` over
+:func:`card_choices`, so they open the same two-pane picker wherever they run:
+a short-lived picker app from a one-shot command (the default renderer is a
+:class:`~arcana_cli.ui.renderer.TtyRenderer`), a modal screen inside the
+session. THE WORLD is excluded unless a caller explicitly lets it in: it is
+reserved for the meta-agent.
 """
 
-import sys
 from collections.abc import Collection
 
-import readchar
-from rich.console import Console, Group
-from rich.layout import Layout
-from rich.live import Live
-from rich.panel import Panel
-from rich.text import Text
-
 from arcana.cards.registry import get_registry
-from arcana.types.card import Card, TarotCard
+from arcana.types.card import Card
 from arcana_cli.constants import ROMAN
 from arcana_cli.ui.card_panel import card_panel
-from arcana_cli.ui.theme import (
-    PICKER_BORDER,
-    PICKER_BORDER_PREVIEW,
-    PICKER_CURSOR,
-    PICKER_CURSOR_SELECTED,
-    PICKER_HINT_DIM,
-    PICKER_HINT_FILTER,
-    PICKER_SELECTED,
-    TXT3,
-    err,
-    eyebrow,
-    warn,
-)
+from arcana_cli.ui.renderer import Choice, Renderer, TtyRenderer
+
+#: What the pickers hide unless told otherwise: THE WORLD belongs to the meta-agent alone.
+RESERVED_CARDS: tuple[Card, ...] = (Card.WORLD,)
 
 
-def _render_list(
-    cards: list[TarotCard],
-    cursor: int,
-    selected: set[Card],
-    filter_buf: str,
-    filtering: bool,
-    multi: bool,
-    max_items: int | None = None,
-) -> Panel:
-    at_limit = max_items is not None and len(selected) >= max_items
-
-    rows: list[Text] = []
-    for i, card in enumerate(cards):
-        is_cursor = i == cursor
-        is_selected = card.id in selected
-        is_blocked = at_limit and not is_selected
-
-        check = "✓ " if is_selected else "  "
-        arrow = "▶" if is_cursor else " "
-        roman = ROMAN[card.number]
-        line = f" {arrow} {check}{roman}. {card.name}"
-
-        t = Text(line)
-        if is_cursor and is_selected:
-            t.stylize(PICKER_CURSOR_SELECTED)
-        elif is_cursor:
-            t.stylize(PICKER_CURSOR)
-        elif is_selected:
-            t.stylize(PICKER_SELECTED)
-        elif is_blocked:
-            t.stylize(PICKER_HINT_DIM)
-        rows.append(t)
-
-    if filtering:
-        hint = Text(f" / {filter_buf}▌", style=PICKER_HINT_FILTER)
-    elif filter_buf:
-        hint = Text(f" / {filter_buf}  [Esc clear]", style=PICKER_HINT_DIM)
-    elif multi and at_limit:
-        hint = Text(
-            f" limit reached ({max_items})  [Space] deselect  [Enter] confirm  [Esc] cancel",
-            style=PICKER_HINT_DIM,
-        )
-    elif multi:
-        limit_note = f"  max {max_items}" if max_items is not None else ""
-        hint = Text(
-            f" [↑↓] nav  [Space] toggle{limit_note}  [Enter] confirm  [/] filter  [Esc] cancel",
-            style=PICKER_HINT_DIM,
-        )
-    else:
-        hint = Text(" [↑↓] nav  [Enter] select  [/] filter  [Esc] cancel", style=PICKER_HINT_DIM)
-
-    title = "Major Arcana"
-    if multi and selected:
-        title += f" ({len(selected)}"
-        title += f"/{max_items}" if max_items is not None else ""
-        title += " selected)"
-
-    content = Group(*rows, Text(""), hint) if rows else Group(Text("  (no matches)"), Text(""), hint)
-    return Panel(content, title=title, border_style=PICKER_BORDER)
-
-
-def _non_tty_fallback(prompt: str, multi: bool, exclude: set[Card] | None = None) -> list[Card]:
-    """Numbered list + typed-prompt fallback when stdin is not a TTY."""
+def card_choices(exclude: Collection[Card] = RESERVED_CARDS) -> list[Choice[Card]]:
+    """Every card not in ``exclude``, in canonical order, labelled ``"IX. The Hermit"`` with its panel as preview."""
     registry = get_registry()
-    console = Console()
-    all_cards = [c for c in registry.all() if not exclude or c.id not in exclude]
-
-    console.print(eyebrow("Available cards"))
-    for i, card in enumerate(all_cards, 1):
-        console.print(f"  {i:2}. {card.name:<24}  [{TXT3}]{card.id.value}[/]")
-
-    def _resolve_one(raw: str) -> Card | None:
-        raw = raw.strip()
-        if not raw:
-            return None
-        try:
-            idx = int(raw) - 1
-            if 0 <= idx < len(all_cards):
-                return all_cards[idx].id
-            console.print(err(f"Number out of range: {raw!r}"))
-            return None
-        except ValueError:
-            pass
-        q = raw.lower()
-        matches = [c for c in all_cards if q in c.name.lower() or q in c.id.value]
-        if len(matches) == 1:
-            return matches[0].id
-        if len(matches) > 1:
-            console.print(warn(f"Ambiguous '{raw}', skipping"))
-        else:
-            console.print(err(f"Unknown card '{raw}'"))
-        return None
-
-    if multi:
-        console.print(f"\n[{TXT3}]{prompt}[/] (comma-separated #s or names, blank for none): ", end="")
-        raw = sys.stdin.readline().strip()
-        if not raw:
-            return []
-        return [c for part in raw.split(",") if (c := _resolve_one(part)) is not None]
-    else:
-        console.print(f"\n[{TXT3}]{prompt}[/] (# or name/key, blank to cancel): ", end="")
-        raw = sys.stdin.readline().strip()
-        if not raw:
-            return []
-        card_id = _resolve_one(raw)
-        return [card_id] if card_id is not None else []
+    return [
+        Choice(card.id, f"{ROMAN[card.number]}. {card.name}", preview=card_panel(card, registry))
+        for card in registry.all()
+        if card.id not in exclude
+    ]
 
 
-def _run_picker(
-    prompt: str,
-    multi: bool,
-    initial_card: Card | None = None,
-    initial_selected: list[Card] | None = None,
-    max_items: int | None = None,
-    exclude: set[Card] | None = None,
-) -> list[Card]:
-    if not sys.stdin.isatty():
-        return _non_tty_fallback(prompt, multi, exclude)
-
-    registry = get_registry()
-    all_cards = [c for c in registry.all() if not exclude or c.id not in exclude]
-
-    # Pre-position cursor on initial_card (or first of initial_selected)
-    seed = initial_card or (initial_selected[0] if initial_selected else None)
-    cursor = next((i for i, c in enumerate(all_cards) if c.id == seed), 0)
-
-    selected: set[Card] = set(initial_selected or [])
-    filter_buf = ""
-    filtering = False
-
-    console = Console()
-
-    def visible() -> list[TarotCard]:
-        if not filter_buf:
-            return all_cards
-        q = filter_buf.lower()
-        return [c for c in all_cards if q in c.name.lower() or q in c.id.value]
-
-    def make_layout(cards: list[TarotCard]) -> Layout:
-        layout = Layout()
-        layout.split_row(
-            Layout(name="list", ratio=1),
-            Layout(name="preview", ratio=2),
-        )
-        layout["list"].update(_render_list(cards, cursor, selected, filter_buf, filtering, multi, max_items))
-        preview_card = cards[cursor] if cards else None
-        layout["preview"].update(
-            card_panel(preview_card, registry)
-            if preview_card
-            else Panel(f"[{TXT3}]No cards match.[/]", border_style=PICKER_BORDER_PREVIEW)
-        )
-        return layout
-
-    result: list[Card] = []
-
-    with Live(make_layout(visible()), console=console, screen=True, refresh_per_second=30) as live:
-        while True:
-            cards = visible()
-            if cards:
-                cursor = min(cursor, len(cards) - 1)
-            live.update(make_layout(cards))
-
-            key = readchar.readkey()
-
-            if filtering:
-                if key == readchar.key.ENTER:
-                    filtering = False
-                elif key == readchar.key.ESC:
-                    filtering = False
-                    filter_buf = ""
-                    cursor = 0
-                elif key == readchar.key.BACKSPACE:
-                    filter_buf = filter_buf[:-1]
-                    cursor = 0
-                elif len(key) == 1 and key.isprintable():
-                    filter_buf += key
-                    cursor = 0
-            elif key == readchar.key.UP:
-                if cards:
-                    cursor = max(0, cursor - 1)
-            elif key == readchar.key.DOWN:
-                if cards:
-                    cursor = min(len(cards) - 1, cursor + 1)
-            elif key == "/":
-                filtering = True
-                filter_buf = ""
-                cursor = 0
-            elif key == readchar.key.ENTER:
-                if cards:
-                    result = list(selected) if multi else [cards[cursor].id]
-                break
-            elif key == readchar.key.SPACE and multi:
-                if cards:
-                    card_id = cards[cursor].id
-                    if card_id in selected:
-                        selected.discard(card_id)
-                    elif max_items is None or len(selected) < max_items:
-                        selected.add(card_id)
-            elif key in (readchar.key.ESC, readchar.key.CTRL_C):
-                result = []
-                break
-
-    return result
-
-
-def select_card(
+async def select_card(
     prompt: str = "Select a card",
     *,
     initial: Card | None = None,
-    exclude: Collection[Card] = (Card.WORLD,),
+    exclude: Collection[Card] = RESERVED_CARDS,
+    renderer: Renderer | None = None,
+    flag: str | None = None,
 ) -> Card | None:
     """Single-card picker. Returns the chosen Card, or None if cancelled.
 
     Pass `initial` to pre-position the cursor on a specific card.
     Pass `exclude` to hide cards from the picker; by default only THE WORLD is
     hidden, since it's exclusive to the meta-agent.
+    `renderer` is where the picker opens (a `TtyRenderer` by default); `flag`
+    names the option that answers it on a surface that can't prompt.
     """
-    result = _run_picker(prompt, multi=False, initial_card=initial, exclude=set(exclude))
-    return result[0] if result else None
+    r = renderer if renderer is not None else TtyRenderer()
+    initial_values = [initial] if initial is not None else []
+    return await r.select(card_choices(exclude), initial=initial_values, title=prompt, flag=flag)
 
 
-def select_cards(
+async def select_cards(
     prompt: str = "Select cards",
     *,
     initial: list[Card] | None = None,
     max_items: int | None = None,
-    exclude: set[Card] | None = None,
+    exclude: Collection[Card] = RESERVED_CARDS,
+    renderer: Renderer | None = None,
+    flag: str | None = None,
 ) -> list[Card]:
     """Multi-card picker. Space toggles, Enter confirms. Returns empty list if cancelled.
 
     Pass `initial` to pre-select cards and position the cursor on the first one.
     Pass `max_items` to cap how many cards can be selected simultaneously.
-    Pass `exclude` to hide specific cards from the picker (e.g. the primary card, Card.WORLD).
+    Pass `exclude` to hide specific cards from the picker (e.g. the primary
+    card); THE WORLD is hidden by default, and stays hidden unless left out of
+    an explicit `exclude`.
+    `renderer` and `flag` are as for `select_card`.
     """
-    return _run_picker(prompt, multi=True, initial_selected=initial or [], max_items=max_items, exclude=exclude)
+    r = renderer if renderer is not None else TtyRenderer()
+    return await r.select(
+        card_choices(exclude), multi=True, initial=initial or [], title=prompt, max_items=max_items, flag=flag
+    )
