@@ -22,7 +22,8 @@ from arcana.types.agent import Agent as AgentRecord
 from arcana.types.card import Card
 from arcana.types.memory import MemoryQuery, RetrievalMode
 from arcana.types.session import MessageRole, Session
-from arcana_cli.ui.input_model import _SLASH_COMMANDS
+from arcana_cli.tui.slash_registry import SlashCommand, SlashRegistry
+from arcana_cli.ui.input_model import SESSION_COMMANDS
 from arcana_cli.ui.mathtext import normalize_math
 from arcana_cli.ui.theme import (
     ACCENT,
@@ -48,6 +49,7 @@ from arcana_cli.ui.theme import (
 __all__ = [
     "_agent_eyebrow_block",
     "_card_table",
+    "_command_help",
     "_footer_line",
     "_header_block",
     "_help_table",
@@ -171,13 +173,38 @@ def _note_block(markup: str) -> RenderableType:
     return Group(Text(""), Text.from_markup(markup))
 
 
-def _help_table() -> RenderableType:
+#: How ``/help`` points at a command's own options.
+HELP_HINT = "/<command> --help lists a command's options; each runs as arcana <command> does."
+
+
+def _help_table(registry: SlashRegistry) -> RenderableType:
+    """Every slash command: the session's own, then each ``arcana`` command group and top-level command."""
     table = make_table("In-session commands")
-    table.add_column("", style=f"bold {ACCENT}")
+    table.add_column("", style=f"bold {ACCENT}", no_wrap=True)
     table.add_column("")
-    for name, desc in _SLASH_COMMANDS:
-        table.add_row(name, desc)
-    return table
+    for command in SESSION_COMMANDS:
+        table.add_row(Text(command.usage), Text(command.help))
+    table.add_section()
+    for group, actions in registry.groups.items():
+        if " " not in group and actions:  # a nested group shows as one of its parent's actions
+            table.add_row(
+                Text(group), Text.assemble((" · ".join(actions), "bold"), "\n", (registry.group_summary(group), TXT3))
+            )
+    for command in registry.commands.values():
+        if len(command.path) == 1 and command.name not in registry.groups:
+            table.add_row(Text(command.usage()), Text(command.summary))
+    return Group(table, Text(HELP_HINT, style=TXT3))
+
+
+def _command_help(command: SlashCommand) -> RenderableType:
+    """One slash command's help: what it does, its usage and the options it takes in the session."""
+    table = make_table(escape(command.usage()))
+    table.add_column("", style=f"bold {ACCENT}", no_wrap=True)
+    table.add_column("")
+    for param in command.visible_params():
+        name = ", ".join(param.opts) if param.param_type_name == "option" else param.human_readable_name
+        table.add_row(Text(name), Text(param.help or ""))
+    return Group(Text(command.summary), table)
 
 
 def _card_table(runtime_agent: RuntimeAgent, record: AgentRecord) -> RenderableType:

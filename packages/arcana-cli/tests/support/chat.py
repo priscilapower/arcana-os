@@ -7,6 +7,8 @@ module wraps these helpers in its own fixtures.
 
 import asyncio
 import json
+from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -30,6 +32,7 @@ from arcana.types.card import Card
 from arcana.types.model import ModelConnection, ModelProvider
 from arcana.types.session import MessageRole, Session
 from arcana_cli.commands.chat.controller import _ChatController
+from arcana_cli.tui.slash_registry import slash_registry
 from arcana_cli.ui.renderer import Renderer
 from tests.support.renderer import RecordingRenderer
 
@@ -164,3 +167,10 @@ class FakeFederation:
 
     async def aclose(self) -> None:
         self.closed = True
+
+
+def patch_body(monkeypatch: pytest.MonkeyPatch, name: str, body: Callable[..., Awaitable[None]]) -> None:
+    """Make the session's slash command ``name`` (e.g. ``/agent delete``) run ``body`` for the test."""
+    commands = slash_registry().commands
+    command = commands[name]
+    monkeypatch.setitem(commands, name, replace(command, impl=replace(command.impl, body=body)))

@@ -21,11 +21,15 @@ from textual.widgets.text_area import Selection
 
 from arcana_cli.tui.app import ArcanaApp
 from arcana_cli.tui.chat_input import CONTINUATION, NEWLINE_KEYS, PROMPT, ChatInput, ChatInputPanel
+from arcana_cli.tui.completion import session_vocabulary
 from arcana_cli.tui.history import AgentHistory
-from arcana_cli.ui.input_model import _SLASH_NAMES
+from arcana_cli.tui.slash_registry import slash_registry
 from tests.support.tui import TuiHarness, arcana_pilot
 
 AGENTS = ("scout", "scribe", "oracle")
+
+#: The command names a chat input completes when given no other vocabulary.
+SESSION_NAMES = session_vocabulary().names
 
 
 class _RecordingApp(ArcanaApp):
@@ -174,12 +178,20 @@ async def test_a_line_the_filter_refuses_is_submitted_but_not_recorded():
         assert c.box.recall.entries == ("keep me",)
 
 
-async def test_a_wizard_sub_action_completes_from_the_menu():
+async def test_a_generated_commands_action_option_and_agent_complete_from_the_menu():
     async with chat() as c:
+        c.box.vocabulary = slash_registry().vocabulary()
         await c.type("/mcp a")
         assert c.box.menu_open
         await c.press("tab")
         assert c.box.text == "/mcp add"
+        await c.press(*" --na")
+        await c.press("tab")
+        assert c.box.text == "/mcp add --name"
+        c.box.clear()
+        await c.type("/agent edit o")
+        await c.press("tab")
+        assert c.box.text == "/agent edit oracle"
 
 
 # ── Ctrl+J, Alt+Enter, Shift+Enter ───────────────────────────────────────
@@ -321,12 +333,12 @@ async def test_tab_cycles_inserting_the_highlighted_item():
     async with chat() as c:
         await c.type("/")
         await c.press("tab")
-        assert c.box.text == _SLASH_NAMES[0]
+        assert c.box.text == SESSION_NAMES[0]
         assert c.box.menu.highlighted == 0
         await c.press("tab")
-        assert c.box.text == _SLASH_NAMES[1]
+        assert c.box.text == SESSION_NAMES[1]
         await c.press("shift+tab")
-        assert c.box.text == _SLASH_NAMES[0]
+        assert c.box.text == SESSION_NAMES[0]
 
 
 async def test_up_and_down_move_through_an_open_menu():
@@ -704,11 +716,11 @@ async def test_menu_is_clamped_to_the_input_width():
 async def test_menu_scrolls_to_keep_the_highlight_visible():
     async with chat() as c:
         await c.type("/")
-        await c.press(*["tab"] * len(_SLASH_NAMES))
+        await c.press(*["tab"] * len(SESSION_NAMES))
         rendered = c.box.menu.render()
         assert isinstance(rendered, Text)
-        assert _SLASH_NAMES[-1] in rendered.plain
-        assert _SLASH_NAMES[0] not in rendered.plain.split()
+        assert SESSION_NAMES[-1] in rendered.plain
+        assert SESSION_NAMES[0] not in rendered.plain.split()
 
 
 # ── Headless dispatch cost ───────────────────────────────────────────────

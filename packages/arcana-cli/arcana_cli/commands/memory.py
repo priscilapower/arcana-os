@@ -17,10 +17,11 @@ Every command body is a renderer-agnostic coroutine that takes a
 :class:`~arcana_cli.ui.renderer.Presentable` (a Rich view and the ``--json``
 document of the same data), and a failure — a core memory error included (see
 :func:`_memory_errors`) — goes through :func:`~arcana_cli.ui.renderer.fail`.
-Each body runs its build → use → close in the single ``run_async`` call of its
-Typer callback: the private SQLite handle is bound to the event loop that opened
-it, so splitting the work across loops would break it — and the federation is
-always closed in a ``finally`` so no connection leaks.
+Each body runs its build → use → close on one event loop (its Typer callback's
+single ``run_async`` call, or the session's loop for ``/memory …``): the private
+SQLite handle is bound to the event loop that opened it, so splitting the work
+across loops would break it — and the federation is always closed in a
+``finally`` so no connection leaks.
 """
 
 from collections.abc import Generator
@@ -63,6 +64,7 @@ from arcana.types._utils import now_utc
 from arcana.types.agent import Agent as AgentRecord
 from arcana_cli._async import run_async
 from arcana_cli._render import EXIT_DENIED, EXIT_NOT_FOUND, truncate
+from arcana_cli.command_impl import AGENT_METAVAR, command_impl
 from arcana_cli.commands.run import resolve_embedding_gateway
 from arcana_cli.commands.tools import resolve_agent
 from arcana_cli.constants import AGENTS_BASE, ARCANA_HOME, MEMORY_ADAPTERS_PATH
@@ -250,7 +252,7 @@ def _entries_view(entries: list[MemoryEntry], *, title: str, scope_col: bool) ->
 
 @app.command("list")
 def list_cmd(
-    agent: str | None = typer.Option(None, "--agent", "-a", help="Agent name or UUID"),
+    agent: str | None = typer.Option(None, "--agent", "-a", metavar=AGENT_METAVAR, help="Agent name or UUID"),
     connector: str | None = typer.Option(None, "--connector", help="Read a registered knowledge connector by name"),
     pool: str | None = typer.Option(None, "--pool", help="Read a shared memory pool (agent memory)"),
     scope: MemoryScope | None = typer.Option(None, "--scope", help="private | shared | global"),  # noqa: B008
@@ -274,6 +276,7 @@ def list_cmd(
     )
 
 
+@command_impl("memory list")
 async def list_memory(
     r: Renderer,
     *,
@@ -328,7 +331,7 @@ async def list_memory(
 @app.command("search")
 def search_cmd(
     query: str = typer.Argument(..., help="Search text"),
-    agent: str | None = typer.Option(None, "--agent", "-a", help="Agent name or UUID"),
+    agent: str | None = typer.Option(None, "--agent", "-a", metavar=AGENT_METAVAR, help="Agent name or UUID"),
     connector: str | None = typer.Option(None, "--connector", help="Search a registered knowledge connector by name"),
     pool: str | None = typer.Option(None, "--pool", help="Search a shared memory pool (agent memory)"),
     scope: MemoryScope | None = typer.Option(None, "--scope", help="private | shared | global"),  # noqa: B008
@@ -351,6 +354,7 @@ def search_cmd(
     )
 
 
+@command_impl("memory search")
 async def search_memory(
     r: Renderer,
     query: str,
@@ -402,13 +406,14 @@ async def search_memory(
 @app.command("inspect")
 def inspect_cmd(
     memory_id: str = typer.Argument(..., help="Memory entry UUID"),
-    agent: str = typer.Option(..., "--agent", "-a", help="Agent name or UUID"),
+    agent: str = typer.Option(..., "--agent", "-a", metavar=AGENT_METAVAR, help="Agent name or UUID"),
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Show one entry in full, with its decay factor and effective importance."""
     run_async(inspect_memory(renderer_for(json_), memory_id, agent=agent))
 
 
+@command_impl("memory inspect")
 async def inspect_memory(r: Renderer, memory_id: str, *, agent: str) -> None:
     """One entry in full, with its decay factor and effective importance."""
     record = resolve_agent(r, agent)
@@ -467,7 +472,7 @@ async def inspect_memory(r: Renderer, memory_id: str, *, agent: str) -> None:
 @app.command("forget")
 def forget_cmd(
     memory_id: str = typer.Argument(..., help="Memory entry UUID"),
-    agent: str = typer.Option(..., "--agent", "-a", help="Agent name or UUID"),
+    agent: str = typer.Option(..., "--agent", "-a", metavar=AGENT_METAVAR, help="Agent name or UUID"),
     archive: bool = typer.Option(False, "--archive", help="Soft-delete (recoverable) instead of a hard delete"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
@@ -484,6 +489,7 @@ def _no_such_memory(r: Renderer, memory_id: str, record: AgentRecord) -> NoRetur
     fail(r, f"No memory with id {memory_id!r} for agent '{record.name}'.", code=EXIT_NOT_FOUND)
 
 
+@command_impl("memory forget")
 async def forget_memory(r: Renderer, memory_id: str, *, agent: str, archive: bool, yes: bool) -> None:
     """Forget one entry once confirmed (or with ``yes``); GLOBAL is refused before anything is asked."""
     record = resolve_agent(r, agent)
@@ -541,7 +547,7 @@ def connect_obsidian(
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Register an Obsidian vault as an external read-only knowledge connector."""
-    run_async(connect_folder(renderer_for(json_), KnowledgeConnectorKind.OBSIDIAN, vault, name))
+    run_async(connect_obsidian_vault(renderer_for(json_), vault=vault, name=name))
 
 
 @connect_app.command("markdown")
@@ -551,7 +557,19 @@ def connect_markdown(
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Register a plain folder of Markdown notes as an external read-only knowledge connector."""
-    run_async(connect_folder(renderer_for(json_), KnowledgeConnectorKind.MARKDOWN, path, name))
+    run_async(connect_markdown_folder(renderer_for(json_), path=path, name=name))
+
+
+@command_impl("memory connect obsidian")
+async def connect_obsidian_vault(r: Renderer, *, vault: str, name: str | None) -> None:
+    """Register the Obsidian vault at ``vault`` as a knowledge connector."""
+    await connect_folder(r, KnowledgeConnectorKind.OBSIDIAN, vault, name)
+
+
+@command_impl("memory connect markdown")
+async def connect_markdown_folder(r: Renderer, *, path: str, name: str | None) -> None:
+    """Register the folder of Markdown notes at ``path`` as a knowledge connector."""
+    await connect_folder(r, KnowledgeConnectorKind.MARKDOWN, path, name)
 
 
 async def connect_folder(r: Renderer, kind: KnowledgeConnectorKind, raw_path: str, name: str | None) -> None:
@@ -606,6 +624,7 @@ async def _connector_health(connector: KnowledgeConnector) -> tuple[bool, int]:
     return (True, len(notes))
 
 
+@command_impl("memory adapters")
 async def list_adapters(r: Renderer) -> None:
     """Every registered knowledge connector with its health and note count."""
     # The registry load is guarded so a corrupt file exits cleanly
@@ -644,7 +663,9 @@ async def list_adapters(r: Renderer) -> None:
 
 @app.command("export")
 def export_cmd(
-    agent: str | None = typer.Option(None, "--agent", "-a", help="Export one agent's private memory"),
+    agent: str | None = typer.Option(
+        None, "--agent", "-a", metavar=AGENT_METAVAR, help="Export one agent's private memory"
+    ),
     pool: str | None = typer.Option(None, "--pool", help="Export a shared pool"),
     all_: bool = typer.Option(False, "--all", help="Export every agent's private memory"),
     out: str | None = typer.Option(None, "--out", help="Write to a file (default: stdout)"),
@@ -656,6 +677,7 @@ def export_cmd(
     run_async(export_memory(renderer_for(json_), agent=agent, pool=pool, all_=all_, out=out, type_=type_, yes=yes))
 
 
+@command_impl("memory export")
 async def export_memory(
     r: Renderer,
     *,

@@ -24,6 +24,7 @@ from arcana.types.agent import Agent as AgentRecord
 from arcana.types.tool import BUILTIN_NAMESPACE, ToolDefinition, ToolStatus, ToolType
 from arcana_cli._async import run_async
 from arcana_cli._render import EXIT_DENIED, EXIT_NOT_FOUND, truncate
+from arcana_cli.command_impl import AGENT_METAVAR, command_impl
 from arcana_cli.constants import AGENTS_BASE, CONNECTIONS_PATH, MCPS_PATH
 from arcana_cli.ui.renderer import Renderer, View, confirm_or_cancel, fail, lines, renderer_for
 from arcana_cli.ui.theme import GREEN, TXT3, dim, make_table, ok, warn
@@ -118,13 +119,16 @@ async def _warn_if_toolless(r: Renderer, record: AgentRecord) -> None:
 
 @app.command("list")
 def list_cmd(
-    agent: str | None = typer.Option(None, "--agent", "-a", help="Mark which tools this agent is subscribed to"),
+    agent: str | None = typer.Option(
+        None, "--agent", "-a", metavar=AGENT_METAVAR, help="Mark which tools this agent is subscribed to"
+    ),
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """List subscribable tools (builtins + discovered MCP tools)."""
     run_async(list_tools(renderer_for(json_), agent=agent))
 
 
+@command_impl("tools list")
 async def list_tools(r: Renderer, *, agent: str | None) -> None:
     """The subscribable inventory; with ``agent``, which of it that agent is subscribed to."""
     reg = _load_registry()
@@ -163,7 +167,7 @@ async def list_tools(r: Renderer, *, agent: str | None) -> None:
 
 @app.command("subscribe")
 def subscribe_cmd(
-    agent: str = typer.Argument(..., help="Agent name or UUID"),
+    agent: str = typer.Argument(..., metavar=AGENT_METAVAR, help="Agent name or UUID"),
     qualified_name: str = typer.Argument(
         ...,
         help="A tool ('notion-mcp/search_pages', 'builtin/web_search'), a whole server "
@@ -179,6 +183,7 @@ def subscribe_cmd(
     run_async(subscribe(renderer_for(json_), agent, qualified_name))
 
 
+@command_impl("tools subscribe")
 async def subscribe(r: Renderer, agent: str, qualified_name: str) -> None:
     """Add one validated subscription (a no-op when the agent already has it)."""
     record = resolve_agent(r, agent)
@@ -255,7 +260,7 @@ def _validate_wildcard(r: Renderer, reg: MCPRegistry, qualified_name: str) -> in
 
 @app.command("unsubscribe")
 def unsubscribe_cmd(
-    agent: str = typer.Argument(..., help="Agent name or UUID"),
+    agent: str = typer.Argument(..., metavar=AGENT_METAVAR, help="Agent name or UUID"),
     qualified_name: str = typer.Argument(..., help="Tool to remove"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
@@ -264,6 +269,7 @@ def unsubscribe_cmd(
     run_async(unsubscribe(renderer_for(json_), agent, qualified_name, yes=yes))
 
 
+@command_impl("tools unsubscribe")
 async def unsubscribe(r: Renderer, agent: str, qualified_name: str, *, yes: bool) -> None:
     """Drop one subscription once confirmed (or with ``yes``); under ``--json`` the question fails closed."""
     record = resolve_agent(r, agent)

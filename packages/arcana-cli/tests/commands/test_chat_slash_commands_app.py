@@ -1,9 +1,9 @@
-"""The setup wizards on screen: their dialogs inside the running session, cancelling them, and OAuth sign-in.
+"""Slash commands on screen: their dialogs inside the running session, cancelling them, and OAuth sign-in.
 
-The real chat app runs headless under Pilot; a wizard's questions are dialogs
+The real chat app runs headless under Pilot; a command's questions are dialogs
 over the session, answered with key presses. These tests pin what the user
 sees and what is left on disk: Esc at any step writes nothing, Ctrl+C cancels
-the wizard (and closes an OAuth loopback listener), a failure is a note and the
+the command (and closes an OAuth loopback listener), a failure is a note and the
 input box has the focus again, and no secret or token reaches the transcript,
 the exit replay, the input history or a log.
 """
@@ -17,7 +17,6 @@ import pytest
 from rich.console import Console
 from textual.pilot import Pilot
 
-import arcana_cli.commands.agent as agent_mod
 import arcana_cli.commands.chat.app as chat_app
 from arcana.agents.registry import AgentRegistry
 from arcana.agents.session_manager import SessionManager
@@ -27,7 +26,7 @@ from arcana_cli.commands.chat.app import STDIO_ERRLOG, ChatApp, run_chat
 from arcana_cli.tui.history import agent_history_path
 from arcana_cli.tui.screens import PromptScreen, WaitScreen
 from arcana_cli.ui.renderer import CANCELLED
-from tests.support.chat import FakeGateway, create_agent, mock_runtime, patch_build, use_arcana_home
+from tests.support.chat import FakeGateway, create_agent, mock_runtime, patch_body, patch_build, use_arcana_home
 from tests.support.chat_app import ChatSession, chat_session
 from tests.support.oauth import ACCESS_TOKEN, ISSUER, REFRESH_TOKEN, USER_CODE, install_fake_as, listener_is_closed
 from tests.support.tui import run_inline_headless, wait_for_screen
@@ -73,7 +72,7 @@ def _history(s: ChatSession) -> str:
     return "\n".join(s.app.chat_input.recall.entries)
 
 
-# ── a wizard's dialogs ────────────────────────────────────────────────────
+# ── a command's dialogs ────────────────────────────────────────────────────
 
 
 async def test_providers_add_runs_through_its_dialogs_and_keeps_the_key_out_of_sight(home, caplog):
@@ -112,7 +111,7 @@ async def test_escape_at_any_step_saves_nothing(home, step):
         assert not isinstance(s.app.screen, PromptScreen)
 
 
-async def test_ctrl_c_cancels_a_wizard_mid_dialog(home):
+async def test_ctrl_c_cancels_a_command_mid_dialog(home):
     async with _session(home) as s:
         await s.enter("/providers add --provider anthropic")
         await wait_for_screen(s.pilot, PromptScreen)
@@ -124,11 +123,11 @@ async def test_ctrl_c_cancels_a_wizard_mid_dialog(home):
         assert not s.c.exited
 
 
-async def test_a_wizard_that_raises_is_a_note_and_the_input_has_the_focus(home, monkeypatch):
+async def test_a_command_that_raises_is_a_note_and_the_input_has_the_focus(home, monkeypatch):
     async def boom(*_a: Any, **_k: Any) -> None:
         raise RuntimeError("keychain locked")
 
-    monkeypatch.setattr(agent_mod, "create_agent", boom)
+    patch_body(monkeypatch, "/agent create", boom)
     async with _session(home) as s:
         await s.enter("/agent create")
         await _idle_with_focus(s)

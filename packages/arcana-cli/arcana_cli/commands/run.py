@@ -39,6 +39,7 @@ from arcana.world import (
 )
 from arcana_cli._async import run_async
 from arcana_cli._render import EXIT_ERROR
+from arcana_cli.command_impl import command_impl
 from arcana_cli.constants import ARCANA_HOME
 from arcana_cli.ui.renderer import Renderer, View, fail, renderer_for
 from arcana_cli.ui.theme import (
@@ -245,6 +246,7 @@ async def init_home(r: Renderer) -> None:
     r.emit(View(panel, {"home": str(ARCANA_HOME), "created": True}))
 
 
+@command_impl("status")
 async def show_status(r: Renderer) -> None:
     """Show the home directory and how many agents and model connections it holds."""
     if not ARCANA_HOME.exists():

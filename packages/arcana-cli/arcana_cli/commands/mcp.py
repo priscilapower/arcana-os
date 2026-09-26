@@ -38,6 +38,7 @@ from arcana.types.tool import (
 from arcana_cli._async import run_async
 from arcana_cli._oauth import probe_oauth, sign_in_or_exit
 from arcana_cli._render import EXIT_ERROR, EXIT_NOT_FOUND, truncate
+from arcana_cli.command_impl import bearer_value, command_impl
 from arcana_cli.constants import AGENTS_BASE, MCPS_PATH
 from arcana_cli.ui.renderer import Question, Renderer, View, confirm_or_cancel, fail, lines, renderer_for
 from arcana_cli.ui.theme import GREEN, ORANGE, RED, TXT3, dim, hl, make_table, ok, warn
@@ -382,7 +383,7 @@ def add_cmd(
     name: str = typer.Option(..., "--name", "-n", help="Server name, e.g. 'notion-mcp'"),
     url: str | None = typer.Option(None, "--url", help="HTTP/SSE endpoint URL"),
     command: str | None = typer.Option(None, "--command", help="stdio server command (implies --transport stdio)"),
-    arg: list[str] | None = typer.Option(  # noqa: B008
+    args: list[str] | None = typer.Option(  # noqa: B008
         None, "--arg", help="stdio command argument (repeatable)"
     ),
     transport: str | None = typer.Option(
@@ -417,32 +418,33 @@ def add_cmd(
             name=name,
             url=url,
             command=command,
-            args=list(arg or []),
+            args=args,
             transport=transport,
-            header=header or [],
+            header=header,
             auth_key=auth_key,
             oauth=oauth,
             issuer=issuer,
-            scope=list(scope or []),
+            scope=scope,
             device=device,
             description=description,
         )
     )
 
 
+@command_impl("mcp add", secrets={"header": bearer_value})
 async def add_server(
     r: Renderer,
     *,
     name: str,
     url: str | None,
     command: str | None,
-    args: list[str],
+    args: list[str] | None,
     transport: str | None,
-    header: list[str],
+    header: list[str] | None,
     auth_key: str | None,
     oauth: bool,
     issuer: str | None,
-    scope: list[str],
+    scope: list[str] | None,
     device: bool,
     description: str,
 ) -> None:
@@ -469,11 +471,11 @@ async def add_server(
         url=url,
         transport=resolved_transport,
         explicit_transport=transport is not None,
-        header=header,
+        header=list(header or []),
         auth_key=auth_key,
         oauth=oauth,
         issuer=issuer,
-        scope=scope,
+        scope=list(scope or []),
         device=device,
     )
     cfg = MCPServerConfig(
@@ -481,7 +483,7 @@ async def add_server(
         transport=auth.transport,
         server_url=url or "",
         command=command,
-        args=args,
+        args=list(args or []),
         description=description,
         auth_type=auth.auth_type,
         oauth_config=auth.oauth_config,
@@ -516,6 +518,7 @@ def list_cmd(json_: bool = typer.Option(False, "--json", help="Emit JSON")) -> N
     run_async(list_servers(renderer_for(json_)))
 
 
+@command_impl("mcp list")
 async def list_servers(r: Renderer) -> None:
     """Every registered server: a table, or an array of server summaries."""
     servers = _load_registry().list_servers()
@@ -542,6 +545,7 @@ def show_cmd(
     run_async(show_server(renderer_for(json_), name))
 
 
+@command_impl("mcp show")
 async def show_server(r: Renderer, name: str) -> None:
     """One server's detail and discovered tools."""
     r.emit(_server_view(_resolve_server(r, _load_registry(), name)))
@@ -556,6 +560,7 @@ def refresh_cmd(
     run_async(refresh_server(renderer_for(json_), name))
 
 
+@command_impl("mcp refresh")
 async def refresh_server(r: Renderer, name: str) -> None:
     """Re-discover one server; the result names the tools that changed since the last discovery."""
     reg = _load_registry()
@@ -595,6 +600,7 @@ def login_cmd(
     run_async(login_server(renderer_for(json_), name, device=device))
 
 
+@command_impl("mcp login")
 async def login_server(r: Renderer, name: str, *, device: bool) -> None:
     """Sign an OAuth server in again, store the new token and re-discover its tools."""
     reg = _load_registry()
@@ -639,10 +645,11 @@ def approve_cmd(
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Re-approve changed tools, admitting their new metadata (the trust gate)."""
-    run_async(approve_server(renderer_for(json_), name, tool=list(tool or []), all_=all_))
+    run_async(approve_server(renderer_for(json_), name, tool=tool, all_=all_))
 
 
-async def approve_server(r: Renderer, name: str, *, tool: list[str], all_: bool) -> None:
+@command_impl("mcp approve", admits_server=True)
+async def approve_server(r: Renderer, name: str, *, tool: list[str] | None, all_: bool) -> None:
     """Approve the named changed tools (or every one with ``all_``), making them resolvable again."""
     reg = _load_registry()
     server = _resolve_server(r, reg, name)
@@ -657,7 +664,7 @@ async def approve_server(r: Renderer, name: str, *, tool: list[str], all_: bool)
         targets = None
     else:
         targets = []
-        for qn in tool:
+        for qn in tool or []:
             local = qn.split("/", 1)[1] if "/" in qn else qn
             td = server.get_tool(local)
             if td is None:
@@ -702,6 +709,7 @@ def remove_cmd(
     run_async(remove_server(renderer_for(json_), name, yes=yes, force=force))
 
 
+@command_impl("mcp remove")
 async def remove_server(r: Renderer, name: str, *, yes: bool, force: bool) -> None:
     """Remove one server once confirmed (or with ``yes``); refuses while agents subscribe to it unless ``force``."""
     reg = _load_registry()

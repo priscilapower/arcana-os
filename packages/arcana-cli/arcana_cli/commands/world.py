@@ -16,6 +16,7 @@ from arcana.types import RoutingDecision
 from arcana.world import NoRouteAskUser
 from arcana_cli._async import run_async
 from arcana_cli._render import EXIT_ERROR, truncate
+from arcana_cli.command_impl import AGENT_METAVAR, command_impl
 from arcana_cli.commands.run import build_world_engine, find_agent, resolve_reflex_classifier
 from arcana_cli.constants import AGENTS_BASE, ARCANA_HOME
 from arcana_cli.ui.renderer import Renderer, View, fail, lines, renderer_for
@@ -55,7 +56,7 @@ def _decision_table(reg: AgentRegistry, decision: RoutingDecision) -> Table:
 def route_cmd(
     prompt: str = typer.Argument(..., help="The prompt to route (not executed)"),
     agent: str | None = typer.Option(
-        None, "--agent", "-a", help="Bypass routing and resolve to this agent (name or UUID)"
+        None, "--agent", "-a", metavar=AGENT_METAVAR, help="Bypass routing and resolve to this agent (name or UUID)"
     ),
     json_: bool = typer.Option(False, "--json", help="Emit the decision as JSON"),
 ) -> None:
@@ -63,6 +64,7 @@ def route_cmd(
     run_async(route_prompt(renderer_for(json_), prompt, agent=agent))
 
 
+@command_impl("world route")
 async def route_prompt(r: Renderer, prompt: str, *, agent: str | None) -> None:
     """Route ``prompt`` (to ``agent`` when given) and show the decision; no session is started.
 
