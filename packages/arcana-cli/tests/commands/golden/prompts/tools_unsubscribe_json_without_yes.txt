@@ -1,0 +1,3 @@
+exit=1
+✗ "Unsubscribe 'scout' from 'builtin/web_search'?" needs an answer, but --json mode never prompts; 
+pass --yes instead

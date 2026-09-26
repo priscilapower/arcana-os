@@ -1,0 +1,7 @@
+exit=0
+
+✓ Updated connection 'ollama/hermes-3'
+  Provider: ollama
+  Model:    hermes-3
+  Endpoint: http://gpu:11434
+

@@ -1,0 +1,3 @@
+exit=1
+Remove connection 'ollama/hermes-3'? [y/N]: n
+Cancelled.

@@ -1,6 +1,13 @@
-"""arcana providers — full CRUD for model provider connections."""
+"""arcana providers — full CRUD for model provider connections.
 
-import asyncio
+``add``, ``edit`` and ``remove`` are renderer-agnostic coroutines
+(``add_provider``, ``edit_provider``, ``remove_provider``): every question goes
+through the :class:`~arcana_cli.ui.renderer.Renderer` they are handed and names
+the option that answers it without a prompt. An API key is asked as a secret
+question, so it reaches the keyring and nothing else — no output, no log, no
+transcript.
+"""
+
 import json
 import os
 import uuid
@@ -8,6 +15,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 from arcana.agents.registry import AgentRegistry
 from arcana.models import ConnectionStore, ModelGateway
@@ -16,6 +24,7 @@ from arcana.types.model import ModelConnection, ModelProvider
 from arcana_cli._async import run_async
 from arcana_cli._oauth import sign_in
 from arcana_cli.constants import AGENTS_BASE, CONNECTIONS_PATH
+from arcana_cli.ui.renderer import Question, Renderer, confirm_or_cancel, renderer_for, required
 from arcana_cli.ui.theme import GREEN, ORANGE, TXT3, dim, err, hl, make_table, ok, warn
 
 app = typer.Typer(help="Manage model provider connections (list / add / show / edit / remove).")
@@ -32,21 +41,24 @@ _DEFAULT_ENDPOINTS: dict[str, str] = {
 _NEEDS_KEY: frozenset[str] = frozenset({"anthropic", "openai", "openai_compat", "custom"})
 _CREDENTIAL_PROVIDERS: frozenset[str] = _NEEDS_KEY
 
+#: The option that supplies an API key without a prompt (the key never goes on the command line).
+API_KEY_ENV_FLAG = "--api-key-env"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _resolve(name: str) -> tuple[ConnectionStore, ModelConnection]:
+def _resolve(r: Renderer, name: str) -> tuple[ConnectionStore, ModelConnection]:
     """Return (store, conn). Exits non-zero if the connection is not found."""
     store = ConnectionStore(CONNECTIONS_PATH)
     conn: ModelConnection | None = store.get_by_name(name)
     if conn is None:
         conn = store.get_by_provider(name.lower())
     if conn is None:
-        console.print(err(f"No connection found for {name!r}."))
-        console.print(dim("  Run: arcana providers list"))
+        r.emit(err(f"No connection found for {name!r}."))
+        r.emit(dim("  Run: arcana providers list"))
         raise typer.Exit(1)
     return store, conn
 
@@ -55,7 +67,19 @@ def _cred_ref(conn: ModelConnection) -> str:
     return conn.credential_ref or f"{conn.id}_api_key"
 
 
-def _read_new_key(
+def _normalise_provider(raw: str) -> str:
+    return raw.strip().lower().replace("-", "_")
+
+
+def _provider_problem(answer: str) -> str | None:
+    """A validator for the provider question: one of :data:`_PROVIDERS`, in any case, ``-`` or ``_``."""
+    if _normalise_provider(answer) in _PROVIDERS:
+        return None
+    return f"Unknown provider. Choose from: {', '.join(_PROVIDERS)}"
+
+
+async def _read_new_key(
+    r: Renderer,
     *,
     rotate_key: bool,
     api_key_env: str | None,
@@ -64,42 +88,44 @@ def _read_new_key(
     if not rotate_key and api_key_env is None:
         return None
     if provider_str not in _CREDENTIAL_PROVIDERS:
-        console.print(err(f"Provider '{provider_str}' does not use a credential."))
+        r.emit(err(f"Provider '{provider_str}' does not use a credential."))
         raise typer.Exit(1)
     if api_key_env is not None:
-        key = os.environ.get(api_key_env)
-        if not key:
-            console.print(err(f"Environment variable {api_key_env!r} is not set or empty."))
-            raise typer.Exit(1)
-        return key
-    return typer.prompt("New API key", hide_input=True)
+        return _key_from_env(r, api_key_env)
+    return await _ask_new_key(r)
 
 
-def _run_health_check(conn: ModelConnection, store: ConnectionStore) -> None:
-    """Probe the connection and print healthy / down. Never raises."""
+async def _ask_new_key(r: Renderer) -> str:
+    return await r.ask(Question("New API key", secret=True, flag=API_KEY_ENV_FLAG))
+
+
+def _key_from_env(r: Renderer, var: str) -> str:
+    key = os.environ.get(var)
+    if not key:
+        r.emit(err(f"Environment variable {var!r} is not set or empty."))
+        raise typer.Exit(1)
+    return key
+
+
+async def _run_health_check(r: Renderer, conn: ModelConnection, store: ConnectionStore) -> None:
+    """Probe the connection and show healthy / down. Never raises."""
     if not conn.default_model:
-        console.print(dim("  Skipping health check — no default model configured."))
+        r.emit(dim("  Skipping health check — no default model configured."))
         return
 
     model_str = f"{conn.provider}/{conn.default_model}"
-    console.print(dim(f"  Checking {model_str} ..."), end="")
+    checking = dim(f"  Checking {model_str} ...")
     try:
-
-        async def _probe() -> str:
-            async with ModelGateway(connections=store) as gw:
-                results = await gw.health(model_str)
-                for h in results.values():
-                    return "healthy" if h.healthy else "down"
-            return "unknown"
-
-        status = asyncio.run(_probe())
+        async with r.status(f"Checking {model_str} ..."), ModelGateway(connections=store) as gw:
+            results = await gw.health(model_str)
+            status = next(("healthy" if h.healthy else "down" for h in results.values()), "unknown")
     except Exception:
         status = "down"
 
     if status == "healthy":
-        console.print(f" [{GREEN}]healthy ✓[/]")
+        r.emit(f"{checking} [{GREEN}]healthy ✓[/]")
     else:
-        console.print(f" [{ORANGE}]{status} (warning — config saved)[/]")
+        r.emit(f"{checking} [{ORANGE}]{status} (warning — config saved)[/]")
 
 
 def _removal_consequence(provider: str) -> str:
@@ -119,7 +145,7 @@ def _removal_consequence(provider: str) -> str:
     )
 
 
-def _warn_default_model(provider: str) -> None:
+def _warn_default_model(r: Renderer, provider: str) -> None:
     config_path = Path.home() / ".arcana" / "config.json"
     if not config_path.exists():
         return
@@ -127,7 +153,7 @@ def _warn_default_model(provider: str) -> None:
         cfg = json.loads(config_path.read_text())
         default_model: str = cfg.get("default_model", "")
         if default_model.startswith(f"{provider}/"):
-            console.print(
+            r.emit(
                 warn(
                     f"config.default_model is '{default_model}', which references the removed "
                     f"provider. Run: arcana config set default_model <new-model>"
@@ -187,6 +213,9 @@ def add_cmd(
         None, "--scope", help="OAuth scope to request (repeatable)"
     ),
     device: bool = typer.Option(False, "--device", help="Use the device-code grant (headless / no browser)"),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Overwrite an existing connection of the same name without asking"
+    ),
 ) -> None:
     """Add or update a model provider connection.
 
@@ -194,48 +223,88 @@ def add_cmd(
     --issuer <url>`` to sign in with OAuth instead. Keyless providers (Ollama)
     need no credential. Tokens and keys go to the OS keyring — never to JSON.
     """
-    if provider is None:
-        console.print(dim(f"Providers: {' '.join(_PROVIDERS)}"))
-        provider = str(typer.prompt("Provider"))
+    run_async(
+        add_provider(
+            renderer_for(json=False),
+            provider=provider,
+            model_id=model_id,
+            name=name,
+            endpoint=endpoint,
+            api_key=api_key,
+            api_key_env=api_key_env,
+            oauth=oauth,
+            issuer=issuer,
+            scope=list(scope or []),
+            device=device,
+            yes=yes,
+        )
+    )
 
-    provider = provider.lower().replace("-", "_")
+
+async def add_provider(
+    r: Renderer,
+    *,
+    provider: str | None,
+    model_id: str | None,
+    name: str | None,
+    endpoint: str | None,
+    api_key: str | None,
+    api_key_env: str | None,
+    oauth: bool,
+    issuer: str | None,
+    scope: list[str],
+    device: bool,
+    yes: bool,
+) -> None:
+    """Add a connection, asking for whatever the flags left out; confirms before overwriting one (unless ``yes``)."""
+    if provider is None:
+        r.emit(dim(f"Providers: {' '.join(_PROVIDERS)}"))
+        provider = await r.ask(Question("Provider", validator=_provider_problem, flag="--provider"))
+
+    provider = _normalise_provider(provider)
     if provider not in _PROVIDERS:
-        console.print(err(f"Unknown provider: {provider!r}. Choose from: {', '.join(_PROVIDERS)}"))
+        r.emit(err(f"Unknown provider: {provider!r}. Choose from: {', '.join(_PROVIDERS)}"))
         raise typer.Exit(1)
 
     use_oauth = oauth or issuer is not None
     if use_oauth and (api_key is not None or api_key_env is not None):
-        console.print(err("Pass either OAuth (--oauth/--issuer) or an API key (--api-key/--api-key-env), not both."))
+        r.emit(err("Pass either OAuth (--oauth/--issuer) or an API key (--api-key/--api-key-env), not both."))
         raise typer.Exit(1)
     if use_oauth and provider not in _CREDENTIAL_PROVIDERS:
-        console.print(err(f"Provider '{provider}' is keyless — OAuth does not apply."))
+        r.emit(err(f"Provider '{provider}' is keyless — OAuth does not apply."))
         raise typer.Exit(1)
     if use_oauth and not issuer:
-        console.print(err("OAuth requires --issuer <metadata-url> for a model provider."))
+        r.emit(err("OAuth requires --issuer <metadata-url> for a model provider."))
         raise typer.Exit(1)
 
     if model_id is None:
-        model_id = str(typer.prompt("Model ID (e.g. hermes-3, claude-sonnet-4-6)"))
+        model_id = await r.ask(
+            Question("Model ID (e.g. hermes-3, claude-sonnet-4-6)", validator=required, flag="--model-id")
+        )
 
     if name is None:
-        name = str(typer.prompt("Connection name", default=f"{provider}/{model_id}"))
+        name = await r.ask(
+            Question("Connection name", default=f"{provider}/{model_id}", validator=required, flag="--name")
+        )
 
     default_ep = _DEFAULT_ENDPOINTS.get(provider, "")
     if endpoint is None:
         if provider in ("ollama", "openai_compat", "custom"):
-            endpoint = str(typer.prompt("Endpoint (base URL)", default=default_ep))
+            endpoint = await r.ask(Question("Endpoint (base URL)", default=default_ep, flag="--endpoint"))
         else:
             endpoint = default_ep
 
     resolved_key: str | None = None
     if not use_oauth and provider in _NEEDS_KEY:
-        resolved_key = _read_added_key(api_key, api_key_env, provider)
+        resolved_key = await _read_added_key(r, api_key, api_key_env, provider)
 
     store = ConnectionStore(CONNECTIONS_PATH)
     existing = store.get_by_name(name)
 
     if existing is not None:
-        if not typer.confirm(f"Connection '{name}' already exists. Overwrite?"):
+        if not yes and not await r.confirm(
+            f"Connection '{name}' already exists. Overwrite?", default=False, flag="--yes"
+        ):
             raise typer.Exit()
         conn_id = existing.id
         action = "Updated"
@@ -253,11 +322,11 @@ def add_cmd(
     if use_oauth:
         assert issuer is not None  # guarded above
         credential_ref = f"{conn_id}_oauth_token"
-        config = OAuthConfig(issuer=issuer, scopes=list(scope or []))
+        config = OAuthConfig(issuer=issuer, scopes=scope)
         try:
-            token, resolved = run_async(sign_in(config, device=device, console=console))
+            token, resolved = await sign_in(config, device=device, console=console)
         except Exception as exc:
-            console.print(err(f"OAuth sign-in failed: {exc}"))
+            r.emit(err(f"OAuth sign-in failed: {exc}"))
             raise typer.Exit(1) from exc
         store.store_token(credential_ref, token)
         auth_type = AuthType.OAUTH
@@ -290,20 +359,16 @@ def add_cmd(
         f"  {hl('Model:')}    {model_id}\n"
         f"  {hl('Endpoint:')} {endpoint or '(provider default)'}\n" + cred_note
     )
-    console.print("\n" + ok(f"{action} connection '{name}'") + details)
+    r.emit("\n" + ok(f"{action} connection '{name}'") + details)
 
 
-def _read_added_key(api_key: str | None, api_key_env: str | None, provider: str) -> str | None:
-    """Resolve the API key for ``add``: direct flag, env var, or an interactive prompt."""
+async def _read_added_key(r: Renderer, api_key: str | None, api_key_env: str | None, provider: str) -> str | None:
+    """Resolve the API key for ``add``: direct flag, env var, or a hidden prompt (blank for none)."""
     if api_key is not None:
         return api_key
     if api_key_env is not None:
-        key = os.environ.get(api_key_env)
-        if not key:
-            console.print(err(f"Environment variable {api_key_env!r} is not set or empty."))
-            raise typer.Exit(1)
-        return key
-    return str(typer.prompt(f"API key for {provider}", hide_input=True, default="")) or None
+        return _key_from_env(r, api_key_env)
+    return await r.ask(Question(f"API key for {provider}", default="", secret=True, flag=API_KEY_ENV_FLAG)) or None
 
 
 @app.command("login")
@@ -317,7 +382,7 @@ def login_cmd(
     refreshed — it reuses the connection's stored issuer/client and just refreshes
     the keyring token in place. No need to re-`add` the connection.
     """
-    store, conn = _resolve(name)
+    store, conn = _resolve(renderer_for(json=False), name)
     if conn.auth_type is not AuthType.OAUTH:
         console.print(err(f"Connection '{conn.name}' uses an API key, not OAuth."))
         console.print(dim(f"  Rotate its key with: arcana providers edit {conn.name} --rotate-key"))
@@ -344,7 +409,7 @@ def show_cmd(
     name: str = typer.Argument(..., help="Connection name (see: arcana providers list)"),
 ) -> None:
     """Show a connection's details. Secrets are never printed."""
-    store, conn = _resolve(name)
+    store, conn = _resolve(renderer_for(json=False), name)
 
     headers_display = ", ".join(f"{k}: {v}" for k, v in conn.headers.items()) if conn.headers else "(none)"
     cred_display = _credential_display(store, conn)
@@ -404,7 +469,31 @@ def edit_cmd(
       arcana providers remove <name>
       arcana providers add
     """
-    store, conn = _resolve(name)
+    run_async(
+        edit_provider(
+            renderer_for(json=False),
+            name,
+            base_url=base_url,
+            rotate_key=rotate_key,
+            api_key_env=api_key_env,
+            header=header,
+            no_verify=no_verify,
+        )
+    )
+
+
+async def edit_provider(
+    r: Renderer,
+    name: str,
+    *,
+    base_url: str | None,
+    rotate_key: bool,
+    api_key_env: str | None,
+    header: list[str] | None,
+    no_verify: bool,
+) -> None:
+    """Edit a connection: from the flags when any is given, otherwise by asking (blank keeps the current value)."""
+    store, conn = _resolve(r, name)
     provider_str = str(conn.provider)
 
     flag_driven = any([base_url is not None, rotate_key, api_key_env is not None, header is not None])
@@ -414,24 +503,25 @@ def edit_cmd(
     new_key: str | None = None
 
     if not flag_driven:
-        console.print(f"\n{hl('Editing:')} {conn.name}  {dim(f'[{provider_str}]')}")
-        console.print(dim("Press Enter to keep the current value.\n"))
+        r.emit(f"\n{hl('Editing:')} {conn.name}  {dim(escape(f'[{provider_str}]'))}")
+        r.emit(dim("Press Enter to keep the current value.\n"))
 
-        prompted = typer.prompt("Endpoint (base URL)", default=conn.endpoint or "")
-        new_endpoint = prompted
+        new_endpoint = await r.ask(Question("Endpoint (base URL)", default=conn.endpoint or "", flag="--base-url"))
 
-        if provider_str in _CREDENTIAL_PROVIDERS:
-            if typer.confirm("Rotate API key?", default=False):
-                new_key = typer.prompt("New API key", hide_input=True)
+        if provider_str in _CREDENTIAL_PROVIDERS and await r.confirm(
+            "Rotate API key?", default=False, flag=API_KEY_ENV_FLAG
+        ):
+            new_key = await _ask_new_key(r)
 
         if provider_str == "custom" and conn.headers:
-            console.print(dim(f"\n  Current headers: {', '.join(f'{k}: {v}' for k, v in conn.headers.items())}"))
-            console.print(dim("  Use --header to modify headers non-interactively."))
+            r.emit(dim(f"\n  Current headers: {', '.join(f'{k}: {v}' for k, v in conn.headers.items())}"))
+            r.emit(dim("  Use --header to modify headers non-interactively."))
     else:
         if base_url is not None:
             new_endpoint = base_url
 
-        new_key = _read_new_key(
+        new_key = await _read_new_key(
+            r,
             rotate_key=rotate_key,
             api_key_env=api_key_env,
             provider_str=provider_str,
@@ -439,12 +529,12 @@ def edit_cmd(
 
         if header is not None:
             if provider_str != "custom":
-                console.print(err("Custom headers are only supported for the 'custom' adapter type."))
+                r.emit(err("Custom headers are only supported for the 'custom' adapter type."))
                 raise typer.Exit(1)
             new_headers = {}
             for h in header:
                 if ":" not in h:
-                    console.print(err(f"Invalid header format {h!r}. Expected 'Key: Value'."))
+                    r.emit(err(f"Invalid header format {h!r}. Expected 'Key: Value'."))
                     raise typer.Exit(1)
                 k, v = h.split(":", 1)
                 new_headers[k.strip()] = v.strip()
@@ -455,20 +545,20 @@ def edit_cmd(
         try:
             store.set_credential(ref, new_key)
         except Exception as exc:
-            console.print(err(f"Failed to write credential to keyring: {exc}"))
-            console.print(dim("  models.json was not modified."))
+            r.emit(err(f"Failed to write credential to keyring: {exc}"))
+            r.emit(dim("  models.json was not modified."))
             raise typer.Exit(1) from exc
         conn = conn.model_copy(update={"credential_ref": ref})
 
     updated = conn.model_copy(update={"endpoint": new_endpoint, "headers": new_headers})
     store.upsert(updated)
 
-    console.print("\n" + ok(f"Connection '{conn.name}' updated."))
+    r.emit("\n" + ok(f"Connection '{conn.name}' updated."))
 
     if not no_verify:
-        _run_health_check(updated, store)
+        await _run_health_check(r, updated, store)
 
-    console.print()
+    r.emit("")
 
 
 @app.command("remove")
@@ -481,7 +571,12 @@ def remove_cmd(
 
     Scans for dependent agents and aborts unless --force is given.
     """
-    store, conn = _resolve(name)
+    run_async(remove_provider(renderer_for(json=False), name, yes=yes, force=force))
+
+
+async def remove_provider(r: Renderer, name: str, *, yes: bool, force: bool) -> None:
+    """Remove a connection once confirmed (or with ``yes``); refuses while agents depend on it unless ``force``."""
+    store, conn = _resolve(r, name)
     provider_str = str(conn.provider)
     conn_name = conn.name
 
@@ -490,20 +585,20 @@ def remove_cmd(
     dependents = [a for a in agents if _agent_targets_connection(a.model, provider_str, conn_name)]
 
     if dependents and not force:
-        console.print(warn(f"The following agents depend on '{conn.name}':"))
+        r.emit(warn(f"The following agents depend on '{conn.name}':"))
         for a in dependents:
-            console.print(f"  {hl(a.name)}  [{TXT3}]{a.model}[/]")
-        console.print(dim("\nRe-run with --force to remove anyway."))
+            r.emit(f"  {hl(a.name)}  [{TXT3}]{a.model}[/]")
+        r.emit(dim("\nRe-run with --force to remove anyway."))
         raise typer.Exit(1)
 
     if not yes:
-        typer.confirm(f"Remove connection '{conn.name}'?", abort=True)
+        await confirm_or_cancel(r, f"Remove connection '{conn.name}'?")
 
     if dependents:
-        console.print(warn(_removal_consequence(provider_str)))
+        r.emit(warn(_removal_consequence(provider_str)))
 
     store.delete(conn.name)
 
-    _warn_default_model(provider_str)
+    _warn_default_model(r, provider_str)
 
-    console.print(ok(f"Connection '{conn.name}' removed."))
+    r.emit(ok(f"Connection '{conn.name}' removed."))

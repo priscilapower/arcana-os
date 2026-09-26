@@ -1,0 +1,4 @@
+exit=1
+Agent name:
+✗ 'Agent name' needs an answer, but the piped input ran out; pass --name instead
+ 

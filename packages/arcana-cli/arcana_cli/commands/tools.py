@@ -20,6 +20,7 @@ from arcana.types.tool import BUILTIN_NAMESPACE, ToolDefinition, ToolStatus, Too
 from arcana_cli._async import run_async
 from arcana_cli._render import EXIT_DENIED, EXIT_ERROR, EXIT_NOT_FOUND, emit_json, truncate
 from arcana_cli.constants import AGENTS_BASE, CONNECTIONS_PATH, MCPS_PATH
+from arcana_cli.ui.renderer import Renderer, confirm_or_cancel, renderer_for
 from arcana_cli.ui.theme import GREEN, TXT3, dim, err, make_table, ok, warn
 
 app = typer.Typer(help="Inspect and subscribe agents to tools (list / subscribe / unsubscribe).")
@@ -256,6 +257,11 @@ def unsubscribe_cmd(
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
     """Unsubscribe an agent from a tool (or a whole-server ``<server>``/``<server>/*``)."""
+    run_async(unsubscribe(renderer_for(json_), agent, qualified_name, yes=yes, json_=json_))
+
+
+async def unsubscribe(r: Renderer, agent: str, qualified_name: str, *, yes: bool, json_: bool) -> None:
+    """Drop one subscription once confirmed (or with ``yes``); under ``--json`` the question fails closed."""
     record = resolve_agent(agent)
     # Shorthand: a bare server name removes its whole-server subscription.
     if "/" not in qualified_name and f"{qualified_name}/*" in record.tool_subscriptions:
@@ -264,11 +270,8 @@ def unsubscribe_cmd(
         console.print(err(f"Agent '{record.name}' is not subscribed to {qualified_name!r}."))
         raise typer.Exit(EXIT_NOT_FOUND)
 
-    if json_ and not yes:
-        console.print(err("Use --yes with --json for a non-interactive unsubscribe."))
-        raise typer.Exit(EXIT_ERROR)
     if not yes:
-        typer.confirm(f"Unsubscribe '{record.name}' from '{qualified_name}'?", abort=True)
+        await confirm_or_cancel(r, f"Unsubscribe '{record.name}' from '{qualified_name}'?")
 
     remaining = [s for s in record.tool_subscriptions if s != qualified_name]
     updated = record.model_copy(update={"tool_subscriptions": remaining})

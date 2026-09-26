@@ -1,0 +1,18 @@
+exit=0
+Agent name: scout
+Blend with modifier cards? [y/N]: n
+✦ MODEL CONNECTION
+   1. ollama/hermes-3  (ollama · default model: hermes-3)
+   2. Other — type a model reference
+Choose (#) [1]: 2
+Model reference (provider[:name]/model_id): anthropic lol
+✗ A model reference has no spaces.
+Model reference (provider[:name]/model_id): anthropic/claude-sonnet-4-6
+╭───────────────────── New Agent ──────────────────────╮
+│ Agent 'scout' created.                               │
+│                                                      │
+│   ID:    <id>        │
+│   Card:  IX · The Hermit — Researcher / Deep Analyst │
+│   Model: anthropic/claude-sonnet-4-6                 │
+│   Temp:  0.35                                        │
+╰──────────────────────────────────────────────────────╯

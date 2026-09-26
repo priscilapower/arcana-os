@@ -91,6 +91,7 @@ issuer/client and just refreshes the keyring token in place.
 | `--issuer` | OAuth issuer / metadata base URL |
 | `--scope` | OAuth scope to request (repeatable) |
 | `--device` | Use the device-code grant (headless / no browser) |
+| `--yes / -y` | Overwrite an existing connection of the same name without asking |
 
 | `providers edit` flag | Description |
 |------|-------------|
@@ -121,7 +122,7 @@ arcana agent delete my-agent
 arcana agent delete my-agent --yes           # skip confirmation
 ```
 
-`arcana agent create` without flags walks you through a two-pane card picker — the Major Arcana beside a live preview of the highlighted card (archetype, default temperature, prompt ingredients) — lets you toggle optional modifier cards, and prints a blend-compatibility summary before saving. In the picker, type to filter, `↑`/`↓` to move, `Enter` to pick, `Space` to toggle a modifier (up to the limit), `Esc` or `Ctrl+C` to cancel. The World is reserved: the picker never offers it. The picker needs a terminal; with stdin or stdout piped, `agent create` / `agent edit` exit with code `1` and ask for `--card`.
+`arcana agent create` without flags walks you through a two-pane card picker — the Major Arcana beside a live preview of the highlighted card (archetype, default temperature, prompt ingredients) — lets you toggle optional modifier cards, and prints a blend-compatibility summary before saving. In the picker, type to filter, `↑`/`↓` to move, `Enter` to pick, `Space` to toggle a modifier (up to the limit), `Esc` or `Ctrl+C` to cancel. The World is reserved: the picker never offers it. The picker needs a terminal; with stdin or stdout piped, `agent create` / `agent edit` exit with code `1` and ask for `--card`. Without `--model`, `create` then lists your provider connections by number (Enter keeps the first) and asks for a model ID on the one you pick, blank for the connection's default; the last entry, *Other*, takes a whole model reference such as `anthropic/claude-sonnet-4-6` instead.
 
 | Subcommand | Description |
 |-----------|-------------|
@@ -273,9 +274,14 @@ export cap are tunable via `ARCANA_MEMORY_SCOPE_PATHS` / `ARCANA_MEMORY_MAX_FILE
 
 **Scripting.** `mcp`, `tools`, and `memory` commands accept `--json` for
 machine-readable output and use uniform exit codes: `0` ok, `1` error, `2`
-not-found, `3` denied. A destructive op with `--json` must also pass `--yes` (it
-errors rather than hanging on a prompt it can't answer). Secrets and connector
-paths never appear in a shared log or error output.
+not-found, `3` denied. `--json` never prompts: a destructive op must also pass
+`--yes`, and any other question exits `1` with a message on stderr naming the flag
+that answers it. Piped stdin answers prompts (`echo y | arcana mcp remove x`); if
+it runs out before a question is answered, the command exits `1` the same way
+instead of hanging. Declining a destructive confirmation (the default is no)
+prints `Cancelled.` and exits `1`. API keys and bearer tokens are asked with
+hidden input and go only to the OS keyring. Secrets and connector paths never
+appear in a shared log or error output.
 
 ---
 
@@ -425,6 +431,8 @@ def show_cmd(name: str) -> None:
 ```
 
 `renderer_for(json=...)` returns a `TtyRenderer` (Rich console and line prompts; output on stdout, notes and the status spinner on stderr; a `select` whose choices carry previews opens the two-pane picker as a short-lived Textual app on the command's own event loop, and fails closed with `NonInteractiveError` without a terminal) or a `JsonRenderer` (`emit_json` documents only; any question fails closed with `NonInteractiveError`, exit code `1`, message on stderr). `arcana_cli/commands/cards.py` is the reference conversion; `arcana_cli/commands/run.py` (`run_turn`) shows status and streaming, and the `--json` split. In tests, hand the coroutine a `RecordingRenderer` (`tests/support/renderer.py`), which records emitted output and notes, answers questions from a script, and logs statuses, their stops and streamed chunks in order (`events`).
+
+Every question a command asks goes through the port; a test fails if anything but `TtyRenderer` calls `typer.prompt` / `typer.confirm`. Give each question the `flag` that answers it without a prompt (`Question("Agent name", flag="--name")`, `r.confirm(..., flag="--yes")`), so a surface that can't ask names it in its error; `TtyRenderer` also fails closed that way when piped stdin runs out before an answer. Mark a credential `Question(..., secret=True)`: input is hidden and the answer reaches the caller alone. Put checks in a `validator` (`required` refuses a blank answer) so a bad answer is asked again rather than ending the command; its message is shown to the user, so it must never quote the answer. A destructive command guards the change with `await confirm_or_cancel(r, "Remove …?")`, which defaults to no, notes `Cancelled.` and exits `1` on anything but yes; the command's `--yes` skips it. `agent`, `providers`, `mcp add`/`remove`, `memory forget` and `tools unsubscribe` follow this pattern.
 
 ### The interactive app shell
 

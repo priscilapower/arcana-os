@@ -1,0 +1,3 @@
+exit=1
+✗ "Remove MCP server 'notion-mcp'?" needs an answer, but --json mode never prompts; pass --yes 
+instead

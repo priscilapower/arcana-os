@@ -1,0 +1,14 @@
+exit=0
+Providers: ollama anthropic openai openai_compat custom
+Provider: claude
+✗ Unknown provider. Choose from: ollama, anthropic, openai, openai_compat, custom
+Provider: Ollama
+Model ID (e.g. hermes-3, claude-sonnet-4-6): hermes-3
+Connection name [ollama/hermes-3]: 
+Endpoint (base URL) [http://localhost:11434]: 
+
+✓ Added connection 'ollama/hermes-3'
+  Provider: ollama
+  Model:    hermes-3
+  Endpoint: http://localhost:11434
+

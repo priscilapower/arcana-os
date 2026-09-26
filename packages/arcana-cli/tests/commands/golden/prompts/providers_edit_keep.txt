@@ -1,0 +1,10 @@
+exit=0
+
+Editing: work  [openai]
+Press Enter to keep the current value.
+
+Endpoint (base URL) [https://api.openai.com/v1]: 
+Rotate API key? [y/N]: 
+
+✓ Connection 'work' updated.
+

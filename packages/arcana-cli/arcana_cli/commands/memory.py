@@ -19,7 +19,7 @@ work across loops would break it — and the federation is always closed in a
 """
 
 from collections.abc import Coroutine
-from typing import Any, TypeVar
+from typing import Any, NoReturn, TypeVar
 from uuid import UUID, uuid4
 
 import typer
@@ -60,6 +60,7 @@ from arcana_cli._render import EXIT_DENIED, EXIT_ERROR, EXIT_NOT_FOUND, emit_jso
 from arcana_cli.commands.run import resolve_embedding_gateway
 from arcana_cli.commands.tools import resolve_agent
 from arcana_cli.constants import AGENTS_BASE, ARCANA_HOME, MEMORY_ADAPTERS_PATH
+from arcana_cli.ui.renderer import Renderer, confirm_or_cancel, renderer_for
 from arcana_cli.ui.theme import GREEN, ORANGE, RED, TXT2, TXT3, dim, err, hl, make_table, ok, warn
 
 app = typer.Typer(
@@ -165,17 +166,6 @@ def _execute(coro: Coroutine[object, object, _T]) -> _T:
     except MemoryError as exc:
         console.print(err(str(exc)))
         raise typer.Exit(EXIT_ERROR) from None
-
-
-def _guard_json_confirm(json_: bool, yes: bool) -> None:
-    """A destructive op invoked with ``--json`` must also pass ``--yes``.
-
-    A machine caller can't answer an interactive prompt, so requiring confirmation
-    it can't give must error rather than hang.
-    """
-    if json_ and not yes:
-        console.print(err("Use --yes with --json for a non-interactive, destructive operation."))
-        raise typer.Exit(EXIT_ERROR)
 
 
 # ---------------------------------------------------------------------------
@@ -431,35 +421,44 @@ def forget_cmd(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
     json_: bool = typer.Option(False, "--json", help="Emit JSON"),
 ) -> None:
-    """Delete one entry. Refuses GLOBAL (the World owns it); hard-deletes by default."""
+    """Delete one entry. Refuses GLOBAL (the World owns it); hard-deletes by default.
+
+    Asks before deleting unless ``--yes``; under ``--json`` there is no one to
+    ask, so the question fails closed naming ``--yes``.
+    """
+    _execute(forget_memory(renderer_for(json_), memory_id, agent=agent, archive=archive, yes=yes, json_=json_))
+
+
+def _no_such_memory(memory_id: str, record: AgentRecord) -> NoReturn:
+    console.print(err(f"No memory with id {memory_id!r} for agent '{record.name}'."))
+    raise typer.Exit(EXIT_NOT_FOUND)
+
+
+async def forget_memory(r: Renderer, memory_id: str, *, agent: str, archive: bool, yes: bool, json_: bool) -> None:
+    """Forget one entry once confirmed (or with ``yes``); GLOBAL is refused before anything is asked."""
     record = resolve_agent(agent)
     mid = _parse_uuid(memory_id)
-    _guard_json_confirm(json_, yes)
     hard = not archive
 
-    async def _run() -> tuple[bool, MemoryScope | None, str | None]:
-        fed = await _open_federation(record, embedding=_load_embedding_gateway())
-        try:
-            entry = await fed.get(mid)
-            if entry is None:
-                return (False, None, None)
-            # Refuse GLOBAL before prompting — the World owns it.
-            if entry.scope is MemoryScope.GLOBAL:
-                raise GlobalDeleteRefused(mid)
-            if not yes:
-                verb = "Archive" if archive else "Permanently delete"
-                typer.confirm(f"{verb} memory {_short_id(mid)} ({truncate(entry.content, 40)})?", abort=True)
-            result = await fed.forget(mid, hard=hard)
-            return (result.found, result.scope, result.pool_name)
-        finally:
-            await fed.aclose()
+    fed = await _open_federation(record, embedding=_load_embedding_gateway())
+    try:
+        entry = await fed.get(mid)
+        if entry is None:
+            _no_such_memory(memory_id, record)
+        # Refuse GLOBAL before prompting — the World owns it.
+        if entry.scope is MemoryScope.GLOBAL:
+            raise GlobalDeleteRefused(mid)
+        if not yes:
+            verb = "Archive" if archive else "Permanently delete"
+            await confirm_or_cancel(r, f"{verb} memory {_short_id(mid)} ({truncate(entry.content, 40)})?")
+        result = await fed.forget(mid, hard=hard)
+    finally:
+        await fed.aclose()
 
-    found, scope, pool = _execute(_run())
+    if not result.found:  # gone between the lookup and the delete
+        _no_such_memory(memory_id, record)
 
-    if not found:
-        console.print(err(f"No memory with id {memory_id!r} for agent '{record.name}'."))
-        raise typer.Exit(EXIT_NOT_FOUND)
-
+    scope = result.scope
     if json_:
         emit_json(
             {
@@ -467,7 +466,7 @@ def forget_cmd(
                 "forgotten": True,
                 "hard": hard,
                 "scope": scope.value if scope else None,
-                "pool": pool,
+                "pool": result.pool_name,
             }
         )
         return

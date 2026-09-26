@@ -1,0 +1,11 @@
+exit=0
+
+Editing: work  [openai]
+Press Enter to keep the current value.
+
+Endpoint (base URL) []: https://proxy.example/v1
+Rotate API key? [y/N]: y
+New API key: 
+
+✓ Connection 'work' updated.
+

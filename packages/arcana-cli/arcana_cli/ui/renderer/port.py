@@ -24,7 +24,7 @@ from rich.console import Console, RenderableType
 from rich.markup import escape
 
 from arcana_cli._render import EXIT_ERROR
-from arcana_cli.ui.theme import err
+from arcana_cli.ui.theme import dim, err
 
 T = TypeVar("T")
 
@@ -38,6 +38,11 @@ StreamRender: TypeAlias = Callable[[str], RenderableType]
 #: Validates a typed answer: return an error message to re-ask, ``None`` to accept.
 #: The message is printed to the user, so it must never quote a secret answer.
 Validator: TypeAlias = Callable[[str], str | None]
+
+
+def required(answer: str) -> str | None:
+    """A :data:`Validator` that refuses a blank answer."""
+    return None if answer.strip() else "An answer is required."
 
 
 @dataclass(frozen=True)
@@ -95,11 +100,13 @@ class NonInteractiveError(typer.Exit):
     stream on stdout clean.
     """
 
-    def __init__(self, prompt: str, *, flag: str | None = None, surface: str = "--json mode") -> None:
+    def __init__(
+        self, prompt: str, *, flag: str | None = None, surface: str = "--json mode", reason: str | None = None
+    ) -> None:
         super().__init__(EXIT_ERROR)
         self.prompt = prompt
         self.flag = flag
-        self.message = f"{prompt!r} needs an answer, but {surface} never prompts"
+        self.message = f"{prompt!r} needs an answer, but {reason or f'{surface} never prompts'}"
         if flag is not None:
             self.message += f"; pass {flag} instead"
 
@@ -107,12 +114,16 @@ class NonInteractiveError(typer.Exit):
         return self.message
 
 
-def refuse(stderr: Console, prompt: str, *, flag: str | None, surface: str) -> NoReturn:
-    """Fail closed on a question ``surface`` can't ask: say so on ``stderr``, then raise :class:`NonInteractiveError`.
+def refuse(
+    stderr: Console, prompt: str, *, flag: str | None, surface: str = "", reason: str | None = None
+) -> NoReturn:
+    """Fail closed on a question that can't be answered: say so on ``stderr``, then raise :class:`NonInteractiveError`.
 
-    The message is escaped, so a prompt that looks like Rich markup is printed as written.
+    ``surface`` names what can't ask it ("…, but <surface> never prompts");
+    ``reason`` replaces that clause outright. The message is escaped, so a
+    prompt that looks like Rich markup is printed as written.
     """
-    error = NonInteractiveError(prompt, flag=flag, surface=surface)
+    error = NonInteractiveError(prompt, flag=flag, surface=surface, reason=reason)
     stderr.print(err(escape(error.message)))
     raise error
 
@@ -217,3 +228,23 @@ class Renderer(Protocol):
         as its prefix alone. Without ``render`` the text is shown as it came.
         """
         ...
+
+
+#: The option that answers a destructive command's confirmation without a prompt.
+YES_FLAG = "--yes"
+
+#: What a declined destructive confirmation says before the command exits.
+CANCELLED = "Cancelled."
+
+
+async def confirm_or_cancel(r: Renderer, text: str, *, flag: str = YES_FLAG) -> None:
+    """Ask a destructive yes/no question; anything but yes ends the command.
+
+    The default answer is no, and a cancelled dialog counts as no. Declining
+    notes :data:`CANCELLED` and exits :data:`~arcana_cli._render.EXIT_ERROR`,
+    the code a declined confirmation has always exited with, so a script that
+    checks it keeps working. ``flag`` names the option that skips the question.
+    """
+    if not await r.confirm(text, default=False, flag=flag):
+        r.note(dim(CANCELLED))
+        raise typer.Exit(EXIT_ERROR)

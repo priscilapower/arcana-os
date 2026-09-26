@@ -330,7 +330,7 @@ def test_providers_remove_warns_default_model(tmp_path, monkeypatch):
 
     warned: list[str] = []
 
-    def fake_warn(provider: str) -> None:
+    def fake_warn(_r: object, provider: str) -> None:
         warned.append(provider)
 
     monkeypatch.setattr(providers_mod, "_warn_default_model", fake_warn)

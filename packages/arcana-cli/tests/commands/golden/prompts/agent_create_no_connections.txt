@@ -1,0 +1,3 @@
+exit=1
+Agent name: scout
+✗ No provider connections configured. Run: arcana providers add

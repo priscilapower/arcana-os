@@ -1,0 +1,3 @@
+exit=1
+Delete agent 'scout'? [y/N]: n
+Cancelled.

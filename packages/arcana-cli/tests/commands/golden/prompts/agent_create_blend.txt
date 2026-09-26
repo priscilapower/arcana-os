@@ -1,0 +1,17 @@
+exit=0
+Agent name: scout
+Blend with modifier cards? [y/N]: y
+✦ MODEL CONNECTION
+   1. ollama/hermes-3  (ollama · default model: hermes-3)
+   2. Other — type a model reference
+Choose (#) [1]: 1
+Model ID (blank to use connection default) [hermes-3]: hermes-3:8b
+╭───────────────────── New Agent ──────────────────────╮
+│ Agent 'scout' created.                               │
+│                                                      │
+│   ID:    <id>        │
+│   Card:  IX · The Hermit — Researcher / Deep Analyst │
+│   Modifiers: The Tower                               │
+│   Model: ollama:ollama/hermes-3/hermes-3:8b          │
+│   Temp:  0.50                                        │
+╰──────────────────────────────────────────────────────╯

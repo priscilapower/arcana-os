@@ -55,8 +55,9 @@ class _RecordedStatus:
 class RecordingRenderer:
     """Records output and answers questions from scripts.
 
-    ``answers`` feed :meth:`ask` (a validator rejection consumes the next answer,
-    as a re-ask would); ``confirms`` feed :meth:`confirm`; ``selections`` feed
+    ``answers`` feed :meth:`ask` (a blank answer takes the question's default; a
+    validator rejection consumes the next answer, as a re-ask would);
+    ``confirms`` feed :meth:`confirm`; ``selections`` feed
     :meth:`select` — each entry is the picked *value* (``None`` to cancel), or a
     list of values for a multi-select. A scripted selection must be one of the
     offered, enabled choices.
@@ -110,6 +111,8 @@ class RecordingRenderer:
             if not self._answers:
                 raise AssertionError(f"unscripted ask: {q!r}")
             answer = self._answers.popleft()
+            if not answer and q.default is not None:  # a blank answer takes the default, as at a real prompt
+                answer = q.default
             problem = q.validator(answer) if q.validator is not None else None
             if problem is None:
                 return answer
