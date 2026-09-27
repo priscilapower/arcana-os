@@ -76,10 +76,9 @@ CONTINUATION = "…"
 #: ``ESC CR``, which Textual's parser reads as a plain ``enter`` (the alt is
 #: dropped), so it submits: a known limitation (ADR-024 A4) rather than a parser
 #: subclass on private API, tracked upstream in
-#: https://github.com/Textualize/textual/issues/6378 (issue draft and repro:
-#: https://app.notion.com/p/3e7c2f931b1781a19adfc3a4ad5deddf). Once a Textual
-#: release fixes it, the known-limitation tests in tests/tui/test_chat_input.py
-#: fail: flip them, raise the textual lower bound and drop the note in docs/chat.md.
+#: https://github.com/Textualize/textual/issues/6378. Once a Textual release
+#: fixes it, the known-limitation tests in tests/tui/test_chat_input.py fail:
+#: flip them and raise the textual lower bound.
 NEWLINE_KEYS = frozenset({"ctrl+j", "alt+enter", "shift+enter"})
 
 #: The most completion rows shown at once; the menu scrolls to keep the highlight visible.

@@ -22,13 +22,6 @@ and the interactive session is the front door
   dialogs): hold `Shift` (`Option` in iTerm2) to select text natively, or
   start with `--no-mouse` / set `{"ui": {"mouse": false}}` in
   `~/.arcana/config.json`.
-- **`Alt+Enter` sends the message on terminals without the kitty keyboard
-  protocol** (Terminal.app, iTerm2 with CSI u off, tmux without
-  `extended-keys`): the terminal sends it as `Esc`+`Enter`, which Textual
-  reads as `Enter`. `\`+`Enter` and `Ctrl+J` insert a newline everywhere, and
-  `Alt+Enter` / `Shift+Enter` do on Ghostty, kitty, WezTerm and iTerm2 with
-  CSI u. Tracked upstream in
-  [Textualize/textual#6378](https://github.com/Textualize/textual/issues/6378).
 - **Questions fail closed when they can't be answered.** When piped input runs
   out before a question is answered, or a picker has no terminal, the command
   exits `1` with an error naming the flag that answers it (it used to print

@@ -118,7 +118,7 @@ While the session runs, a stdio MCP server's error output goes to
 | --- | --- |
 | `Enter` | send the message (in a dialog: answer; on the picker: choose) |
 | `\` then `Enter`, `Ctrl+J` | insert a newline (every terminal) |
-| `Shift+Enter`, `Alt+Enter` | insert a newline on terminals with the kitty keyboard protocol; elsewhere they send the message (see [below](#newlines-and-alt-enter)) |
+| `Shift+Enter`, `Alt+Enter` | insert a newline on terminals with the kitty keyboard protocol |
 | `↑` / `↓` | recall input history (kept per agent) |
 | `→` | accept the greyed-out suggestion from history |
 | `Ctrl+R` | reverse-search history (`Ctrl+R` again: an older match; `Enter` takes it without sending) |
@@ -129,22 +129,7 @@ While the session runs, a stdio MCP server's error output goes to
 | `Ctrl+D` | quit at an empty prompt |
 | `Ctrl+L` | repaint the screen |
 
-### Newlines and Alt+Enter {#newlines-and-alt-enter}
-
-`\`+`Enter` and `Ctrl+J` insert a newline on every terminal: use them if you
-aren't sure what yours sends.
-
-`Shift+Enter` and `Alt+Enter` (`Option+Enter` on a Mac) need a terminal that
-speaks the [kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/),
-which the session turns on when the terminal supports it: Ghostty, kitty,
-WezTerm, and iTerm2 with *Report keys using CSI u* on. Other terminals —
-macOS Terminal.app, iTerm2 with CSI u off, tmux without `extended-keys`, most
-VTE-based terminals — send `Alt+Enter` as `Esc` followed by `Enter`, which the
-terminal library the session is built on ([Textual](https://textual.textualize.io/))
-reads as a plain `Enter`, so the message is **sent** rather than broken. This
-is a known limitation, tracked upstream in
-[Textualize/textual#6378](https://github.com/Textualize/textual/issues/6378);
-once a Textual release fixes it, `Alt+Enter` will insert a newline everywhere.
+### Pasting
 
 Pasting a large block collapses it to a `[pasted N lines]` placeholder in the
 input; the full text is restored when you send the message, so a long paste
@@ -170,7 +155,6 @@ copy it, followed by the `--session <uuid>` line that resumes it.
 | Where the session draws | inline, under your shell prompt | full-screen (Textual has no inline mode on Windows) |
 | Transcript printed on exit | yes | yes |
 | Mouse capture, `--no-mouse` | yes | yes |
-| `Shift+Enter` / `Alt+Enter` newline | kitty-protocol terminals only | not yet verified |
 | `\`+`Enter` newline | yes | yes |
 | `Ctrl+J` newline | yes | not yet verified |
 
