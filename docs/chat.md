@@ -24,8 +24,8 @@ off. The full flag list is in the [CLI reference](cli.md).
 
 When the session ends, its transcript is printed to your terminal so it stays in
 scrollback, followed by the `--session <uuid>` line that resumes it. On Windows
-the session runs full-screen rather than inline; the transcript is printed on
-exit all the same.
+the session runs full-screen rather than inline (see
+[Terminal support](#terminal-support)).
 
 Replies stream in and render as Markdown, re-rendered as they grow so lists and
 code blocks settle into shape mid-reply. Model reasoning wrapped in
@@ -38,33 +38,16 @@ Type `/` in the input to open the command menu; `Tab` completes and cycles it.
 
 The session has a few commands of its own:
 
-| Command | What it does |
-| --- | --- |
-| `/help` | list every slash command |
-| `/memory` | show what this agent recalls from this session |
-| `/card` | print the resolved card config — temperature, tone, weights |
-| `/switch [name]` | load another agent in a new session (no name: pick one) |
-| `/retry` | re-run your last message |
-| `/save` | force a session snapshot to disk now |
-| `/clear` | clear the screen (the session is kept, and printed in full on exit) |
-| `/fresh` | start a new session |
-| `/no-memory` | start a new stateless session (memory off) |
-| `/exit` | close the session and quit |
+--8<-- "docs/snippets/slash-session-commands.md"
 
 And every `arcana` command is a slash command too — the same command, not a
 copy of it. `arcana <group> <action> …` becomes `/<group> <action> …`:
 
-| Command | What it does |
-| --- | --- |
-| `/agent create\|list\|show\|edit\|delete` | manage agents |
-| `/cards`, `/cards show <card>` | browse the Major Arcana, or show one card |
-| `/providers list\|add\|login\|show\|edit\|remove` | manage model provider connections |
-| `/mcp add\|list\|show\|refresh\|login\|approve\|remove` | manage MCP servers; a server's tools reach this session once approved |
-| `/tools list\|subscribe\|unsubscribe` | inspect tools and an agent's subscriptions |
-| `/memory list\|search\|inspect\|forget\|adapters\|export\|connect` | inspect, forget, connect and export memory (`/memory` alone is this session's recall, above) |
-| `/soul show` | print your `soul.md` |
-| `/world route <prompt>` | which agent The World would pick, without running it |
-| `/status` | home directory, agents and connections |
+--8<-- "docs/snippets/slash-command-groups.md"
+
+Both tables are generated from the session's own command registry, so they
+can't fall behind it; the [CLI reference](cli.md#commands-and-the-session)
+maps every `arcana` command to its slash command.
 
 `/help` lists them all, and `/<command> --help` lists the options a command
 takes in the session. A few commands stay outside it: `arcana chat` (you are
@@ -133,24 +116,52 @@ While the session runs, a stdio MCP server's error output goes to
 
 | Key | Action |
 | --- | --- |
-| `Enter` | send the message |
-| `\+Enter`, `Ctrl+J` | insert a newline (every terminal) |
-| `Shift+Enter`, `Alt+Enter` | insert a newline on terminals with the kitty keyboard protocol (Ghostty, kitty, WezTerm, iTerm2 with CSI u); elsewhere they send the message |
+| `Enter` | send the message (in a dialog: answer; on the picker: choose) |
+| `\` then `Enter`, `Ctrl+J` | insert a newline (every terminal) |
+| `Shift+Enter`, `Alt+Enter` | insert a newline on terminals with the kitty keyboard protocol |
 | `↑` / `↓` | recall input history (kept per agent) |
-| `Ctrl+R` | reverse-search history |
-| `Tab` | open / cycle the slash-command menu |
-| `Ctrl+C` | cancel a streaming reply, or quit when idle |
+| `→` | accept the greyed-out suggestion from history |
+| `Ctrl+R` | reverse-search history (`Ctrl+R` again: an older match; `Enter` takes it without sending) |
+| `Tab` / `Shift+Tab` | open / cycle the slash-command menu |
+| `Esc` | close the menu or the search and restore what you typed; cancel a dialog or the picker |
+| `Ctrl+Z` | undo (a whole paste in one step) |
+| `Ctrl+C` | cancel a streaming reply or a running command, or quit when idle |
 | `Ctrl+D` | quit at an empty prompt |
 | `Ctrl+L` | repaint the screen |
 
-The mouse is captured so the wheel scrolls the transcript and dialogs are
-clickable; hold `Shift` (`Option` in iTerm2) to select text natively. Start with
-`--no-mouse` (or set `{"ui": {"mouse": false}}` in `~/.arcana/config.json`) to
-turn capture off and select without a modifier, at the cost of wheel scrolling.
+### Pasting
 
 Pasting a large block collapses it to a `[pasted N lines]` placeholder in the
 input; the full text is restored when you send the message, so a long paste
 doesn't flood the editor.
+
+## Mouse, selection and scrollback
+
+The mouse is captured so the wheel scrolls the transcript and dialogs are
+clickable; hold `Shift` (`Option` in iTerm2) while dragging to select text
+natively. Start with `--no-mouse` (it works on bare `arcana` too), or set
+`{"ui": {"mouse": false}}` in `~/.arcana/config.json`, to turn capture off and
+select without a modifier, at the cost of wheel scrolling and clicking.
+
+While the session runs, its transcript scrolls inside the session rather than
+into your terminal's scrollback. When it ends, the whole transcript is printed
+to the terminal, so it lands in scrollback where you can scroll, search and
+copy it, followed by the `--session <uuid>` line that resumes it.
+
+## Terminal support
+
+| | macOS, Linux | Windows |
+| --- | --- | --- |
+| Where the session draws | inline, under your shell prompt | full-screen (Textual has no inline mode on Windows) |
+| Transcript printed on exit | yes | yes |
+| Mouse capture, `--no-mouse` | yes | yes |
+| `\`+`Enter` newline | yes | yes |
+| `Ctrl+J` newline | yes | not yet verified |
+
+The session needs a terminal. In scripts and CI use the one-shot commands
+(`arcana run`, `arcana agent list …`) with `--json`: they never prompt, and a
+question the flags didn't answer fails with an error naming the flag that
+answers it (see [JSON output](cli.md#json-output-json)).
 
 ## Memory
 

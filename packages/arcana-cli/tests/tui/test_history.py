@@ -1,13 +1,13 @@
 """Tests for the per-agent input history: the FileHistory format, fail-closed I/O, recall and search."""
 
 import datetime
+import json
 import stat
 import sys
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
-from prompt_toolkit.history import FileHistory
 
 from arcana_cli.tui import history as history_mod
 from arcana_cli.tui.history import (
@@ -19,38 +19,51 @@ from arcana_cli.tui.history import (
     parse_history,
 )
 
+# A history file written by prompt_toolkit's own ``FileHistory.store_string``, and
+# what ``FileHistory.load_history_strings`` read back from it, recorded while
+# prompt_toolkit was still a dependency. Existing ``chat_history`` files are in
+# this format, so these bytes are the compatibility contract.
+FIXTURES = Path(__file__).parent / "fixtures"
+PTK_FILE = FIXTURES / "prompt_toolkit_chat_history"
+PTK_RECORD = json.loads((FIXTURES / "prompt_toolkit_chat_history.json").read_text(encoding="utf-8"))
 
-def _ptk_entries(path: Path) -> list[str]:
-    """The entries prompt_toolkit's FileHistory reads from ``path``, oldest first."""
-    return list(reversed(list(FileHistory(str(path)).load_history_strings())))
+
+def _ptk_timestamps() -> list[datetime.datetime]:
+    """The time prompt_toolkit stamped on each entry of the recorded file, in order."""
+    return [
+        datetime.datetime.fromisoformat(line.removeprefix(b"# ").decode())
+        for line in PTK_FILE.read_bytes().split(b"\n")
+        if line.startswith(b"# ")
+    ]
 
 
-# ── the file format, both ways against prompt_toolkit ───────────────────
+# ── the file format, both ways against prompt_toolkit's recorded bytes ───
 
 
-def test_prompt_toolkit_reads_what_agent_history_writes(tmp_path):
+def test_the_recording_round_tripped_in_prompt_toolkit():
+    assert PTK_RECORD["read_back"] == PTK_RECORD["stored"]
+    assert len(_ptk_timestamps()) == len(PTK_RECORD["stored"])
+
+
+def test_agent_history_reads_what_prompt_toolkit_writes():
+    assert list(AgentHistory(PTK_FILE).entries) == PTK_RECORD["read_back"]
+
+
+def test_format_entry_matches_prompt_toolkit_byte_for_byte():
+    # Byte-identical output is what lets prompt_toolkit (and an older arcana) read our file.
+    written = b"".join(format_entry(e, when) for e, when in zip(PTK_RECORD["stored"], _ptk_timestamps(), strict=True))
+    assert written == PTK_FILE.read_bytes()
+
+
+def test_agent_history_appends_in_prompt_toolkits_layout(tmp_path):
     path = tmp_path / HISTORY_FILENAME
     history = AgentHistory(path)
     for entry in ("hello", "two\nlines", "+starts with plus", ""):
         history.append(entry)
-    assert _ptk_entries(path) == ["hello", "two\nlines", "+starts with plus"]
-
-
-def test_agent_history_reads_what_prompt_toolkit_writes(tmp_path):
-    path = tmp_path / HISTORY_FILENAME
-    ptk = FileHistory(str(path))
-    for entry in ("deploy", "multi\nline\nentry", "héllo ✨"):
-        ptk.store_string(entry)
-    assert AgentHistory(path).entries == ("deploy", "multi\nline\nentry", "héllo ✨")
-
-
-def test_format_entry_matches_prompt_toolkit_byte_for_byte(tmp_path):
-    path = tmp_path / HISTORY_FILENAME
-    FileHistory(str(path)).store_string("a\nb")
-    written = path.read_bytes()
-    stamp = written.split(b"\n")[1].removeprefix(b"# ").decode()
-    when = datetime.datetime.fromisoformat(stamp)
-    assert format_entry("a\nb", when) == written
+    data = path.read_bytes()
+    assert parse_history(data) == ["hello", "two\nlines", "+starts with plus"]
+    first_stamp = datetime.datetime.fromisoformat(data.split(b"\n")[1].removeprefix(b"# ").decode())
+    assert data.startswith(format_entry("hello", first_stamp))
 
 
 def test_parse_history_skips_comments_and_blank_lines():

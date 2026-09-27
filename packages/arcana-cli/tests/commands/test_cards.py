@@ -104,7 +104,7 @@ def test_cards_show_unknown_card_exits_nonzero():
 )
 def test_cards_output_matches_golden(golden: str, args: list[str], stdin: str | None):
     result = runner.invoke(app, args, input=stdin, env=GOLDEN_ENV)
-    expected = (GOLDEN / f"{golden}.txt").read_text()
+    expected = (GOLDEN / f"{golden}.txt").read_text(encoding="utf-8")
     assert f"exit={result.exit_code}\n{result.output}" == expected
 
 

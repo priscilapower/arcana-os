@@ -29,7 +29,7 @@ from arcana_cli.constants import AGENTS_BASE, CONNECTIONS_PATH, MCPS_PATH
 from arcana_cli.ui.renderer import Renderer, View, confirm_or_cancel, fail, lines, renderer_for
 from arcana_cli.ui.theme import GREEN, TXT3, dim, make_table, ok, warn
 
-app = typer.Typer(help="Inspect and subscribe agents to tools (list / subscribe / unsubscribe).")
+app = typer.Typer(help="Inspect and subscribe agents to tools.")
 
 
 # ---------------------------------------------------------------------------

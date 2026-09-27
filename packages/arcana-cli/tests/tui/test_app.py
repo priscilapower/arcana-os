@@ -41,7 +41,10 @@ class _RunSpy:
 
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The app's ``ARCANA_HOME``, on a platform that runs inline: the Windows tests set ``win32`` themselves,
+    and elsewhere the one-time full-screen notice would lead the exit replay."""
     monkeypatch.setattr(app_mod, "ARCANA_HOME", tmp_path)
+    monkeypatch.setattr(sys, "platform", "linux")
     return tmp_path
 
 

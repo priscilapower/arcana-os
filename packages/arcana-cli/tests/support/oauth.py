@@ -125,6 +125,8 @@ async def listener_is_closed(redirect_uri: str) -> bool:
     try:
         async with httpx.AsyncClient(timeout=1) as client:
             await client.get(redirect_uri)
-    except httpx.ConnectError:
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        # Windows retries a refused loopback connect for about two seconds, so a
+        # closed port can surface as a timeout rather than a refusal.
         return True
     return False

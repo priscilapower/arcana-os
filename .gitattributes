@@ -1,0 +1,6 @@
+# Check text files out with LF everywhere (Windows CI included): golden
+# transcripts and recorded fixtures are compared byte for byte.
+* text=auto eol=lf
+
+# A history file recorded from prompt_toolkit: its exact bytes are the fixture.
+packages/arcana-cli/tests/tui/fixtures/prompt_toolkit_chat_history -text

@@ -72,7 +72,13 @@ PROMPT = "You › "
 CONTINUATION = "…"
 
 #: Keys that insert a newline. Alt+Enter and Shift+Enter only arrive as such
-#: from terminals speaking the kitty keyboard protocol.
+#: from terminals speaking the kitty keyboard protocol. A legacy Alt+Enter is
+#: ``ESC CR``, which Textual's parser reads as a plain ``enter`` (the alt is
+#: dropped), so it submits: a known limitation (ADR-024 A4) rather than a parser
+#: subclass on private API, tracked upstream in
+#: https://github.com/Textualize/textual/issues/6378. Once a Textual release
+#: fixes it, the known-limitation tests in tests/tui/test_chat_input.py fail:
+#: flip them and raise the textual lower bound.
 NEWLINE_KEYS = frozenset({"ctrl+j", "alt+enter", "shift+enter"})
 
 #: The most completion rows shown at once; the menu scrolls to keep the highlight visible.

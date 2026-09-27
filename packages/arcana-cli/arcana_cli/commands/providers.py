@@ -40,7 +40,7 @@ from arcana_cli.ui.renderer import (
 )
 from arcana_cli.ui.theme import GREEN, ORANGE, TXT3, dim, hl, make_table, ok, warn
 
-app = typer.Typer(help="Manage model provider connections (list / add / show / edit / remove).")
+app = typer.Typer(help="Manage model provider connections.")
 
 _PROVIDERS = ["ollama", "anthropic", "openai", "openai_compat", "custom"]
 _DEFAULT_ENDPOINTS: dict[str, str] = {

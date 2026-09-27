@@ -65,6 +65,37 @@ jobs:
           -m "not llm_eval" -o addopts=""
           --cov=arcana.tools --cov-report=term-missing --cov-fail-under=90
 
+  # The CLI on macOS and Windows too: Windows runs the session full-screen
+  # (Textual has no inline driver there, ADR-024 A1), so its terminal paths
+  # differ from the Linux ones the matrix above covers.
+  cli-os:
+    name: CLI tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    # UTF-8 stdio and file defaults on Windows too (PEP 540): the CLI prints ✓ / ✗ / — and the
+    # goldens and fixtures are UTF-8.
+    env:
+      PYTHONUTF8: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --all-packages --all-extras
+
+      - name: Unit tests — arcana-cli (fast tier)
+        run: uv run pytest packages/arcana-cli/tests/ -v -m "not llm_eval and not slow"
+
   docs:
     name: Docs build
     runs-on: ubuntu-latest

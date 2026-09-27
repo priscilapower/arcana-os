@@ -1,0 +1,19 @@
+{
+  "recorded_with": "prompt_toolkit 3.0.52 FileHistory",
+  "stored": [
+    "deploy",
+    "multi\nline\nentry",
+    "héllo ✨",
+    "+starts with plus",
+    "trailing space ",
+    "  indented\n\nblank line inside"
+  ],
+  "read_back": [
+    "deploy",
+    "multi\nline\nentry",
+    "héllo ✨",
+    "+starts with plus",
+    "trailing space ",
+    "  indented\n\nblank line inside"
+  ]
+}
